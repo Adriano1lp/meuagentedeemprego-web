@@ -136,7 +136,11 @@ function ConsentReacceptOverlay() {
             type="submit"
             data-testid="reacceptConsentButton"
             disabled={!canSubmit}
-            className="mt-2 w-full rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 font-display text-[15px] font-extrabold disabled:cursor-not-allowed disabled:opacity-50"
+            className={`mt-2 w-full rounded-[18px] border-[3px] border-ink px-4 py-3 font-display text-[15px] font-extrabold ${
+              canSubmit
+                ? 'bg-green'
+                : 'cursor-not-allowed bg-paper text-muted'
+            }`}
           >
             {submitting ? 'Enviando aceites...' : 'Aceitar e continuar'}
           </button>
