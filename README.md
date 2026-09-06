@@ -81,6 +81,12 @@ No **build de producao** (`npm run build`):
 
 O `npm run dev` em localhost **pode** usar `http://`. Nao force HTTPS no desenvolvimento local.
 
+## Deploy
+
+Site estatico no Render: `https://meuagentedeemprego-web.onrender.com`. Infra em `render.yaml` (Blueprint).
+
+SPA precisa do rewrite `/*` → `/index.html` (ja no Blueprint). Sem isso, rotas profundas como `/login` retornam 404 no CDN.
+
 ## Auth e consentimento (contrato)
 
 - Bearer only. Sem cookies. Sem `X-User-Id`.
