@@ -19,7 +19,20 @@ function productionHttpsCsp() {
   };
 }
 
+const apiProxyTarget = (
+  process.env.VITE_API_BASE_URL ?? 'https://meu-agente-de-emprego.onrender.com'
+).replace(/\/$/, '');
+
 export default defineConfig({
+  server: {
+    proxy: {
+      '/__mae_api': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/__mae_api/, ''),
+      },
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),

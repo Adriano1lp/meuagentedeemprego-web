@@ -109,7 +109,7 @@ export function LegalDocument({
           id={checkboxId}
           data-testid={`${doc}AcceptCheckbox`}
           type="checkbox"
-          className="mt-3 h-5 w-5 accent-green disabled:cursor-not-allowed"
+          className="legal-checkbox"
           checked={accepted}
           disabled={!canAccept}
           aria-disabled={!canAccept}

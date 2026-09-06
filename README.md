@@ -44,6 +44,8 @@ O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rota
 
 Copie `.env.example` para `.env` se quiser sobrescrever no dev. **Nao coloque segredos no bundle.**
 
+No `npm run dev`, chamadas a uma URL absoluta passam pelo proxy Vite (`/__mae_api` → API live). Isso evita CORS no browser em localhost. O **build de producao** chama a URL absoluta diretamente; o backend precisa liberar o origin do site (`Access-Control-Allow-Origin`).
+
 OpenAPI: `https://meu-agente-de-emprego.onrender.com/openapi.json`  
 Swagger: `https://meu-agente-de-emprego.onrender.com/docs`
 
