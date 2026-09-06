@@ -69,6 +69,8 @@ export function AuthPage() {
         displayName: displayName.trim(),
         email: signupEmail.trim(),
         password: signupPassword,
+        termsAccepted,
+        privacyAccepted,
       });
     } catch (cause) {
       setError(

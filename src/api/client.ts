@@ -73,20 +73,23 @@ function errorMessage(status: number, body: unknown): string {
   return 'Falha ao autenticar com a API';
 }
 
-export function buildRegisterPayload(input: {
+export type RegisterInput = {
   displayName: string;
   email: string;
   password: string;
   termsAccepted?: boolean;
   privacyAccepted?: boolean;
-}): RegisterPayload {
+};
+
+/** So envia true quando a UI passa true explicito. Omitido ou false → false (API 400). */
+export function buildRegisterPayload(input: RegisterInput): RegisterPayload {
   return {
     display_name: input.displayName,
     email: input.email,
     password: input.password,
     ...buildRegisterConsentFields({
-      termsAccepted: input.termsAccepted ?? true,
-      privacyAccepted: input.privacyAccepted ?? true,
+      termsAccepted: input.termsAccepted === true,
+      privacyAccepted: input.privacyAccepted === true,
     }),
   };
 }
@@ -158,11 +161,7 @@ export function createApiClient(options: ApiClientOptions) {
   }
 
   return {
-    async register(input: {
-      displayName: string;
-      email: string;
-      password: string;
-    }): Promise<AuthResponse> {
+    async register(input: RegisterInput): Promise<AuthResponse> {
       const payload = buildRegisterPayload(input);
       const body = await request('/auth/register', {
         method: 'POST',

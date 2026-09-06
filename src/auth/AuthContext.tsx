@@ -34,6 +34,8 @@ type AuthContextValue = {
     displayName: string;
     email: string;
     password: string;
+    termsAccepted: boolean;
+    privacyAccepted: boolean;
   }) => Promise<void>;
   logout: () => void;
   acceptOutdatedConsent: (docs: LegalDocId[]) => Promise<void>;
@@ -140,7 +142,13 @@ export function AuthProvider({
   );
 
   const register = useCallback(
-    async (input: { displayName: string; email: string; password: string }) => {
+    async (input: {
+      displayName: string;
+      email: string;
+      password: string;
+      termsAccepted: boolean;
+      privacyAccepted: boolean;
+    }) => {
       const response = await api.register(input);
       await applySession(response.access_token, response.user);
     },

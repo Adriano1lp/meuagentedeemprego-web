@@ -13,14 +13,16 @@ import {
 } from '../legal/versions';
 
 describe('register payload', () => {
-  it('inclui os 4 campos de consentimento vigentes', () => {
+  it('inclui os 4 campos vigentes so com aceite explicito true', () => {
     const payload = buildRegisterPayload({
       displayName: 'Ada',
       email: 'ada@example.com',
       password: 'senha-segura',
+      termsAccepted: true,
+      privacyAccepted: true,
     });
 
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
       display_name: 'Ada',
       email: 'ada@example.com',
       password: 'senha-segura',
@@ -39,6 +41,37 @@ describe('register payload', () => {
       privacy_accepted: true,
       privacy_version: CURRENT_PRIVACY_VERSION,
     });
+  });
+
+  it('nao assume aceite quando flags sao omitidas ou false', () => {
+    const omitted = buildRegisterPayload({
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      password: 'senha-segura',
+    });
+    expect(omitted.terms_accepted).toBe(false);
+    expect(omitted.privacy_accepted).toBe(false);
+    expect(omitted.terms_version).toBe('1.0');
+    expect(omitted.privacy_version).toBe('1.0');
+
+    const refused = buildRegisterPayload({
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      password: 'senha-segura',
+      termsAccepted: false,
+      privacyAccepted: false,
+    });
+    expect(refused.terms_accepted).toBe(false);
+    expect(refused.privacy_accepted).toBe(false);
+
+    const partial = buildRegisterPayload({
+      displayName: 'Ada',
+      email: 'ada@example.com',
+      password: 'senha-segura',
+      termsAccepted: true,
+    });
+    expect(partial.terms_accepted).toBe(true);
+    expect(partial.privacy_accepted).toBe(false);
   });
 });
 
@@ -125,8 +158,36 @@ describe('token handling', () => {
       displayName: 'Ada',
       email: 'ada@example.com',
       password: 'senha-segura',
+      termsAccepted: true,
+      privacyAccepted: true,
     });
     expect(response.access_token).toBe('jwt-registro');
     expect(response.token_type).toBe('bearer');
+  });
+
+  it('POST /auth/register nao envia aceite true se a UI omitir os flags', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.terms_accepted).toBe(false);
+      expect(body.privacy_accepted).toBe(false);
+      return new Response(JSON.stringify({ detail: 'Consentimento invalido' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const api = createApiClient({
+      baseUrl: 'https://api.example.test',
+      fetchImpl,
+      getToken: () => null,
+    });
+
+    await expect(
+      api.register({
+        displayName: 'Ada',
+        email: 'ada@example.com',
+        password: 'senha-segura',
+      }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 });
