@@ -1,8 +1,47 @@
+import { useCallback, useEffect, useState } from 'react';
+
+import { ApiError } from '../api/client';
+import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { ProcessarPanel } from '../components/ProcessarPanel';
+import { QuotaStatusCard } from '../components/QuotaStatusCard';
 
 export function HomePage() {
-  const { user, logout } = useAuth();
+  const { user, logout, api, isAuthenticated, blocksApp } = useAuth();
   const greeting = user?.display_name?.trim() || user?.email || 'usuario';
+  const [status, setStatus] = useState<UserStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+
+  const canUseProduct = isAuthenticated && !blocksApp;
+
+  const loadStatus = useCallback(async () => {
+    if (!canUseProduct) {
+      return;
+    }
+    setStatusLoading(true);
+    setStatusError(null);
+    try {
+      const next = await api.getStatus();
+      setStatus(next);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.outdated) {
+        return;
+      }
+      setStatus(null);
+      setStatusError(
+        cause instanceof ApiError
+          ? cause.message
+          : 'Nao foi possivel carregar o status.',
+      );
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [api, canUseProduct]);
+
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
 
   return (
     <div className="mx-auto min-h-dvh max-w-3xl px-5 py-5">
@@ -31,11 +70,20 @@ export function HomePage() {
           Ola, {greeting}
         </h2>
         <p className="mt-3 text-base leading-[1.45] text-ink">
-          Voce esta logado. O W1 cobre autenticacao JWT e aceite de termos /
-          privacidade. Curriculo, processar, billing, PDF e exportacao ficam
-          para as proximas fatias.
+          Voce esta logado. Consulte a cota do mes e envie uma vaga para
+          analise. Billing Stripe, exportacao LGPD e upload de CV ficam para as
+          proximas fatias.
         </p>
       </section>
+
+      <QuotaStatusCard
+        status={status}
+        loading={statusLoading}
+        error={statusError}
+        onRetry={() => void loadStatus()}
+      />
+
+      <ProcessarPanel enabled={canUseProduct} onProcessed={loadStatus} />
     </div>
   );
 }

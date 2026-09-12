@@ -1,8 +1,8 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web da **fatia W1**: autenticacao JWT Bearer, leitura/aceite de Termos e Privacidade, e gate de reaceite quando a API devolve `403` `TERMS_OUTDATED` / `PRIVACY_OUTDATED`.
+Cliente web das fatias **W1** (auth + consentimento) e **W2** (cota + `POST /processar`).
 
-Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais com texto vigente, checkboxes so apos o load, overlay bloqueante de consentimento).
+Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
 ## Stack
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*` e `/consent` sao mockadas.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/processar` e `/users/me/files/*` sao mockadas.
 
 ## Variaveis de ambiente
 
@@ -64,13 +64,24 @@ Swagger: `https://meu-agente-de-emprego.onrender.com/docs`
 - Token **so em memoria** (context React). Logout limpa a sessao. Recarregar a pagina desloga (W1).
 - Gate de consentimento se a API autenticada responder `403` com `detail.code` `TERMS_OUTDATED` ou `PRIVACY_OUTDATED`
 - Reaceite via `POST /consent` (`doc` + `version: "1.0"`), depois `GET /auth/me`
-- Shell autenticado placeholder ("logado") + Sair
+- Shell autenticado + Sair
 - PWA (manifest + service worker no build)
 - HTTPS obrigatorio no build de producao
 
-## Fora do W1
+## Escopo W2 (processar + cotas)
 
-Nao implementar: upload de CV, processar, Stripe/billing, PDF, exportar/apagar conta, `POST /users/me/terms/accept`, cookies ou header `X-User-Id`.
+- `GET /users/me/status` apos login (so com JWT e sem gate OUTDATED)
+- UI de plano/cota **somente** com o JSON do status — sem calcular Free 5 / Essencial 30 no browser e sem persistir cota
+- `POST /processar` com OpenAPI `RequestData`: `{ "texto": "..." }`
+- Sucesso com `pdf_url` → `GET /users/me/files/{file_name}` com Bearer; so trata como download ok se os bytes comecam com `%PDF`
+- `generation_blocked: true` / `pdf_url: null` → bloco, sem link de PDF
+- `402` `detail.code` `QUOTA_EXCEEDED` | `SUBSCRIPTION_REQUIRED` → bloco, sem loop de retry, sem queimar cota local
+- `400` (ex.: embeddings ausentes) → erro acionavel, nao UI de sucesso
+- `403` OUTDATED continua no ConsentGate do W1
+
+## Fora do W2
+
+Nao implementar: Stripe/checkout (W3), exportar/apagar conta (W4), upload de CV / rebuild-embeddings, cookies ou header `X-User-Id`.
 
 ## HTTPS em producao
 
