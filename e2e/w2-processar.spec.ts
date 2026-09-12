@@ -192,9 +192,13 @@ test('6. sem JWT ou 403 OUTDATED nao acessa status/processar', async ({
 }) => {
   const forbidden: string[] = [];
   page.on('request', (request) => {
-    const url = request.url();
-    if (url.includes('/users/me/status') || url.includes('/processar')) {
-      forbidden.push(url);
+    const pathname = new URL(request.url()).pathname;
+    if (
+      pathname.endsWith('/users/me/status') ||
+      pathname.endsWith('/__mae_api/processar') ||
+      pathname === '/processar'
+    ) {
+      forbidden.push(request.url());
     }
   });
 
