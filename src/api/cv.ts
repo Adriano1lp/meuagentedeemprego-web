@@ -60,24 +60,13 @@ export function parseRebuildEmbeddingsResponse(
   };
 }
 
-export function isPdfCvFile(file: File): boolean {
+/** Contrato do servidor: .pdf ou .txt. Formato invalido fica a cargo da API 400. */
+export function isAllowedCvExtension(file: File): boolean {
   const name = file.name.toLowerCase();
-  return name.endsWith('.pdf') || file.type === 'application/pdf';
-}
-
-/** Validacao local antes do POST. A prontidao da analise continua vindo do status. */
-export function validatePdfCvFile(file: File | null | undefined): string | null {
-  if (!file) {
-    return 'Selecione um curriculo em PDF.';
-  }
-  if (file.size <= 0) {
-    return 'O arquivo enviado esta vazio.';
-  }
-  if (!isPdfCvFile(file)) {
-    return 'Envie um curriculo em PDF.';
-  }
-  if (file.size > MAX_CV_UPLOAD_BYTES) {
-    return 'Arquivo excede o limite de 10 MB.';
-  }
-  return null;
+  return (
+    name.endsWith('.pdf') ||
+    name.endsWith('.txt') ||
+    file.type === 'application/pdf' ||
+    file.type === 'text/plain'
+  );
 }

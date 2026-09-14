@@ -19,7 +19,7 @@ export function HomePage() {
   const canUseProduct = isAuthenticated && !blocksApp;
   const canAnalyze = canUseProduct && canAnalyzeVaga(status) && !cvBusy;
   const processarGate = cvBusy
-    ? 'Processando embeddings. Analisar vaga fica bloqueado ate ficar pronto.'
+    ? 'Reconstruindo embeddings. Analisar vaga fica bloqueado ate has_embeddings no status.'
     : analyzeBlockReason(status);
 
   const loadStatus = useCallback(async () => {
@@ -77,9 +77,9 @@ export function HomePage() {
           Ola, {greeting}
         </h2>
         <p className="mt-3 text-base leading-[1.45] text-ink">
-          Voce esta logado. Envie o curriculo em PDF, aguarde os embeddings e
-          so entao analise uma vaga. Billing Stripe e exportacao LGPD ficam
-          para as proximas fatias.
+          Voce esta logado. Envie o curriculo (.pdf ou .txt), aguarde os
+          embeddings e so entao analise uma vaga. Billing Stripe e exportacao
+          LGPD ficam para as proximas fatias.
         </p>
       </section>
 

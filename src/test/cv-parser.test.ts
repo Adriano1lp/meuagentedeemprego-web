@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  MAX_CV_UPLOAD_BYTES,
+  isAllowedCvExtension,
   parseRebuildEmbeddingsResponse,
   parseUploadCvResponse,
-  validatePdfCvFile,
 } from '../api/cv';
 
 describe('parseUploadCvResponse', () => {
@@ -56,6 +55,8 @@ describe('parseRebuildEmbeddingsResponse', () => {
     });
 
     expect(parsed.chunks).toBe(12);
+    expect(parsed.processed_at).toBe('2026-09-14T12:01:00+00:00');
+    expect(parsed.embedding_model).toBe('text-embedding-3-small');
     expect(parsed.vector_store).toBe('mongodb');
     expect(parsed.embedding_run_id).toBe('run-9');
   });
@@ -65,25 +66,24 @@ describe('parseRebuildEmbeddingsResponse', () => {
   });
 });
 
-describe('validatePdfCvFile', () => {
-  it('aceita PDF e recusa vazio, outro tipo e arquivo acima de 10 MB', () => {
-    expect(validatePdfCvFile(null)).toMatch(/PDF/);
+describe('isAllowedCvExtension', () => {
+  it('aceita .pdf e .txt e recusa .docx', () => {
     expect(
-      validatePdfCvFile(new File([], 'cv.pdf', { type: 'application/pdf' })),
-    ).toMatch(/vazio/);
-    expect(
-      validatePdfCvFile(new File(['texto'], 'cv.txt', { type: 'text/plain' })),
-    ).toMatch(/PDF/);
-    expect(
-      validatePdfCvFile(
+      isAllowedCvExtension(
         new File(['%PDF-1.4'], 'cv.pdf', { type: 'application/pdf' }),
       ),
-    ).toBeNull();
-
-    const tooBig = new File(['%PDF-1.4'], 'cv.pdf', {
-      type: 'application/pdf',
-    });
-    Object.defineProperty(tooBig, 'size', { value: MAX_CV_UPLOAD_BYTES + 1 });
-    expect(validatePdfCvFile(tooBig)).toMatch(/10 MB/);
+    ).toBe(true);
+    expect(
+      isAllowedCvExtension(
+        new File(['texto do cv'], 'cv.txt', { type: 'text/plain' }),
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedCvExtension(
+        new File(['docx'], 'cv.docx', {
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        }),
+      ),
+    ).toBe(false);
   });
 });

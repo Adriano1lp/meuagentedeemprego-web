@@ -159,7 +159,7 @@ export function ProcessarPanel({
           id="processar-texto"
           data-testid="processar-texto"
           rows={8}
-          disabled={!enabled || submitting}
+          disabled={submitting}
           value={texto}
           onChange={(event) => setTexto(event.target.value)}
           placeholder="Cole aqui a descricao completa da vaga para enviar ao /processar..."

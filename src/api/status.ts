@@ -57,7 +57,7 @@ export function analyzeBlockReason(
     return 'Aguarde o status do curriculo para analisar a vaga.';
   }
   if (status.has_cv !== true) {
-    return 'Sem curriculo valido. Envie um PDF para habilitar Analisar vaga.';
+    return 'Sem curriculo valido. Envie um PDF ou TXT para habilitar Analisar vaga.';
   }
   return 'Embeddings ainda nao estao prontos. Envie o curriculo e aguarde o processamento.';
 }

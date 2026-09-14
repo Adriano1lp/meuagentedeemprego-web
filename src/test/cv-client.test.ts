@@ -39,6 +39,33 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
     expect(result.document_id).toBe('doc-1');
   });
 
+  it('POST /users/me/upload-cv tambem envia .txt no campo file', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      const uploaded = form.get('file') as File;
+      expect(uploaded.name).toBe('cv.txt');
+      return new Response(
+        JSON.stringify({
+          filename: 'cv.txt',
+          bytes_received: uploaded.size,
+          updated_at: '2026-09-14T12:00:00+00:00',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const api = createApiClient({
+      baseUrl: 'https://api.example.test',
+      fetchImpl,
+      getToken: () => 'jwt-memoria',
+    });
+    const result = await api.uploadCv(
+      new File(['texto do cv'], 'cv.txt', { type: 'text/plain' }),
+    );
+    expect(result.filename).toBe('cv.txt');
+    expect(result.bytes_received).toBeGreaterThan(0);
+    expect(result.updated_at).toBe('2026-09-14T12:00:00+00:00');
+  });
+
   it('POST /users/me/rebuild-embeddings nao envia body e usa Bearer', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe(
@@ -56,6 +83,7 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
           chunks: 4,
           vector_store: 'mongodb',
           processed_at: '2026-09-14T12:01:00+00:00',
+          embedding_model: 'text-embedding-3-small',
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
@@ -69,7 +97,8 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
 
     const result = await api.rebuildEmbeddings();
     expect(result.chunks).toBe(4);
-    expect(result.vector_store).toBe('mongodb');
+    expect(result.processed_at).toBe('2026-09-14T12:01:00+00:00');
+    expect(result.embedding_model).toBe('text-embedding-3-small');
   });
 
   it('erro de upload vira ApiError acionavel', async () => {

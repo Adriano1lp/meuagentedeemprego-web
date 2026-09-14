@@ -192,6 +192,25 @@ export const mockedPdfCv = {
   buffer: Buffer.from('%PDF-1.4\n%MAE-cv\n'),
 };
 
+export const mockedTxtCv = {
+  name: 'cv.txt',
+  mimeType: 'text/plain',
+  buffer: Buffer.from('Curriculo texto MAE'),
+};
+
+export const mockedDocxCv = {
+  name: 'cv.docx',
+  mimeType:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  buffer: Buffer.from('PK fake-docx'),
+};
+
+export const mockedEmptyCv = {
+  name: 'cv.pdf',
+  mimeType: 'application/pdf',
+  buffer: Buffer.from(''),
+};
+
 export async function mockOutdatedMe(page: Page): Promise<void> {
   let accepted = false;
   await page.route('**/auth/login', async (route) => {

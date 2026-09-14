@@ -1,12 +1,11 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { ApiError } from '../api/client';
-import { validatePdfCvFile } from '../api/cv';
 import { canAnalyzeVaga } from '../api/status';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 
-type CvPhase = 'idle' | 'uploading' | 'processing' | 'ready' | 'error';
+type CvPhase = 'idle' | 'uploading' | 'rebuilding' | 'ready' | 'error';
 
 type CvUploadPanelProps = {
   status: UserStatus | null;
@@ -33,8 +32,13 @@ export function CvUploadPanel({
   const [uploadSucceeded, setUploadSucceeded] = useState(false);
 
   const ready = canAnalyzeVaga(status);
-  const busy = phase === 'uploading' || phase === 'processing';
+  const busy = phase === 'uploading' || phase === 'rebuilding';
   const showReady = ready && !busy && phase !== 'error';
+  const uiState = showReady
+    ? 'pronto'
+    : phase === 'error'
+      ? 'erro'
+      : phase;
   const canRebuildOnly =
     enabled &&
     !busy &&
@@ -57,7 +61,7 @@ export function CvUploadPanel({
   }
 
   async function runRebuild(): Promise<void> {
-    setPhase('processing');
+    setPhase('rebuilding');
     setFailedStep(null);
     setError(null);
     setBusy(true);
@@ -82,14 +86,6 @@ export function CvUploadPanel({
   }
 
   async function runUploadAndRebuild(selected: File): Promise<void> {
-    const invalid = validatePdfCvFile(selected);
-    if (invalid) {
-      setFailedStep('upload');
-      setPhase('error');
-      setError(invalid);
-      return;
-    }
-
     setError(null);
     setFailedStep(null);
     setUploadSucceeded(false);
@@ -100,7 +96,7 @@ export function CvUploadPanel({
       await api.uploadCv(selected);
       uploaded = true;
       setUploadSucceeded(true);
-      setPhase('processing');
+      setPhase('rebuilding');
       await api.rebuildEmbeddings();
       await onStatusRefresh();
       setPhase('ready');
@@ -148,7 +144,7 @@ export function CvUploadPanel({
       await runUploadAndRebuild(file);
       return;
     }
-    setError('Selecione um curriculo em PDF para tentar de novo.');
+    setError('Selecione um curriculo em PDF ou TXT para tentar de novo.');
     setPhase('error');
     setFailedStep('upload');
   }
@@ -157,7 +153,7 @@ export function CvUploadPanel({
   const submitLabel = busy
     ? phase === 'uploading'
       ? 'Enviando curriculo...'
-      : 'Processando embeddings...'
+      : 'Reconstruindo embeddings...'
     : file
       ? 'Enviar curriculo'
       : canRebuildOnly
@@ -167,6 +163,7 @@ export function CvUploadPanel({
   return (
     <section
       data-testid="cv-panel"
+      data-cv-state={uiState}
       aria-labelledby="cv-title"
       className="mt-6 rounded-3xl border-[3px] border-ink bg-orange p-6 shadow-[8px_8px_0_#111]"
     >
@@ -180,9 +177,9 @@ export function CvUploadPanel({
         Curriculo e embeddings
       </h2>
       <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Envie um PDF. A ordem e: POST /users/me/upload-cv, depois POST
-        /users/me/rebuild-embeddings. Analisar vaga so libera quando GET
-        /users/me/status vier com has_embeddings.
+        Envie um arquivo .pdf ou .txt. Ordem: POST /users/me/upload-cv, depois
+        POST /users/me/rebuild-embeddings. Analisar vaga so libera se GET
+        /users/me/status vier com has_embeddings true.
       </p>
 
       {statusLoading ? (
@@ -196,27 +193,27 @@ export function CvUploadPanel({
         </p>
       ) : null}
 
-      {!statusLoading && !ready && !busy ? (
+      {!statusLoading && !ready && !busy && phase !== 'error' ? (
         <p
           data-testid="cv-missing"
           role="status"
           className="mt-4 text-sm leading-[1.45] text-ink"
         >
           {status?.has_cv === true
-            ? 'Curriculo presente, mas embeddings ainda nao estao prontos. Gere os embeddings ou envie o PDF de novo.'
-            : 'Sem curriculo valido. Envie um PDF para habilitar Analisar vaga.'}
+            ? 'Curriculo presente, mas embeddings ainda nao estao prontos. Gere os embeddings ou envie o arquivo de novo.'
+            : 'Sem curriculo valido. Envie um PDF ou TXT para habilitar Analisar vaga.'}
         </p>
       ) : null}
 
       <form onSubmit={(event) => void handleSubmit(event)} className="mt-5">
         <label className="block text-sm text-ink" htmlFor="cv-file">
-          Arquivo do curriculo (PDF)
+          Arquivo do curriculo (PDF ou TXT)
         </label>
         <input
           id="cv-file"
           data-testid="cv-file"
           type="file"
-          accept="application/pdf,.pdf"
+          accept=".pdf,.txt,application/pdf,text/plain"
           disabled={!enabled || busy}
           onChange={handleFileChange}
           className="mt-1 w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 text-sm text-ink file:mr-3 file:rounded-full file:border-[2px] file:border-ink file:bg-green file:px-3 file:py-1 file:font-display file:text-xs file:font-extrabold disabled:opacity-60"
@@ -250,14 +247,14 @@ export function CvUploadPanel({
         </p>
       ) : null}
 
-      {phase === 'processing' ? (
+      {phase === 'rebuilding' ? (
         <p
-          data-testid="cv-processing"
+          data-testid="cv-rebuilding"
           role="status"
           aria-live="polite"
           className="mt-4 text-sm text-ink"
         >
-          Processando embeddings...
+          Reconstruindo embeddings...
         </p>
       ) : null}
 
@@ -278,9 +275,7 @@ export function CvUploadPanel({
           role="alert"
           className="mt-4 rounded-[18px] border-[3px] border-ink bg-paper p-4"
         >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Falha no curriculo
-          </p>
+          <p className="font-display text-lg font-extrabold text-ink">Erro</p>
           <p className="mt-2 text-sm leading-[1.45] text-ink">{error}</p>
           <button
             type="button"
