@@ -5,6 +5,10 @@ import {
   CURRENT_TERMS_VERSION,
   type LegalDocId,
 } from '../legal/versions';
+import {
+  parseRebuildEmbeddingsResponse,
+  parseUploadCvResponse,
+} from './cv';
 import { parseOutdatedResponse, type OutdatedDetail } from './outdated';
 import { parseProcessarResponse } from './processar';
 import { parseQuotaResponse } from './quota';
@@ -15,7 +19,9 @@ import type {
   ProcessarRequest,
   ProcessarResponse,
   QuotaDetail,
+  RebuildEmbeddingsResponse,
   RegisterPayload,
+  UploadCvResponse,
   User,
   UserStatus,
 } from './types';
@@ -255,6 +261,35 @@ export function createApiClient(options: ApiClientOptions) {
         return parseUserStatus(body);
       } catch {
         throw new ApiError(200, body, 'Resposta de status em formato invalido');
+      }
+    },
+
+    async uploadCv(file: File): Promise<UploadCvResponse> {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const body = await request('/users/me/upload-cv', {
+        method: 'POST',
+        body: form,
+      });
+      try {
+        return parseUploadCvResponse(body);
+      } catch {
+        throw new ApiError(200, body, 'Resposta de upload em formato invalido');
+      }
+    },
+
+    async rebuildEmbeddings(): Promise<RebuildEmbeddingsResponse> {
+      const body = await request('/users/me/rebuild-embeddings', {
+        method: 'POST',
+      });
+      try {
+        return parseRebuildEmbeddingsResponse(body);
+      } catch {
+        throw new ApiError(
+          200,
+          body,
+          'Resposta de embeddings em formato invalido',
+        );
       }
     },
 

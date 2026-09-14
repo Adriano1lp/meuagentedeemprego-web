@@ -37,6 +37,31 @@ export function parseUserStatus(payload: unknown): UserStatus {
   };
 }
 
+/**
+ * Gate de Analisar vaga: so `has_embeddings` de GET /users/me/status.
+ * Nao inferir prontidao a partir do upload, do rebuild ou de has_cv.
+ */
+export function canAnalyzeVaga(
+  status: UserStatus | null | undefined,
+): boolean {
+  return status?.has_embeddings === true;
+}
+
+export function analyzeBlockReason(
+  status: UserStatus | null | undefined,
+): string | null {
+  if (canAnalyzeVaga(status)) {
+    return null;
+  }
+  if (!status) {
+    return 'Aguarde o status do curriculo para analisar a vaga.';
+  }
+  if (status.has_cv !== true) {
+    return 'Sem curriculo valido. Envie um PDF ou TXT para habilitar Analisar vaga.';
+  }
+  return 'Embeddings ainda nao estao prontos. Envie o curriculo e aguarde o processamento.';
+}
+
 export function hasQuotaFields(status: UserStatus): boolean {
   return (
     status.plan != null ||

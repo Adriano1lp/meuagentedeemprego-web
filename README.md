@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento) e **W2** (cota + `POST /processar`).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`) e **Fatia 1** (upload de CV + rebuild de embeddings).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/processar` e `/users/me/files/*` sao mockadas.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/processar` e `/users/me/files/*` sao mockadas.
 
 ## Variaveis de ambiente
 
@@ -79,9 +79,56 @@ Swagger: `https://meu-agente-de-emprego.onrender.com/docs`
 - `400` (ex.: embeddings ausentes) → erro acionavel, nao UI de sucesso
 - `403` OUTDATED continua no ConsentGate do W1
 
-## Fora do W2
+## Escopo Fatia 1 (CV + embeddings)
 
-Nao implementar: Stripe/checkout (W3), exportar/apagar conta (W4), upload de CV / rebuild-embeddings, cookies ou header `X-User-Id`.
+Fluxo BDD (JWT + termos OK; ordem exata; sem Stripe/LGPD/manual-profile):
+
+1. `POST /users/me/upload-cv` — multipart campo `file` (`.pdf` | `.txt`) → `{filename, bytes_received, updated_at, …}`
+2. `POST /users/me/rebuild-embeddings` — sem body → `{chunks, processed_at, embedding_model, …}`
+3. `GET /users/me/status` → `has_cv`, `has_embeddings` (campos de cota do W2 se vierem)
+
+UI: **idle → uploading → rebuilding → pronto | erro**.  
+**Analisar vaga** so habilita se `has_embeddings === true` no status (nunca inventado no cliente).
+
+Cenarios (testes unitarios + e2e):
+
+1. Happy PDF: upload `.pdf` + rebuild OK → status `has_cv`+`has_embeddings` → UI pronto → Analisar enabled
+2. Formato invalido: `.docx` ou vazio → API 400 → UI erro → Analisar disabled
+3. Rebuild falha: upload OK, rebuild 400/5xx → UI erro + retry → Analisar disabled
+4. Already ready: status ja com `has_cv`+`has_embeddings` → UI pronto sem reupload → Analisar enabled
+5. Sem CV / `has_embeddings` false: mesmo com texto da vaga preenchido → Analisar disabled
+
+- `403` TERMS/PRIVACY_OUTDATED continua no ConsentGate
+
+### Contrato descoberto (OpenAPI live + `main.py`)
+
+Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-User-Id`.
+
+**POST `/users/me/upload-cv`**
+
+- Content-Type: `multipart/form-data` (o browser define o boundary; nao forcar header)
+- Campo: `file` (OpenAPI `Body_upload_cv_users_me_upload_cv_post`)
+- Aceito no servidor e na UI: `.pdf` e `.txt`
+- 200 JSON (campos reais de `save_user_cv`), incluindo: `filename`, `bytes_received`, `updated_at`
+- 400 exemplos: formato invalido, arquivo vazio, acima de 10 MB, texto nao extraido
+
+**POST `/users/me/rebuild-embeddings`**
+
+- Sem request body
+- 200 JSON (campos reais de `rebuild_vectorstore_for_user`):
+  - `user_id`, `embedding_run_id`, `chunks`, `processed_at`, `embedding_model`
+  - `chroma_dir`, `vector_store` (`mongodb` | `chroma`), `cv_file`
+- 400 se nao houver curriculo ou se nao der para gerar chunks
+
+**GET `/users/me/status`** (gate de Analisar vaga)
+
+- Gate: somente `has_embeddings === true`
+- Outros campos espelhados: `has_cv`, `has_profile`, `generated_files`
+- mais cota quando o JSON trouxer: `plan`, `used`, `limit`, `remaining`, `period`, `subscription_status`
+
+## Fora desta fatia
+
+Nao implementar: Stripe/checkout (W3), exportar/apagar conta (W4), perfil manual, edicao de perfil, mudancas no backend, cookies ou header `X-User-Id`.
 
 ## HTTPS em producao
 

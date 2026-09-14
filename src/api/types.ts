@@ -43,6 +43,38 @@ export type UserStatus = {
   period?: string;
 };
 
+/**
+ * POST /users/me/upload-cv — multipart field `file`.
+ * Campos reais de services/user_data.save_user_cv.
+ */
+export type UploadCvResponse = {
+  user_id?: string;
+  document_id?: string;
+  filename?: string;
+  content_type?: string;
+  bytes_received?: number;
+  updated_at?: string;
+  cv_file?: string;
+  original_file?: string;
+  object_key?: string;
+  extracted_text_object_key?: string;
+};
+
+/**
+ * POST /users/me/rebuild-embeddings — sem body.
+ * Campos reais de services.main_rag.rebuild_vectorstore_for_user.
+ */
+export type RebuildEmbeddingsResponse = {
+  user_id?: string;
+  embedding_run_id?: string;
+  chunks?: number;
+  processed_at?: string;
+  embedding_model?: string;
+  chroma_dir?: string;
+  vector_store?: string;
+  cv_file?: string;
+};
+
 /** OpenAPI RequestData */
 export type ProcessarRequest = {
   texto: string;

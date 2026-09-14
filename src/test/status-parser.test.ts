@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { hasQuotaFields, parseUserStatus, planLabel } from '../api/status';
+import { canAnalyzeVaga, hasQuotaFields, parseUserStatus, planLabel, analyzeBlockReason } from '../api/status';
 
 describe('parseUserStatus', () => {
   it('espelha so os campos de GET /users/me/status sem inventar cota', () => {
@@ -59,6 +59,24 @@ describe('parseUserStatus', () => {
 
     expect(status.remaining).toBeUndefined();
     expect(planLabel(status.plan)).toBe('Essencial');
+  });
+
+  it('so libera analise quando has_embeddings e true no GET /users/me/status', () => {
+    expect(canAnalyzeVaga(undefined)).toBe(false);
+    expect(canAnalyzeVaga(null)).toBe(false);
+    expect(canAnalyzeVaga({})).toBe(false);
+    expect(canAnalyzeVaga({ has_cv: true })).toBe(false);
+    expect(canAnalyzeVaga({ has_cv: true, has_embeddings: false })).toBe(false);
+    expect(canAnalyzeVaga({ has_embeddings: false })).toBe(false);
+    expect(canAnalyzeVaga({ has_embeddings: true })).toBe(true);
+    expect(canAnalyzeVaga({ has_cv: false, has_embeddings: true })).toBe(true);
+    expect(
+      analyzeBlockReason({ has_cv: false, has_embeddings: false }),
+    ).toMatch(/Sem curriculo valido/);
+    expect(
+      analyzeBlockReason({ has_cv: true, has_embeddings: false }),
+    ).toMatch(/Embeddings ainda nao estao prontos/);
+    expect(analyzeBlockReason({ has_embeddings: true })).toBeNull();
   });
 
   it('rejeita payload que nao e objeto', () => {

@@ -147,6 +147,70 @@ export async function mockUserFile(
   });
 }
 
+export async function mockUploadCv(
+  page: Page,
+  handler: () => { status?: number; body: unknown },
+): Promise<void> {
+  await page.route('**/users/me/upload-cv', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const result = handler();
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
+export async function mockRebuildEmbeddings(
+  page: Page,
+  handler: () => { status?: number; body: unknown } | Promise<{
+    status?: number;
+    body: unknown;
+  }>,
+): Promise<void> {
+  await page.route('**/users/me/rebuild-embeddings', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const result = await handler();
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
+export const mockedPdfCv = {
+  name: 'cv.pdf',
+  mimeType: 'application/pdf',
+  buffer: Buffer.from('%PDF-1.4\n%MAE-cv\n'),
+};
+
+export const mockedTxtCv = {
+  name: 'cv.txt',
+  mimeType: 'text/plain',
+  buffer: Buffer.from('Curriculo texto MAE'),
+};
+
+export const mockedDocxCv = {
+  name: 'cv.docx',
+  mimeType:
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  buffer: Buffer.from('PK fake-docx'),
+};
+
+export const mockedEmptyCv = {
+  name: 'cv.pdf',
+  mimeType: 'application/pdf',
+  buffer: Buffer.from(''),
+};
+
 export async function mockOutdatedMe(page: Page): Promise<void> {
   let accepted = false;
   await page.route('**/auth/login', async (route) => {
