@@ -75,6 +75,18 @@ test('2. upload ok: processando embeddings e depois pronto', async ({
     };
   });
 
+  const flow: string[] = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith('/users/me/upload-cv')) {
+      flow.push('upload-cv');
+    } else if (pathname.endsWith('/users/me/rebuild-embeddings')) {
+      flow.push('rebuild-embeddings');
+    } else if (pathname.endsWith('/users/me/status')) {
+      flow.push('status');
+    }
+  });
+
   await page.goto('/');
   await login(page);
   await expect(page.getByTestId('cv-missing')).toBeVisible();
@@ -93,6 +105,11 @@ test('2. upload ok: processando embeddings e depois pronto', async ({
     'Vaga para desenvolvedor Python com requisitos e responsabilidades.',
   );
   await expect(page.getByTestId('processar-submit')).toBeEnabled();
+  const uploadAt = flow.indexOf('upload-cv');
+  const rebuildAt = flow.indexOf('rebuild-embeddings');
+  expect(uploadAt).toBeGreaterThanOrEqual(0);
+  expect(rebuildAt).toBeGreaterThan(uploadAt);
+  expect(flow.slice(rebuildAt + 1)).toContain('status');
 });
 
 test('3. erro de upload mostra retry e reenvia', async ({ page }) => {
@@ -193,7 +210,7 @@ test('3b. erro de embeddings mostra retry so do rebuild', async ({ page }) => {
   await expect(page.getByTestId('processar-submit')).toBeEnabled();
 });
 
-test('4. CV/embeddings prontos no status habilitam Analisar vaga', async ({
+test('4. has_embeddings no status habilita Analisar vaga', async ({
   page,
 }) => {
   await mockLegalRoutes(page);

@@ -180,9 +180,9 @@ export function CvUploadPanel({
         Curriculo e embeddings
       </h2>
       <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Envie um PDF. Depois do upload a API reconstroi os embeddings. Analisar
-        vaga so libera quando GET /users/me/status marcar curriculo e embeddings
-        como prontos.
+        Envie um PDF. A ordem e: POST /users/me/upload-cv, depois POST
+        /users/me/rebuild-embeddings. Analisar vaga so libera quando GET
+        /users/me/status vier com has_embeddings.
       </p>
 
       {statusLoading ? (
@@ -268,7 +268,7 @@ export function CvUploadPanel({
           aria-live="polite"
           className="mt-4 rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 text-sm text-ink"
         >
-          Pronto. Curriculo e embeddings liberam Analisar vaga.
+          Pronto. Embeddings no status liberam Analisar vaga.
         </p>
       ) : null}
 

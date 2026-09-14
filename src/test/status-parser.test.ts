@@ -61,18 +61,22 @@ describe('parseUserStatus', () => {
     expect(planLabel(status.plan)).toBe('Essencial');
   });
 
-  it('so libera analise quando has_cv e has_embeddings sao true no status', () => {
+  it('so libera analise quando has_embeddings e true no GET /users/me/status', () => {
     expect(canAnalyzeVaga(undefined)).toBe(false);
     expect(canAnalyzeVaga(null)).toBe(false);
     expect(canAnalyzeVaga({})).toBe(false);
     expect(canAnalyzeVaga({ has_cv: true })).toBe(false);
-    expect(canAnalyzeVaga({ has_embeddings: true })).toBe(false);
-    expect(canAnalyzeVaga({ has_cv: false, has_embeddings: false })).toBe(false);
     expect(canAnalyzeVaga({ has_cv: true, has_embeddings: false })).toBe(false);
-    expect(canAnalyzeVaga({ has_cv: true, has_embeddings: true })).toBe(true);
+    expect(canAnalyzeVaga({ has_embeddings: false })).toBe(false);
+    expect(canAnalyzeVaga({ has_embeddings: true })).toBe(true);
+    expect(canAnalyzeVaga({ has_cv: false, has_embeddings: true })).toBe(true);
     expect(
       analyzeBlockReason({ has_cv: false, has_embeddings: false }),
     ).toMatch(/Sem curriculo valido/);
+    expect(
+      analyzeBlockReason({ has_cv: true, has_embeddings: false }),
+    ).toMatch(/Embeddings ainda nao estao prontos/);
+    expect(analyzeBlockReason({ has_embeddings: true })).toBeNull();
   });
 
   it('rejeita payload que nao e objeto', () => {

@@ -39,6 +39,7 @@ type Harness = {
   fetchImpl: ReturnType<typeof vi.fn>;
   uploadCalls: number;
   rebuildCalls: number;
+  pathCalls: string[];
 };
 
 function createHarness(options: {
@@ -48,6 +49,7 @@ function createHarness(options: {
 }): Harness {
   let uploadCalls = 0;
   let rebuildCalls = 0;
+  const pathCalls: string[] = [];
 
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -62,16 +64,19 @@ function createHarness(options: {
       return jsonResponse(userBody);
     }
     if (url.includes('/users/me/status')) {
+      pathCalls.push('status');
       const payload =
         typeof options.status === 'function' ? options.status() : options.status;
       return jsonResponse(payload ?? baseStatus);
     }
     if (url.includes('/users/me/upload-cv')) {
+      pathCalls.push('upload-cv');
       uploadCalls += 1;
       expect(init?.body).toBeInstanceOf(FormData);
       return options.upload?.() ?? jsonResponse({ filename: 'cv.pdf' });
     }
     if (url.includes('/users/me/rebuild-embeddings')) {
+      pathCalls.push('rebuild-embeddings');
       rebuildCalls += 1;
       expect(init?.method).toBe('POST');
       return options.rebuild?.() ?? jsonResponse({ chunks: 3 });
@@ -87,6 +92,7 @@ function createHarness(options: {
 
   return {
     fetchImpl,
+    pathCalls,
     get uploadCalls() {
       return uploadCalls;
     },
@@ -202,6 +208,11 @@ describe('HomePage CV upload + embeddings gate', () => {
     expect(screen.getByTestId('processar-submit')).toBeEnabled();
     expect(harness.uploadCalls).toBe(1);
     expect(harness.rebuildCalls).toBe(1);
+    const uploadAt = harness.pathCalls.indexOf('upload-cv');
+    const rebuildAt = harness.pathCalls.indexOf('rebuild-embeddings');
+    expect(uploadAt).toBeGreaterThanOrEqual(0);
+    expect(rebuildAt).toBeGreaterThan(uploadAt);
+    expect(harness.pathCalls.slice(rebuildAt + 1)).toContain('status');
   });
 
   it('3. erro de upload mostra estado de erro e retry reenvia', async () => {
@@ -311,5 +322,29 @@ describe('HomePage CV upload + embeddings gate', () => {
       'Vaga para desenvolvedor Python com requisitos e responsabilidades.',
     );
     expect(screen.getByTestId('processar-submit')).toBeEnabled();
+  });
+
+  it('5. Analisar vaga segue so has_embeddings do status, nao has_cv local', async () => {
+    const harness = createHarness({
+      status: {
+        ...baseStatus,
+        has_cv: true,
+        has_embeddings: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await loginWithoutReady(user);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cv-missing')).toHaveTextContent(
+        'embeddings ainda nao estao prontos',
+      );
+    });
+    expect(screen.getByTestId('processar-submit')).toBeDisabled();
+    expect(screen.getByTestId('processar-gate')).toHaveTextContent(
+      'Embeddings ainda nao estao prontos',
+    );
+    expect(screen.queryByTestId('cv-ready')).not.toBeInTheDocument();
   });
 });

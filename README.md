@@ -81,13 +81,15 @@ Swagger: `https://meu-agente-de-emprego.onrender.com/docs`
 
 ## Escopo Fatia 1 (CV + embeddings)
 
-Gate de **Analisar vaga** vem so de `GET /users/me/status` (`has_cv` e `has_embeddings` ambos `true`). O cliente nao inventa prontidao a partir da resposta de upload/rebuild.
+Fluxo BDD (ordem exata; sem Stripe):
 
-- Sem curriculo valido: `Analisar vaga` fica desabilitado, com mensagem clara no painel de CV e no painel de analise
-- `POST /users/me/upload-cv` (multipart, campo `file`, PDF) seguido de `POST /users/me/rebuild-embeddings` (sem body)
+1. `POST /users/me/upload-cv` (multipart, campo `file`, PDF)
+2. `POST /users/me/rebuild-embeddings` (sem body)
+3. Gate de **Analisar vaga** so com `has_embeddings === true` em `GET /users/me/status` — o cliente nao inventa prontidao a partir do upload, do rebuild ou de `has_cv`
+
+- Sem embeddings no status: `Analisar vaga` fica desabilitado, com mensagem clara no painel de CV e no painel de analise
 - UI: enviando → **processando embeddings** → **pronto**
 - Erro de upload ou de embeddings: estado de erro + **Tentar de novo** (retry de embeddings nao reenvia o PDF se o upload ja passou)
-- Quando o status marca CV e embeddings prontos, **Analisar vaga** habilita
 - `403` TERMS/PRIVACY_OUTDATED continua no ConsentGate
 
 ### Contrato descoberto (OpenAPI live + `main.py`)
@@ -113,9 +115,10 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
   - `chroma_dir`, `vector_store` (`mongodb` | `chroma`), `cv_file`
 - 400 se nao houver curriculo ou se nao der para gerar chunks
 
-**GET `/users/me/status`** (gate)
+**GET `/users/me/status`** (gate de Analisar vaga)
 
-- `has_cv`, `has_profile`, `has_embeddings`, `generated_files`
+- Gate: somente `has_embeddings === true`
+- Outros campos espelhados: `has_cv`, `has_profile`, `generated_files`
 - mais cota quando o JSON trouxer: `plan`, `used`, `limit`, `remaining`, `period`, `subscription_status`
 
 ## Fora desta fatia
