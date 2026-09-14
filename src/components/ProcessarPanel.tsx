@@ -19,10 +19,15 @@ type ProcessarOutcome =
 
 type ProcessarPanelProps = {
   enabled: boolean;
+  blockedMessage?: string | null;
   onProcessed: () => Promise<void>;
 };
 
-export function ProcessarPanel({ enabled, onProcessed }: ProcessarPanelProps) {
+export function ProcessarPanel({
+  enabled,
+  blockedMessage,
+  onProcessed,
+}: ProcessarPanelProps) {
   const { api } = useAuth();
   const [texto, setTexto] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -135,6 +140,16 @@ export function ProcessarPanel({ enabled, onProcessed }: ProcessarPanelProps) {
         Cole a descricao completa da vaga. A API devolve aderencia, lacunas e,
         quando o match permite, um PDF otimizado.
       </p>
+
+      {!enabled && blockedMessage ? (
+        <p
+          data-testid="processar-gate"
+          role="status"
+          className="mt-4 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 text-sm leading-[1.45] text-ink"
+        >
+          {blockedMessage}
+        </p>
+      ) : null}
 
       <form onSubmit={handleSubmit} className="mt-5">
         <label className="block text-sm text-ink" htmlFor="processar-texto">

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
+import { analyzeBlockReason, canAnalyzeVaga } from '../api/status';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { CvUploadPanel } from '../components/CvUploadPanel';
 import { ProcessarPanel } from '../components/ProcessarPanel';
 import { QuotaStatusCard } from '../components/QuotaStatusCard';
 
@@ -12,8 +14,13 @@ export function HomePage() {
   const [status, setStatus] = useState<UserStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [cvBusy, setCvBusy] = useState(false);
 
   const canUseProduct = isAuthenticated && !blocksApp;
+  const canAnalyze = canUseProduct && canAnalyzeVaga(status) && !cvBusy;
+  const processarGate = cvBusy
+    ? 'Processando embeddings. Analisar vaga fica bloqueado ate ficar pronto.'
+    : analyzeBlockReason(status);
 
   const loadStatus = useCallback(async () => {
     if (!canUseProduct) {
@@ -70,9 +77,9 @@ export function HomePage() {
           Ola, {greeting}
         </h2>
         <p className="mt-3 text-base leading-[1.45] text-ink">
-          Voce esta logado. Consulte a cota do mes e envie uma vaga para
-          analise. Billing Stripe, exportacao LGPD e upload de CV ficam para as
-          proximas fatias.
+          Voce esta logado. Envie o curriculo em PDF, aguarde os embeddings e
+          so entao analise uma vaga. Billing Stripe e exportacao LGPD ficam
+          para as proximas fatias.
         </p>
       </section>
 
@@ -83,7 +90,19 @@ export function HomePage() {
         onRetry={() => void loadStatus()}
       />
 
-      <ProcessarPanel enabled={canUseProduct} onProcessed={loadStatus} />
+      <CvUploadPanel
+        status={status}
+        statusLoading={statusLoading}
+        enabled={canUseProduct}
+        onStatusRefresh={loadStatus}
+        onBusyChange={setCvBusy}
+      />
+
+      <ProcessarPanel
+        enabled={canAnalyze}
+        blockedMessage={canAnalyze ? null : processarGate}
+        onProcessed={loadStatus}
+      />
     </div>
   );
 }

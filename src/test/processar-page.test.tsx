@@ -118,6 +118,9 @@ async function login(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() => {
     expect(screen.getByTestId('home-shell')).toBeInTheDocument();
   });
+  await waitFor(() => {
+    expect(screen.getByTestId('cv-ready')).toBeInTheDocument();
+  });
 }
 
 function renderApp(fetchImpl: Harness['fetchImpl']) {

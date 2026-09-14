@@ -103,7 +103,7 @@ export function QuotaStatusCard({
               <dd data-testid="status-embeddings">
                 {status.has_embeddings
                   ? 'prontos para analisar'
-                  : 'ausentes — envie o curriculo na API antes de processar'}
+                  : 'ausentes — envie o curriculo abaixo'}
               </dd>
             </div>
           ) : null}

@@ -19,6 +19,7 @@ async function login(page: import('@playwright/test').Page) {
   await page.getByTestId('login-password').fill('senha-segura');
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('home-shell')).toBeVisible();
+  await expect(page.getByTestId('cv-ready')).toBeVisible();
 }
 
 test('1. Status UI reflete so GET /users/me/status', async ({ page }) => {
