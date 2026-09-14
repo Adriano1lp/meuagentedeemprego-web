@@ -6,13 +6,25 @@ import {
   type LegalDocId,
 } from '../legal/versions';
 import { parseOutdatedResponse, type OutdatedDetail } from './outdated';
+import { parseProcessarResponse } from './processar';
+import { parseQuotaResponse } from './quota';
+import { parseUserStatus } from './status';
 import { bearerHeaders, extractAccessToken } from './token';
-import type { AuthResponse, RegisterPayload, User } from './types';
+import type {
+  AuthResponse,
+  ProcessarRequest,
+  ProcessarResponse,
+  QuotaDetail,
+  RegisterPayload,
+  User,
+  UserStatus,
+} from './types';
 
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
   readonly outdated: OutdatedDetail | null;
+  readonly quota: QuotaDetail | null;
 
   constructor(status: number, body: unknown, message: string) {
     super(message);
@@ -20,6 +32,7 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
     this.outdated = parseOutdatedResponse(status, body);
+    this.quota = parseQuotaResponse(status, body);
   }
 }
 
@@ -67,10 +80,16 @@ function errorMessage(status: number, body: unknown): string {
   if (typeof body === 'string' && body.trim()) {
     return body;
   }
+  if (status === 402) {
+    return 'Cota mensal esgotada.';
+  }
+  if (status === 400) {
+    return 'Nao foi possivel processar o pedido.';
+  }
   if (status >= 500) {
     return `Erro no servidor: ${status}`;
   }
-  return 'Falha ao autenticar com a API';
+  return 'Falha ao falar com a API';
 }
 
 export type RegisterInput = {
@@ -99,7 +118,7 @@ export function createApiClient(options: ApiClientOptions) {
 
   async function request(
     path: string,
-    init: RequestInit & { parse?: 'json' | 'text' } = {},
+    init: RequestInit & { parse?: 'json' | 'text' | 'bytes' } = {},
   ): Promise<unknown> {
     const { parse = 'json', headers: initHeaders, ...rest } = init;
     const headers = new Headers(initHeaders);
@@ -111,7 +130,11 @@ export function createApiClient(options: ApiClientOptions) {
     if (!headers.has('Accept')) {
       headers.set(
         'Accept',
-        parse === 'text' ? 'text/markdown, text/plain, */*' : 'application/json',
+        parse === 'text'
+          ? 'text/markdown, text/plain, */*'
+          : parse === 'bytes'
+            ? 'application/pdf, application/octet-stream, */*'
+            : 'application/json',
       );
     }
 
@@ -143,6 +166,22 @@ export function createApiClient(options: ApiClientOptions) {
         throw new ApiError(response.status, markdown, 'Documento legal vazio');
       }
       return markdown;
+    }
+
+    if (parse === 'bytes') {
+      if (!response.ok) {
+        const body = await readBody(response);
+        const error = new ApiError(
+          response.status,
+          body,
+          errorMessage(response.status, body),
+        );
+        if (error.outdated) {
+          options.onOutdated?.(error.outdated);
+        }
+        throw error;
+      }
+      return response.arrayBuffer();
     }
 
     const body = await readBody(response);
@@ -208,6 +247,44 @@ export function createApiClient(options: ApiClientOptions) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildConsentRequest(doc, version)),
       });
+    },
+
+    async getStatus(): Promise<UserStatus> {
+      const body = await request('/users/me/status', { method: 'GET' });
+      try {
+        return parseUserStatus(body);
+      } catch {
+        throw new ApiError(200, body, 'Resposta de status em formato invalido');
+      }
+    },
+
+    async processar(texto: string): Promise<ProcessarResponse> {
+      const payload: ProcessarRequest = { texto };
+      const body = await request('/processar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      try {
+        return parseProcessarResponse(body);
+      } catch {
+        throw new ApiError(200, body, 'Resposta de processar em formato invalido');
+      }
+    },
+
+    async downloadUserFile(fileName: string): Promise<ArrayBuffer> {
+      const safeName = fileName.split('/').pop()?.trim() || fileName;
+      if (!safeName) {
+        throw new ApiError(400, null, 'Nome de arquivo invalido');
+      }
+      const body = await request(
+        `/users/me/files/${encodeURIComponent(safeName)}`,
+        { method: 'GET', parse: 'bytes' },
+      );
+      if (!(body instanceof ArrayBuffer)) {
+        throw new ApiError(200, body, 'Arquivo em formato invalido');
+      }
+      return body;
     },
   };
 }

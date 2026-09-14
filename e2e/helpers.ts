@@ -12,6 +12,25 @@ export const mockedUser = {
   privacy_version: '1.0',
 };
 
+export const mockedStatus = {
+  user_id: 'user-1',
+  has_cv: true,
+  has_profile: true,
+  has_embeddings: true,
+  generated_files: 1,
+  plan: 'free',
+  used: 1,
+  limit: 5,
+  remaining: 4,
+  period: '2026-09',
+  subscription_status: 'none',
+};
+
+export const mockedPdfUrl =
+  'https://meu-agente-de-emprego.onrender.com/users/me/files/abc-123.pdf';
+
+export const mockedPdfBytes = '%PDF-1.4\n%MAE-e2e\n';
+
 export async function mockLegalRoutes(page: Page): Promise<void> {
   await page.route('**/legal/terms**', async (route) => {
     await route.fulfill({
@@ -75,6 +94,57 @@ export async function mockAuthSuccess(page: Page): Promise<void> {
       body: JSON.stringify(mockedUser),
     });
   });
+
+  await mockUserStatus(page, mockedStatus);
+}
+
+export async function mockUserStatus(
+  page: Page,
+  body: Record<string, unknown> | (() => Record<string, unknown>),
+): Promise<void> {
+  await page.route('**/users/me/status', async (route) => {
+    const payload = typeof body === 'function' ? body() : body;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    });
+  });
+}
+
+export async function mockProcessar(
+  page: Page,
+  handler: (texto: string) => {
+    status?: number;
+    body: unknown;
+  },
+): Promise<void> {
+  await page.route('**/processar', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const payload = (route.request().postDataJSON() ?? {}) as { texto?: string };
+    const result = handler(payload.texto ?? '');
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
+export async function mockUserFile(
+  page: Page,
+  options: { body?: string; contentType?: string } = {},
+): Promise<void> {
+  await page.route('**/users/me/files/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: options.contentType ?? 'application/pdf',
+      body: options.body ?? mockedPdfBytes,
+    });
+  });
 }
 
 export async function mockOutdatedMe(page: Page): Promise<void> {
@@ -118,4 +188,5 @@ export async function mockOutdatedMe(page: Page): Promise<void> {
       body: JSON.stringify({ ok: true }),
     });
   });
+  await mockUserStatus(page, mockedStatus);
 }
