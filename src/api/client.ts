@@ -10,12 +10,21 @@ import {
   parseUploadCvResponse,
 } from './cv';
 import { parseOutdatedResponse, type OutdatedDetail } from './outdated';
+import {
+  buildGapHistoryPath,
+  HISTORY_LOAD_FAILED,
+  HISTORY_LOGIN_REQUIRED,
+  parseGapHistoryResponse,
+  safeHistoryErrorMessage,
+  type GapHistoryQuery,
+} from './history';
 import { parseProcessarResponse } from './processar';
 import { parseQuotaResponse } from './quota';
 import { parseUserStatus } from './status';
 import { bearerHeaders, extractAccessToken } from './token';
 import type {
   AuthResponse,
+  GapHistoryResponse,
   ProcessarRequest,
   ProcessarResponse,
   QuotaDetail,
@@ -304,6 +313,34 @@ export function createApiClient(options: ApiClientOptions) {
         return parseProcessarResponse(body);
       } catch {
         throw new ApiError(200, body, 'Resposta de processar em formato invalido');
+      }
+    },
+
+    async getGapHistory(
+      query: GapHistoryQuery = {},
+    ): Promise<GapHistoryResponse> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, HISTORY_LOGIN_REQUIRED);
+      }
+
+      try {
+        const body = await request(buildGapHistoryPath(query), {
+          method: 'GET',
+        });
+        return parseGapHistoryResponse(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError) {
+          throw new ApiError(
+            error.status,
+            error.body,
+            safeHistoryErrorMessage(error),
+          );
+        }
+        throw new ApiError(0, null, HISTORY_LOAD_FAILED);
       }
     },
 

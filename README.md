@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`) e **Fatia 1** (upload de CV + rebuild de embeddings).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings) e **W-Historico** (`GET /users/me/gap-history`).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/processar` e `/users/me/files/*` sao mockadas.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas.
 
 ## Variaveis de ambiente
 
@@ -100,6 +100,24 @@ Cenarios (testes unitarios + e2e):
 
 - `403` TERMS/PRIVACY_OUTDATED continua no ConsentGate
 
+## Escopo W-Historico (paridade mobile app #8)
+
+Tela autenticada **Historico** (`/historico`, link na nav) lista as analises do dono do JWT via `GET /users/me/gap-history`.
+
+Estados: **loading → lista | vazio | erro**. pt-BR, acessivel, responsivo.
+
+Cenarios (testes unitarios + e2e mockado):
+
+1. Logado + 200 com `items` → lista das minhas analises (titulo, empresa, score, data)
+2. Logado + 200 `items: []` (ou lista nua vazia) → estado vazio claro
+3. 401/403 → erro legivel; nunca mostra dados de outro usuario
+4. 5xx/rede → erro sanitizado (sem path, token, URL ou stack)
+5. Sem JWT → tela de login; **nao** chama a API
+
+`403` OUTDATED continua no ConsentGate do W1. Token so em memoria. Sem `X-User-Id`.
+
+Fora desta fatia: Stripe/W3, perfil, LGPD, carta, PDI, edicao de historico, mudancas no backend.
+
 ### Contrato descoberto (OpenAPI live + `main.py`)
 
 Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-User-Id`.
@@ -125,6 +143,19 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
 - Gate: somente `has_embeddings === true`
 - Outros campos espelhados: `has_cv`, `has_profile`, `generated_files`
 - mais cota quando o JSON trouxer: `plan`, `used`, `limit`, `remaining`, `period`, `subscription_status`
+
+**GET `/users/me/gap-history`** (historico do dono do JWT)
+
+- Query: `limit` 1–100 (default 20), `offset` >= 0 (default 0)
+- 200 JSON: `{ items, limit, offset }` — `items: []` quando nao ha analises
+- O cliente tambem aceita lista nua `[]` (vazio)
+- Item (campos reais de `_insight_row_to_dict` / `_mongo_insight_to_dict`):
+  - `id` (string; SQLite `insight_id` ou Mongo `_id`) — fallback de parse: `insight_id`
+  - `processing_run_id`, `created_at`, `job_title`, `company_name`, `job_summary`
+  - `match_score` (int; parse aceita string numerica)
+  - `strengths`, `critical_gaps`, `matching_skills`, `missing_skills` (listas)
+  - `status`, `generation_blocked`, `blocked_reason`, `source` (`"processar"`)
+- OpenAPI live nao descreve o schema do item (`additionalProperties: true`); nomes acima vieram do `main.py` + repository
 
 ## Fora desta fatia
 
