@@ -57,20 +57,22 @@ describe('api.getGapHistory', () => {
     expect(result.limit).toBe(20);
   });
 
-  it('sem JWT nao chama a API', async () => {
+  it('sem JWT (null ou vazio) nao chama a API nem vaza Authorization', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('nao deveria chamar fetch');
     });
-    const api = createApiClient({
-      baseUrl: 'https://api.example.test',
-      fetchImpl,
-      getToken: () => null,
-    });
 
-    await expect(api.getGapHistory()).rejects.toMatchObject({
-      status: 401,
-      message: HISTORY_LOGIN_REQUIRED,
-    });
+    for (const token of [null, '', '   ']) {
+      const api = createApiClient({
+        baseUrl: 'https://api.example.test',
+        fetchImpl,
+        getToken: () => token,
+      });
+      await expect(api.getGapHistory()).rejects.toMatchObject({
+        status: 401,
+        message: HISTORY_LOGIN_REQUIRED,
+      });
+    }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

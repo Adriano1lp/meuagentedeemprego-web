@@ -170,6 +170,9 @@ describe('Historico — BDD', () => {
         return headers.get('X-User-Id') != null;
       }),
     ).toBe(false);
+    expect(window.localStorage.getItem('access_token')).toBeNull();
+    expect(window.sessionStorage.getItem('access_token')).toBeNull();
+    expect(window.localStorage.length).toBe(0);
   });
 
   it('2. logado + 200 [] → estado vazio claro', async () => {

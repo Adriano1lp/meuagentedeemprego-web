@@ -63,8 +63,7 @@ export function HistoryPanel() {
         Historico
       </h2>
       <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Resumo das analises de vaga desta sessao. So o dono do JWT ve a
-        lista; o navegador nao envia X-User-Id.
+        Analises anteriores desta conta: titulo, empresa, aderencia e data.
       </p>
 
       {view.kind === 'loading' ? (
