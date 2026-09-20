@@ -15,7 +15,7 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('home-shell')).toBeVisible();
 }
 
-test('1. logado + 200 com items → lista das minhas analises', async ({
+test('lista com itens — autenticado + 200 com itens → lista das minhas analises', async ({
   page,
 }) => {
   const historyUrls: string[] = [];
@@ -52,10 +52,10 @@ test('1. logado + 200 com items → lista das minhas analises', async ({
   expect(historyUrls.length).toBeGreaterThan(0);
 });
 
-test('2. logado + 200 [] → estado vazio claro', async ({ page }) => {
+test('empty state — autenticado + 200 [] → empty claro sem crash', async ({ page }) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
-  await mockGapHistory(page, () => ({ body: { items: [] } }));
+  await mockGapHistory(page, () => ({ body: [] }));
   await page.goto('/');
   await login(page);
   await page.getByTestId('nav-historico').click();
@@ -67,7 +67,7 @@ test('2. logado + 200 [] → estado vazio claro', async ({ page }) => {
   await expect(page.getByTestId('history-item')).toHaveCount(0);
 });
 
-test('3. 401/403 → erro legivel e nunca dados de outro usuario', async ({
+test('nao autorizado — 401/403 → erro legivel, zero dados de outro user', async ({
   page,
 }) => {
   const otherUser = {
@@ -107,18 +107,24 @@ test('3. 401/403 → erro legivel e nunca dados de outro usuario', async ({
   await expect(page.getByText('Outra Corp')).toHaveCount(0);
 });
 
-test('4. 5xx/rede → erro sanitizado sem path, token ou stack', async ({
+test('falha de rede/servidor — 5xx/rede → erro sanitizado (sem URL/path interno)', async ({
   page,
 }) => {
+  let mode: 'server' | 'network' = 'server';
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
-  await mockGapHistory(page, () => ({
-    status: 500,
-    body: {
-      detail:
-        'File "/app/main.py", line 12, in read_gap_history GET /users/me/gap-history Bearer jwt-abc',
-    },
-  }));
+  await mockGapHistory(page, async () => {
+    if (mode === 'network') {
+      throw new Error('Failed to fetch https://meu-agente-de-emprego.onrender.com/users/me/gap-history');
+    }
+    return {
+      status: 500,
+      body: {
+        detail:
+          'File "/app/main.py", line 12, in read_gap_history GET /users/me/gap-history Bearer jwt-abc',
+      },
+    };
+  });
   await page.goto('/');
   await login(page);
   await page.getByTestId('nav-historico').click();
@@ -132,18 +138,41 @@ test('4. 5xx/rede → erro sanitizado sem path, token ou stack', async ({
   await expect(error).not.toContainText('jwt-abc');
   await expect(error).not.toContainText('main.py');
   await expect(error).not.toContainText('Bearer');
+
+  mode = 'network';
+  await page.route('**/users/me/gap-history**', async (route) => {
+    await route.abort('connectionfailed');
+  });
+  await page.getByTestId('history-retry').click();
+  await expect(page.getByTestId('history-error')).toContainText(
+    'Nao foi possivel carregar o historico. Tente novamente.',
+  );
+  await expect(page.getByTestId('history-error')).not.toContainText(
+    'onrender.com',
+  );
+  await expect(page.getByTestId('history-error')).not.toContainText(
+    '/users/me/gap-history',
+  );
 });
 
-test('5. sem JWT mostra login e nao chama a API', async ({ page }) => {
+test('sessao ausente — sem JWT → redirect login e API NAO chamada com token vazado', async ({ page }) => {
   const historyHits: string[] = [];
   page.on('request', (request) => {
     if (request.url().includes('/users/me/gap-history')) {
       historyHits.push(request.url());
     }
+    const auth = request.headers().authorization;
+    if (auth) {
+      expect(auth).not.toBe('Bearer');
+      expect(auth).not.toBe('Bearer ');
+      expect(auth).not.toContain('undefined');
+    }
   });
 
   await mockLegalRoutes(page);
   await page.goto('/historico');
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).not.toHaveURL(/historico/);
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('history-panel')).toHaveCount(0);
   expect(historyHits).toEqual([]);

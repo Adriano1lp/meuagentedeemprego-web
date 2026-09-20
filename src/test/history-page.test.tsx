@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
@@ -111,6 +111,11 @@ async function login(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByTestId('login-submit'));
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-pathname">{location.pathname}</div>;
+}
+
 function renderApp(
   fetchImpl: Harness['fetchImpl'],
   initialPath = '/',
@@ -118,19 +123,20 @@ function renderApp(
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <AuthProvider fetchImpl={fetchImpl}>
+        <LocationProbe />
         <App />
       </AuthProvider>
     </MemoryRouter>,
   );
 }
 
-describe('Historico — BDD', () => {
+describe('Feature: Historico de analises na web', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
   });
 
-  it('1. logado + 200 com items → lista com titulo, empresa, score e data', async () => {
+  it('lista com itens — autenticado + 200 com itens → lista das minhas analises', async () => {
     const harness = createHarness({});
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
@@ -173,10 +179,11 @@ describe('Historico — BDD', () => {
     expect(window.localStorage.getItem('access_token')).toBeNull();
     expect(window.sessionStorage.getItem('access_token')).toBeNull();
     expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
   });
 
-  it('2. logado + 200 [] → estado vazio claro', async () => {
-    const harness = createHarness({ history: { items: [] } });
+  it('empty state — autenticado + 200 [] → empty claro sem crash', async () => {
+    const harness = createHarness({ history: [] });
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
     await login(user);
@@ -193,7 +200,7 @@ describe('Historico — BDD', () => {
     expect(screen.queryByTestId('history-item')).not.toBeInTheDocument();
   });
 
-  it('3. 401/403 → erro legivel e nunca dados de outro usuario', async () => {
+  it('nao autorizado — 401/403 → erro legivel, zero dados de outro user', async () => {
     const otherUserItem = {
       id: 'other',
       job_title: 'Vaga de outra pessoa',
@@ -249,7 +256,7 @@ describe('Historico — BDD', () => {
     expect(screen.queryByText('Outra Corp')).not.toBeInTheDocument();
   });
 
-  it('4. 5xx/rede → erro sanitizado sem path, token ou stack', async () => {
+  it('falha de rede/servidor — 5xx/rede → erro sanitizado (sem URL/path interno)', async () => {
     const harness = createHarness({
       history: () =>
         jsonResponse(
@@ -279,11 +286,35 @@ describe('Historico — BDD', () => {
     expect(errorText).not.toContain('main.py');
     expect(errorText).not.toContain('Bearer');
     expect(historyErrorLeaksInternals(errorText)).toBe(false);
+
+    cleanup();
+    const network = createHarness({
+      history: () => {
+        throw new TypeError('Failed to fetch https://meu-agente-de-emprego.onrender.com/users/me/gap-history');
+      },
+    });
+    const user2 = userEvent.setup();
+    renderApp(network.fetchImpl);
+    await login(user2);
+    await waitFor(() => {
+      expect(screen.getByTestId('nav-historico')).toBeInTheDocument();
+    });
+    await user2.click(screen.getByTestId('nav-historico'));
+    await waitFor(() => {
+      expect(screen.getByTestId('history-error')).toHaveTextContent(
+        HISTORY_LOAD_FAILED,
+      );
+    });
+    const networkText = screen.getByTestId('history-error').textContent ?? '';
+    expect(networkText).not.toContain('onrender.com');
+    expect(networkText).not.toContain('/users/me/gap-history');
+    expect(historyErrorLeaksInternals(networkText)).toBe(false);
   });
 
-  it('5. sem JWT mostra login e nao chama a API', () => {
+  it('sessao ausente — sem JWT → redirect login e API NAO chamada com token vazado', () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/historico');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-list')).not.toBeInTheDocument();
@@ -291,6 +322,13 @@ describe('Historico — BDD', () => {
       guest.fetchImpl.mock.calls.some(([input]) =>
         String(input).includes('/users/me/gap-history'),
       ),
+    ).toBe(false);
+    expect(
+      guest.fetchImpl.mock.calls.some(([, init]) => {
+        const headers = new Headers(init?.headers);
+        const auth = headers.get('Authorization');
+        return auth === 'Bearer' || auth === 'Bearer ' || auth === 'Bearer null';
+      }),
     ).toBe(false);
   });
 

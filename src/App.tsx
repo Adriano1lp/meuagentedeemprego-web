@@ -18,7 +18,9 @@ export function App() {
         />
         <Route
           path="/historico"
-          element={isAuthenticated ? <HistoryPage /> : <AuthPage />}
+          element={
+            isAuthenticated ? <HistoryPage /> : <Navigate to="/" replace />
+          }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

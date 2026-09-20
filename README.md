@@ -112,7 +112,7 @@ Cenarios (testes unitarios + e2e mockado):
 2. Logado + 200 `items: []` (ou lista nua vazia) → estado vazio claro
 3. 401/403 → erro legivel; nunca mostra dados de outro usuario
 4. 5xx/rede → erro sanitizado (sem path, token, URL ou stack)
-5. Sem JWT → tela de login; **nao** chama a API
+5. Sem JWT → redirect para login (`/`); **nao** chama a API e nao envia Bearer vazio
 
 `403` OUTDATED continua no ConsentGate do W1. Token so em memoria. Sem `X-User-Id`.
 
