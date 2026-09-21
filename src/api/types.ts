@@ -100,3 +100,32 @@ export type QuotaDetail = {
   limit?: number;
   plan?: string;
 };
+
+/**
+ * GET /users/me/gap-history — campos reais de
+ * `list_job_analysis_insights` / `_insight_row_to_dict` (SQLite) e
+ * `_mongo_insight_to_dict` (Mongo). `id` e string (insight_id ou _id).
+ */
+export type GapHistoryItem = {
+  id: string;
+  processing_run_id?: number | string;
+  created_at?: string;
+  job_title?: string;
+  company_name?: string;
+  job_summary?: string;
+  match_score: number;
+  strengths: string[];
+  critical_gaps: string[];
+  matching_skills: string[];
+  missing_skills: string[];
+  status?: string;
+  generation_blocked: boolean;
+  blocked_reason?: string | null;
+  source?: string;
+};
+
+export type GapHistoryResponse = {
+  items: GapHistoryItem[];
+  limit?: number;
+  offset?: number;
+};

@@ -4,12 +4,13 @@ import { ApiError } from '../api/client';
 import { analyzeBlockReason, canAnalyzeVaga } from '../api/status';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { AppHeader } from '../components/AppHeader';
 import { CvUploadPanel } from '../components/CvUploadPanel';
 import { ProcessarPanel } from '../components/ProcessarPanel';
 import { QuotaStatusCard } from '../components/QuotaStatusCard';
 
 export function HomePage() {
-  const { user, logout, api, isAuthenticated, blocksApp } = useAuth();
+  const { user, api, isAuthenticated, blocksApp } = useAuth();
   const greeting = user?.display_name?.trim() || user?.email || 'usuario';
   const [status, setStatus] = useState<UserStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -52,19 +53,7 @@ export function HomePage() {
 
   return (
     <div className="mx-auto min-h-dvh max-w-3xl px-5 py-5">
-      <header className="flex items-center justify-between gap-4">
-        <h1 className="font-display text-xl font-extrabold text-ink">
-          Meu Agente de Emprego
-        </h1>
-        <button
-          type="button"
-          data-testid="logout-button"
-          onClick={logout}
-          className="rounded-[18px] border-[3px] border-ink bg-paper px-4 py-2 font-display text-sm font-extrabold shadow-[4px_4px_0_#111]"
-        >
-          Sair
-        </button>
-      </header>
+      <AppHeader />
 
       <section
         data-testid="home-shell"

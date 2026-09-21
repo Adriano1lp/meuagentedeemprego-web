@@ -211,6 +211,47 @@ export const mockedEmptyCv = {
   buffer: Buffer.from(''),
 };
 
+export type GapHistoryMock = {
+  status?: number;
+  body: unknown;
+};
+
+export async function mockGapHistory(
+  page: Page,
+  handler: () => GapHistoryMock | Promise<GapHistoryMock>,
+): Promise<void> {
+  await page.route('**/users/me/gap-history**', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    const result = await handler();
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
+export const mockedHistoryItem = {
+  id: '1',
+  processing_run_id: 10,
+  created_at: '2026-09-01T15:04:00Z',
+  job_title: 'Desenvolvedor Flutter',
+  company_name: 'Acme',
+  job_summary: 'Vaga remota com Dart',
+  match_score: 88,
+  strengths: ['Dart'],
+  critical_gaps: ['K8s'],
+  matching_skills: ['Dart'],
+  missing_skills: ['K8s'],
+  status: 'completed',
+  generation_blocked: false,
+  blocked_reason: null,
+  source: 'processar',
+};
+
 export async function mockOutdatedMe(page: Page): Promise<void> {
   let accepted = false;
   await page.route('**/auth/login', async (route) => {
