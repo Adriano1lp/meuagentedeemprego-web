@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings) e **W-Historico** (`GET /users/me/gap-history`).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`) e **W-Perfil** (`GET /users/me`).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas.
 
 ## Variaveis de ambiente
 
@@ -118,7 +118,21 @@ Cenarios (testes unitarios + e2e mockado):
 
 Fora desta fatia: Stripe/W3, perfil, LGPD, carta, PDI, edicao de historico, mudancas no backend.
 
-### Contrato descoberto (OpenAPI live + `main.py`)
+## Escopo W-Perfil (paridade minima com o app)
+
+Tela autenticada **Perfil** (`/perfil`, link na nav) mostra a conta do JWT via `GET /users/me`.
+
+Campos exibidos somente se o JSON trouxer: `display_name`, `email`, `plan`, `subscription_status`. Sem cota calculada no browser (used/limit/remaining nao fazem parte deste endpoint).
+
+**Sair** zera o JWT em memoria e volta ao login (`/`). Sem token em `localStorage` ou `sessionStorage`.
+
+Atalho **Politica de privacidade** reutiliza `GET /legal/privacy?version=1.0` (o mesmo documento do cadastro), sem API nova.
+
+Sem JWT: redirect para `/` e a API de perfil nao e chamada.
+
+Fora desta fatia: edicao de CV, upload, biometria, perfil manual, Stripe/checkout, carta, PDI, exportar/apagar conta.
+
+## Contrato descoberto (OpenAPI live + `main.py`)
 
 Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-User-Id`.
 
@@ -156,6 +170,13 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
   - `strengths`, `critical_gaps`, `matching_skills`, `missing_skills` (listas)
   - `status`, `generation_blocked`, `blocked_reason`, `source` (`"processar"`)
 - OpenAPI live nao descreve o schema do item (`additionalProperties: true`); nomes acima vieram do `main.py` + repository
+
+**GET `/users/me`** (perfil leve)
+
+- Bearer JWT. Sem `X-User-Id`
+- 200 JSON de `get_current_user`: `user_id`, `auth_mode`, `display_name`, `email`, `plan`, `subscription_status`, mais aceite de termos/privacidade quando o usuario existe
+- A UI mostra so `display_name`, `email`, `plan` e `subscription_status` se vierem no JSON
+- Nao traz `used`, `limit` ou `remaining` (esses ficam em `GET /users/me/status`)
 
 ## Fora desta fatia
 
