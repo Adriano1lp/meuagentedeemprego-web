@@ -13,6 +13,7 @@ export function AppHeader() {
   const location = useLocation();
   const isHome = location.pathname === '/';
   const isHistorico = location.pathname === '/historico';
+  const isPerfil = location.pathname === '/perfil';
 
   return (
     <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -38,6 +39,14 @@ export function AppHeader() {
           className={navClass(isHistorico, 'bg-sky')}
         >
           Historico
+        </Link>
+        <Link
+          to="/perfil"
+          data-testid="nav-perfil"
+          aria-current={isPerfil ? 'page' : undefined}
+          className={navClass(isPerfil, 'bg-pink')}
+        >
+          Perfil
         </Link>
       </nav>
       <button

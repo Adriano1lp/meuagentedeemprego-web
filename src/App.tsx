@@ -5,6 +5,7 @@ import { ConsentGate } from './components/ConsentGate';
 import { AuthPage } from './pages/AuthPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
+import { ProfilePage } from './pages/ProfilePage';
 
 export function App() {
   const { isAuthenticated } = useAuth();
@@ -20,6 +21,12 @@ export function App() {
           path="/historico"
           element={
             isAuthenticated ? <HistoryPage /> : <Navigate to="/" replace />
+          }
+        />
+        <Route
+          path="/perfil"
+          element={
+            isAuthenticated ? <ProfilePage /> : <Navigate to="/" replace />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />

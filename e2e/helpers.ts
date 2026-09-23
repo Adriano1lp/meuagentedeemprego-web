@@ -98,6 +98,37 @@ export async function mockAuthSuccess(page: Page): Promise<void> {
   await mockUserStatus(page, mockedStatus);
 }
 
+export const mockedCurrentUser = {
+  user_id: 'user-1',
+  auth_mode: 'jwt',
+  display_name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  terms_accepted: true,
+  terms_version: '1.0',
+  privacy_accepted: true,
+  privacy_version: '1.0',
+  plan: 'essencial',
+  subscription_status: 'active',
+};
+
+export async function mockCurrentUser(
+  page: Page,
+  body: Record<string, unknown> | (() => Record<string, unknown>) = mockedCurrentUser,
+): Promise<void> {
+  await page.route(/\/users\/me$/, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    const payload = typeof body === 'function' ? body() : body;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    });
+  });
+}
+
 export async function mockUserStatus(
   page: Page,
   body: Record<string, unknown> | (() => Record<string, unknown>),

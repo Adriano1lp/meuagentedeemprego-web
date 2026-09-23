@@ -19,11 +19,19 @@ import {
   type GapHistoryQuery,
 } from './history';
 import { parseProcessarResponse } from './processar';
+import {
+  CURRENT_USER_PATH,
+  parseCurrentUser,
+  PROFILE_LOAD_FAILED,
+  PROFILE_LOGIN_REQUIRED,
+  safeProfileErrorMessage,
+} from './profile';
 import { parseQuotaResponse } from './quota';
 import { parseUserStatus } from './status';
 import { bearerHeaders, extractAccessToken } from './token';
 import type {
   AuthResponse,
+  CurrentUser,
   GapHistoryResponse,
   ProcessarRequest,
   ProcessarResponse,
@@ -243,6 +251,30 @@ export function createApiClient(options: ApiClientOptions) {
         throw new ApiError(200, body, 'Resposta da API em formato invalido');
       }
       return body as User;
+    },
+
+    async getCurrentUser(): Promise<CurrentUser> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, PROFILE_LOGIN_REQUIRED);
+      }
+
+      try {
+        const body = await request(CURRENT_USER_PATH, { method: 'GET' });
+        return parseCurrentUser(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError) {
+          throw new ApiError(
+            error.status,
+            error.body,
+            safeProfileErrorMessage(error),
+          );
+        }
+        throw new ApiError(0, null, PROFILE_LOAD_FAILED);
+      }
     },
 
     async fetchLegal(doc: LegalDocId, version?: string): Promise<string> {

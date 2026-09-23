@@ -8,6 +8,19 @@ export type User = {
   [key: string]: unknown;
 };
 
+/**
+ * GET /users/me — campos reais de `get_current_user` (main.py).
+ * Nome, e-mail, plano e status da assinatura. Sem cota (used/limit/remaining
+ * vivem em GET /users/me/status e GET /billing/me, nao neste payload).
+ */
+export type CurrentUser = {
+  user_id?: string;
+  email?: string;
+  display_name?: string;
+  plan?: string;
+  subscription_status?: string;
+};
+
 export type AuthResponse = {
   access_token: string;
   token_type: string;
