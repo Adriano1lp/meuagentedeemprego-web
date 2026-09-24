@@ -23,12 +23,18 @@ import {
   type LegalDocId,
 } from '../legal/versions';
 
+/** Motivo de logout apos DELETE /users/me com sucesso. Clique em Sair nao usa isto. */
+export const LOGOUT_ACCOUNT_DELETED = 'account-deleted';
+
+export const ACCOUNT_DELETED_NOTICE = 'Sua conta foi excluida.';
+
 type AuthContextValue = {
   token: string | null;
   user: User | null;
   outdated: OutdatedDetail[];
   isAuthenticated: boolean;
   blocksApp: boolean;
+  accountDeleted: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (input: {
     displayName: string;
@@ -37,7 +43,7 @@ type AuthContextValue = {
     termsAccepted: boolean;
     privacyAccepted: boolean;
   }) => Promise<void>;
-  logout: () => void;
+  logout: (reason?: unknown) => void;
   acceptOutdatedConsent: (docs: LegalDocId[]) => Promise<void>;
   api: ApiClient;
 };
@@ -81,6 +87,7 @@ export function AuthProvider({
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [outdated, setOutdated] = useState<OutdatedDetail[]>([]);
+  const [accountDeleted, setAccountDeleted] = useState(false);
 
   const rememberOutdated = useCallback((detail: OutdatedDetail) => {
     setOutdated((prev) => {
@@ -135,6 +142,7 @@ export function AuthProvider({
 
   const login = useCallback(
     async (email: string, password: string) => {
+      setAccountDeleted(false);
       const response = await api.login({ email, password });
       await applySession(response.access_token, response.user);
     },
@@ -149,17 +157,19 @@ export function AuthProvider({
       termsAccepted: boolean;
       privacyAccepted: boolean;
     }) => {
+      setAccountDeleted(false);
       const response = await api.register(input);
       await applySession(response.access_token, response.user);
     },
     [api, applySession],
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback((reason?: unknown) => {
     tokenStore.clear();
     setToken(null);
     setUser(null);
     setOutdated([]);
+    setAccountDeleted(reason === LOGOUT_ACCOUNT_DELETED);
   }, [tokenStore]);
 
   const acceptOutdatedConsent = useCallback(
@@ -182,6 +192,7 @@ export function AuthProvider({
       outdated,
       isAuthenticated: Boolean(token),
       blocksApp: Boolean(token) && outdated.length > 0,
+      accountDeleted,
       login,
       register,
       logout,
@@ -190,6 +201,7 @@ export function AuthProvider({
     }),
     [
       acceptOutdatedConsent,
+      accountDeleted,
       api,
       login,
       logout,
