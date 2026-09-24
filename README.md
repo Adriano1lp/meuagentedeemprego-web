@@ -137,7 +137,7 @@ Fora desta fatia: edicao de CV, upload, biometria, perfil manual, Stripe/checkou
 Na tela autenticada **Perfil** (`/perfil`), secao **Seus dados**:
 
 1. **Exportar meus dados** — `GET /users/me/export` com Bearer.
-2. **Solicitar exclusao de conta** — dialogo destrutivo; so no confirmar, `DELETE /users/me` com body `{"confirm":"DELETE"}`. Sucesso (`deleted: true`) faz logout e volta ao login. O JWT continua so em memoria.
+2. **Solicitar exclusao de conta** — dialogo destrutivo. A API so e chamada se o usuario digitar exatamente `DELETE` e confirmar. Cancelar, campo vazio ou qualquer outro texto nao chama `DELETE /users/me`. Sucesso (`deleted: true`) faz logout e volta ao login. O JWT continua so em memoria.
 
 Sem JWT: a rota `/perfil` redireciona para `/` e esses endpoints nao sao chamados.
 
@@ -147,7 +147,8 @@ Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `applic
 
 - Exige termos vigentes (`_require_terms_accepted`). `403` OUTDATED segue no ConsentGate.
 - 200 `application/json`, **sem** `Content-Disposition`. O browser baixa esse objeto como `meus-dados.json`.
-- O cliente nao filtra chaves. O pacote real inclui `user`, `profile`, `processing_runs`, `job_analysis_insights`, `development_plans`, `documents`, `generated_files`, `processar_usage` e `exported_at`.
+- Erro: mensagem sem path, URL ou token, com **Tentar novamente**.
+- Antes do download, o cliente remove em qualquer nivel `password`, `password_hash`, `passwd`, `hash`, `access_token`, `refresh_token`, `jwt`, `token` e `authorization`. Essas chaves nao aparecem na tela. O restante do JSON permanece (`user`, `profile`, `processing_runs`, `job_analysis_insights`, `development_plans`, `documents`, `generated_files`, `processar_usage`, `exported_at`).
 
 **DELETE `/users/me`**
 

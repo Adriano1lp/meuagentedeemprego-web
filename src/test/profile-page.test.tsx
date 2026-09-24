@@ -312,14 +312,19 @@ describe('Feature: Perfil leve na web', () => {
     ).toBe(false);
   });
 
-  it('sem JWT redireciona ao login e nao chama GET /users/me', () => {
+  it('C5 sem JWT redireciona ao login e nao chama export nem delete', () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/perfil');
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('lgpd-account-section')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-data')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delete-account-open')).not.toBeInTheDocument();
     expect(guest.profileCalls).toEqual([]);
     expect(guest.privacyCalls).toEqual([]);
+    expect(guest.exportCalls).toEqual([]);
+    expect(guest.deleteCalls).toEqual([]);
     expect(guest.fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -408,8 +413,21 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.queryByText('outra@example.com')).not.toBeInTheDocument();
   });
 
-  it('exporta o JSON da API e baixa meus-dados.json', async () => {
-    const harness = createHarness({});
+  it('C1 exporta o JSON da API sem password nem hash na tela', async () => {
+    const secretHash = 'hash-secreto-nao-mostrar';
+    const harness = createHarness({
+      exportData: () =>
+        jsonResponse({
+          ...exportBody,
+          password: 'senha-plana',
+          password_hash: secretHash,
+          user: {
+            ...exportBody.user,
+            hash: 'outro-hash',
+            checksum_sha256: 'keep-me',
+          },
+        }),
+    });
     const user = userEvent.setup();
     const blobs: Blob[] = [];
     const createObjectURL = vi.fn((blob: Blob) => {
@@ -439,10 +457,71 @@ describe('Feature: Perfil leve na web', () => {
     expect(harness.exportCalls[0]?.authorization).toBe('Bearer jwt-login');
     expect(anchors[0]?.download).toBe('meus-dados.json');
     expect(blobs[0]?.type).toBe('application/json');
-    expect(JSON.parse(await readBlobText(blobs[0]!))).toEqual(exportBody);
+    const downloaded = JSON.parse(await readBlobText(blobs[0]!)) as Record<
+      string,
+      unknown
+    >;
+    expect(downloaded).not.toHaveProperty('password');
+    expect(downloaded).not.toHaveProperty('password_hash');
+    expect(downloaded.user).toMatchObject({ checksum_sha256: 'keep-me' });
+    expect(downloaded.user).not.toHaveProperty('hash');
+    const pageText = document.body.textContent ?? '';
+    expect(pageText).not.toContain(secretHash);
+    expect(pageText).not.toContain('senha-plana');
+    expect(pageText).not.toContain('outro-hash');
     expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:export');
+  });
+
+  it('C2 erro de exportacao e legivel e o retry baixa o JSON', async () => {
+    let attempts = 0;
+    const harness = createHarness({
+      exportData: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return jsonResponse(
+            {
+              detail:
+                'File "/app/main.py", line 4, in export GET /users/me/export Bearer jwt-abc https://meu-agente-de-emprego.onrender.com',
+            },
+            500,
+          );
+        }
+        return jsonResponse(exportBody);
+      },
+    });
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => 'blob:export-retry');
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('export-data-error')).toHaveTextContent(EXPORT_FAILED);
+    });
+    const errorText = screen.getByTestId('export-data-error').textContent ?? '';
+    expect(errorText).not.toContain('/users/me');
+    expect(errorText).not.toContain('onrender.com');
+    expect(errorText).not.toContain('jwt-abc');
+    expect(errorText).not.toContain('main.py');
+    expect(screen.queryByTestId('export-data-success')).not.toBeInTheDocument();
+    expect(harness.exportCalls).toHaveLength(1);
+
+    await user.click(screen.getByTestId('export-data-retry'));
+    await waitFor(() => {
+      expect(screen.getByTestId('export-data-success')).toHaveTextContent(
+        'Seus dados foram baixados.',
+      );
+    });
+    expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
+    expect(harness.exportCalls).toHaveLength(2);
+    expect(createObjectURL).toHaveBeenCalled();
   });
 
   it('erro de exportacao nao mostra path, URL ou token', async () => {
@@ -473,6 +552,36 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.queryByTestId('export-data-success')).not.toBeInTheDocument();
   });
 
+  it('C3 cancelar ou confirmar algo diferente de DELETE nao chama a API', async () => {
+    const harness = createHarness({});
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('delete-account-open'));
+
+    await user.click(screen.getByTestId('delete-account-confirm'));
+    expect(screen.getByTestId('delete-account-mismatch')).toBeInTheDocument();
+    expect(harness.deleteCalls).toEqual([]);
+
+    await user.type(screen.getByTestId('delete-account-confirm-input'), 'delete');
+    await user.click(screen.getByTestId('delete-account-confirm'));
+    expect(screen.getByTestId('delete-account-mismatch')).toBeInTheDocument();
+    expect(harness.deleteCalls).toEqual([]);
+    expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+
+    await user.clear(screen.getByTestId('delete-account-confirm-input'));
+    await user.type(screen.getByTestId('delete-account-confirm-input'), 'DELETE ');
+    await user.click(screen.getByTestId('delete-account-confirm'));
+    expect(harness.deleteCalls).toEqual([]);
+
+    await user.click(screen.getByTestId('delete-account-cancel'));
+    expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
+    expect(harness.deleteCalls).toEqual([]);
+    expectTokenOnlyInMemory();
+  });
+
   it('cancelar o confirm de exclusao nao chama DELETE', async () => {
     const harness = createHarness({});
     const user = userEvent.setup();
@@ -492,13 +601,14 @@ describe('Feature: Perfil leve na web', () => {
     expectTokenOnlyInMemory();
   });
 
-  it('confirmar exclusao chama DELETE e encerra a sessao', async () => {
+  it('C4 confirmar DELETE chama a API, faz logout e volta ao login', async () => {
     const harness = createHarness({});
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
     await login(user);
     await user.click(await screen.findByTestId('nav-perfil'));
     await user.click(await screen.findByTestId('delete-account-open'));
+    await user.type(screen.getByTestId('delete-account-confirm-input'), 'DELETE');
     await user.click(screen.getByTestId('delete-account-confirm'));
 
     await waitFor(() => {
@@ -533,6 +643,7 @@ describe('Feature: Perfil leve na web', () => {
     await login(user);
     await user.click(await screen.findByTestId('nav-perfil'));
     await user.click(await screen.findByTestId('delete-account-open'));
+    await user.type(screen.getByTestId('delete-account-confirm-input'), 'DELETE');
     await user.click(screen.getByTestId('delete-account-confirm'));
 
     await waitFor(() => {

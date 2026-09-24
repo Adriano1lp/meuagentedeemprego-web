@@ -34,6 +34,43 @@ export const DELETE_SESSION_EXPIRED =
   'Sessao expirada. Entre novamente para excluir a conta.';
 export const DELETE_FAILED =
   'Nao foi possivel excluir a conta. Tente novamente.';
+export const DELETE_CONFIRM_MISMATCH =
+  'A confirmacao nao confere. A exclusao nao foi enviada.';
+
+/** Chaves que nao podem aparecer no download nem na UI. */
+const SENSITIVE_EXPORT_KEYS = new Set([
+  'password',
+  'password_hash',
+  'passwd',
+  'hash',
+  'access_token',
+  'refresh_token',
+  'jwt',
+  'token',
+  'authorization',
+]);
+
+export function isExactDeleteConfirm(value: string): boolean {
+  return value === DELETE_ACCOUNT_CONFIRM;
+}
+
+/** Remove senha, hash e tokens em qualquer nivel. O restante do JSON permanece. */
+export function omitSensitiveExportKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => omitSensitiveExportKeys(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (SENSITIVE_EXPORT_KEYS.has(key.toLowerCase())) {
+      continue;
+    }
+    next[key] = omitSensitiveExportKeys(item);
+  }
+  return next;
+}
 
 export function parseUserDataExport(payload: unknown): UserDataExport {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {

@@ -2,10 +2,14 @@ import { useEffect, useId, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import {
+  DELETE_CONFIRM_MISMATCH,
   DELETE_FAILED,
   EXPORT_FAILED,
+  isExactDeleteConfirm,
+  omitSensitiveExportKeys,
   triggerJsonDownload,
 } from '../api/lgpd';
+import type { UserDataExport } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 
 type LgpdAccountActionsProps = {
@@ -18,20 +22,25 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportSuccess, setExportSuccess] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [confirmMismatch, setConfirmMismatch] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const cancelRef = useRef<HTMLButtonElement>(null);
+  const confirmInputId = useId();
+  const confirmInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!dialogOpen) {
       return;
     }
-    cancelRef.current?.focus();
+    confirmInputRef.current?.focus();
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape' && !deleting) {
         setDialogOpen(false);
+        setConfirmText('');
+        setConfirmMismatch(false);
         setDeleteError(null);
       }
     }
@@ -47,8 +56,12 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
     setExportError(null);
     setExportSuccess(false);
     try {
-      const payload = await api.exportMyData();
-      triggerJsonDownload(payload);
+      const payload = omitSensitiveExportKeys(await api.exportMyData());
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        setExportError(EXPORT_FAILED);
+        return;
+      }
+      triggerJsonDownload(payload as UserDataExport);
       setExportSuccess(true);
     } catch (cause) {
       if (cause instanceof ApiError && cause.outdated) {
@@ -65,6 +78,8 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
       return;
     }
     setDeleteError(null);
+    setConfirmMismatch(false);
+    setConfirmText('');
     setDialogOpen(true);
   }
 
@@ -73,6 +88,8 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
       return;
     }
     setDialogOpen(false);
+    setConfirmText('');
+    setConfirmMismatch(false);
     setDeleteError(null);
   }
 
@@ -80,14 +97,21 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
     if (!enabled || deleting) {
       return;
     }
+    if (!isExactDeleteConfirm(confirmText)) {
+      setConfirmMismatch(true);
+      setDeleteError(null);
+      return;
+    }
     setDeleting(true);
     setDeleteError(null);
+    setConfirmMismatch(false);
     try {
       await api.deleteMyAccount();
       logout();
     } catch (cause) {
       if (cause instanceof ApiError && cause.outdated) {
         setDialogOpen(false);
+        setDeleting(false);
         return;
       }
       setDeleteError(cause instanceof ApiError ? cause.message : DELETE_FAILED);
@@ -136,13 +160,22 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
         ) : null}
 
         {exportError ? (
-          <p
+          <div
             data-testid="export-data-error"
             role="alert"
-            className="text-sm text-ink"
+            className="rounded-[18px] border-[3px] border-ink bg-cream p-4"
           >
-            {exportError}
-          </p>
+            <p className="text-sm text-ink">{exportError}</p>
+            <button
+              type="button"
+              data-testid="export-data-retry"
+              onClick={() => void exportData()}
+              disabled={!enabled || exporting || deleting}
+              className="mt-3 rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-2 font-display text-sm font-extrabold"
+            >
+              Tentar novamente
+            </button>
+          </div>
         ) : null}
 
         {exportSuccess ? (
@@ -190,7 +223,38 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
               className="mt-3 text-sm leading-[1.45] text-ink"
             >
               Essa acao apaga a conta e encerra a sessao. Nao da para desfazer.
+              Digite DELETE para confirmar.
             </p>
+
+            <form
+              className="mt-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              <label
+                htmlFor={confirmInputId}
+                className="block text-sm font-bold text-ink"
+              >
+                Confirmacao
+              </label>
+              <input
+                ref={confirmInputRef}
+                id={confirmInputId}
+                data-testid="delete-account-confirm-input"
+                value={confirmText}
+                onChange={(event) => {
+                  setConfirmText(event.target.value);
+                  setConfirmMismatch(false);
+                }}
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                disabled={deleting}
+                aria-invalid={confirmMismatch}
+                className="mt-2 w-full rounded-[18px] border-[3px] border-ink bg-cream px-4 py-3 text-base text-ink"
+              />
 
             {deleting ? (
               <p
@@ -200,6 +264,16 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
                 className="mt-4 text-sm text-ink"
               >
                 Excluindo a conta...
+              </p>
+            ) : null}
+
+            {confirmMismatch ? (
+              <p
+                data-testid="delete-account-mismatch"
+                role="alert"
+                className="mt-4 text-sm text-ink"
+              >
+                {DELETE_CONFIRM_MISMATCH}
               </p>
             ) : null}
 
@@ -215,7 +289,6 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
 
             <div className="mt-5 flex flex-col gap-3 sm:flex-row">
               <button
-                ref={cancelRef}
                 type="button"
                 data-testid="delete-account-cancel"
                 onClick={closeDeleteDialog}
@@ -225,9 +298,8 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
                 Cancelar
               </button>
               <button
-                type="button"
+                type="submit"
                 data-testid="delete-account-confirm"
-                onClick={() => void confirmDelete()}
                 disabled={deleting}
                 aria-busy={deleting}
                 className="w-full rounded-[18px] border-[3px] border-ink bg-orange px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
@@ -235,6 +307,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
                 Excluir conta
               </button>
             </div>
+            </form>
           </div>
         </div>
       ) : null}

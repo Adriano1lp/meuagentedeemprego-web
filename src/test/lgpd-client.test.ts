@@ -11,7 +11,9 @@ import {
   EXPORT_LOGIN_REQUIRED,
   EXPORT_PATH,
   EXPORT_SESSION_EXPIRED,
+  isExactDeleteConfirm,
   lgpdErrorLeaksInternals,
+  omitSensitiveExportKeys,
   parseDeleteAccountResponse,
   parseUserDataExport,
   triggerJsonDownload,
@@ -276,6 +278,29 @@ function readBlobText(blob: Blob): Promise<string> {
     reader.readAsText(blob);
   });
 }
+
+describe('confirmacao e dados sensiveis', () => {
+  it('so DELETE exato libera a exclusao', () => {
+    expect(isExactDeleteConfirm('DELETE')).toBe(true);
+    expect(isExactDeleteConfirm('delete')).toBe(false);
+    expect(isExactDeleteConfirm('DELETE ')).toBe(false);
+    expect(isExactDeleteConfirm('')).toBe(false);
+  });
+
+  it('omite password e hash e preserva o resto do JSON', () => {
+    expect(
+      omitSensitiveExportKeys({
+        user: { email: 'ada@example.com', hash: 'segredo', checksum_sha256: 'keep' },
+        password: 'senha-plana',
+        password_hash: 'hash-secreto',
+        documents: [{ original_filename: 'cv.pdf', token: 'nao' }],
+      }),
+    ).toEqual({
+      user: { email: 'ada@example.com', checksum_sha256: 'keep' },
+      documents: [{ original_filename: 'cv.pdf' }],
+    });
+  });
+});
 
 describe('parsers e download JSON', () => {
   it('rejeita exportacao que nao e objeto', () => {
