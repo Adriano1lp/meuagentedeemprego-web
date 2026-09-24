@@ -622,6 +622,9 @@ describe('Feature: Perfil leve na web', () => {
       },
     ]);
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('account-deleted-notice')).toHaveTextContent(
+      'Sua conta foi excluida.',
+    );
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
@@ -655,6 +658,100 @@ describe('Feature: Perfil leve na web', () => {
     expect(errorText).not.toContain('jwt-abc');
     expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expectTokenOnlyInMemory();
+  });
+
+  it('401 na exportacao redireciona ao login sem aviso de conta excluida', async () => {
+    const harness = createHarness({
+      exportData: () => jsonResponse({ detail: 'Nao autenticado' }, 401),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.queryByTestId('account-deleted-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
+    expectTokenOnlyInMemory();
+  });
+
+  it('404 na exportacao mostra erro e retry', async () => {
+    const harness = createHarness({
+      exportData: () =>
+        jsonResponse(
+          { detail: 'Usuario nao encontrado GET /users/me/export' },
+          404,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('export-data-error')).toHaveTextContent(EXPORT_FAILED);
+    });
+    expect(screen.getByTestId('export-data-retry')).toBeInTheDocument();
+    const errorText = screen.getByTestId('export-data-error').textContent ?? '';
+    expect(errorText).not.toContain('/users/me');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+  });
+
+  it('403 OUTDATED na exportacao reusa o ConsentGate', async () => {
+    const harness = createHarness({
+      exportData: () =>
+        jsonResponse(
+          {
+            detail: {
+              code: 'PRIVACY_OUTDATED',
+              message:
+                'Politica de privacidade desatualizada. Reaceite a versao vigente.',
+            },
+          },
+          403,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('consent-gate')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('consent-gate')).toHaveTextContent(
+      'Documentos legais atualizados',
+    );
+    expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expectTokenOnlyInMemory();
+  });
+
+  it('401 na exclusao redireciona ao login', async () => {
+    const harness = createHarness({
+      deleteAccount: () => jsonResponse({ detail: 'Usuario nao encontrado' }, 401),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('delete-account-open'));
+    await user.type(screen.getByTestId('delete-account-confirm-input'), 'DELETE');
+    await user.click(screen.getByTestId('delete-account-confirm'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.queryByTestId('account-deleted-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delete-account-error')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
   });
 });

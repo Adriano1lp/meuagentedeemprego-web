@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { ApiError } from '../api/client';
-import { useAuth } from '../auth/AuthContext';
+import { ACCOUNT_DELETED_NOTICE, useAuth } from '../auth/AuthContext';
 import { canSubmitSignup, validateSignup } from '../auth/signupValidation';
 import { LegalDocument } from '../components/LegalDocument';
 import { LegalDoc } from '../legal/versions';
@@ -9,7 +9,7 @@ import { LegalDoc } from '../legal/versions';
 type AuthTab = 'login' | 'signup';
 
 export function AuthPage() {
-  const { login, register } = useAuth();
+  const { accountDeleted, login, register } = useAuth();
   const [tab, setTab] = useState<AuthTab>('login');
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -131,6 +131,16 @@ export function AuthPage() {
           Criar conta
         </button>
       </div>
+
+      {accountDeleted ? (
+        <p
+          data-testid="account-deleted-notice"
+          role="status"
+          className="mb-4 rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 text-sm text-ink"
+        >
+          {ACCOUNT_DELETED_NOTICE}
+        </p>
+      ) : null}
 
       {error ? (
         <p

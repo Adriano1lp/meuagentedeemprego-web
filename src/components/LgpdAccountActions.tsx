@@ -10,7 +10,7 @@ import {
   triggerJsonDownload,
 } from '../api/lgpd';
 import type { UserDataExport } from '../api/types';
-import { useAuth } from '../auth/AuthContext';
+import { LOGOUT_ACCOUNT_DELETED, useAuth } from '../auth/AuthContext';
 
 type LgpdAccountActionsProps = {
   enabled: boolean;
@@ -67,6 +67,10 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
       if (cause instanceof ApiError && cause.outdated) {
         return;
       }
+      if (cause instanceof ApiError && cause.status === 401) {
+        logout();
+        return;
+      }
       setExportError(cause instanceof ApiError ? cause.message : EXPORT_FAILED);
     } finally {
       setExporting(false);
@@ -107,11 +111,15 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
     setConfirmMismatch(false);
     try {
       await api.deleteMyAccount();
-      logout();
+      logout(LOGOUT_ACCOUNT_DELETED);
     } catch (cause) {
       if (cause instanceof ApiError && cause.outdated) {
         setDialogOpen(false);
         setDeleting(false);
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 401) {
+        logout();
         return;
       }
       setDeleteError(cause instanceof ApiError ? cause.message : DELETE_FAILED);

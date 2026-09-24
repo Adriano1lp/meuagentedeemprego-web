@@ -172,6 +172,9 @@ test('C4 confirmar DELETE encerra a sessao', async ({ page }) => {
   await page.getByTestId('delete-account-confirm').click();
 
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
+  await expect(page.getByTestId('account-deleted-notice')).toHaveText(
+    'Sua conta foi excluida.',
+  );
   await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
   await expect(page.getByTestId('delete-account-dialog')).toHaveCount(0);
@@ -205,4 +208,42 @@ test('C5 sem JWT redireciona ao login e nao chama export nem delete', async ({ p
   await expect(page.getByTestId('lgpd-account-section')).toHaveCount(0);
   await expect(page.getByTestId('export-data')).toHaveCount(0);
   expect(lgpdHits).toEqual([]);
+});
+
+test('401 na exportacao volta ao login', async ({ page }) => {
+  await page.route('**/users/me/export', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Usuario nao encontrado' }),
+    });
+  });
+  await openProfile(page);
+  await page.getByTestId('export-data').click();
+  await expect(page.getByTestId('auth-tab-login')).toBeVisible();
+  await expect(page.getByTestId('account-deleted-notice')).toHaveCount(0);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+});
+
+test('403 OUTDATED na exportacao abre o reaceite', async ({ page }) => {
+  await page.route('**/users/me/export', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        detail: {
+          code: 'TERMS_OUTDATED',
+          message: 'Termos de uso desatualizados. Reaceite a versao vigente.',
+        },
+      }),
+    });
+  });
+  await openProfile(page);
+  await page.getByTestId('export-data').click();
+  await expect(page.getByTestId('consent-gate')).toBeVisible();
+  await expect(page.getByTestId('consent-gate')).toContainText(
+    'Documentos legais atualizados',
+  );
+  await expect(page.getByTestId('export-data-error')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/perfil$/);
 });
