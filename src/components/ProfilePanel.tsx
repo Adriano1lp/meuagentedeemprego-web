@@ -10,6 +10,7 @@ import {
 import { planLabel } from '../api/status';
 import type { CurrentUser } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { LgpdAccountActions } from './LgpdAccountActions';
 import { PrivacyShortcut } from './PrivacyShortcut';
 
 type ProfileView =
@@ -161,6 +162,7 @@ export function ProfilePanel() {
       </section>
 
       <PrivacyShortcut />
+      <LgpdAccountActions enabled={canLoad} />
     </>
   );
 }

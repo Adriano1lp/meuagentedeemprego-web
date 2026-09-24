@@ -142,3 +142,22 @@ export type GapHistoryResponse = {
   limit?: number;
   offset?: number;
 };
+
+/**
+ * GET /users/me/export — objeto JSON de `export_current_user`.
+ * A API nao envia Content-Disposition; o cliente conserva todas as chaves
+ * recebidas. Chaves de topo conhecidas (collect_user_export_payload +
+ * exported_at): user, profile, processing_runs, job_analysis_insights,
+ * development_plans, documents, generated_files, processar_usage, exported_at.
+ */
+export type UserDataExport = Record<string, unknown>;
+
+/**
+ * DELETE /users/me com body {"confirm":"DELETE"}.
+ * Sucesso real: { user_id, deleted: true, deleted_at }.
+ */
+export type DeleteAccountResult = {
+  deleted: true;
+  user_id?: string;
+  deleted_at?: string;
+};

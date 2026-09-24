@@ -111,6 +111,56 @@ export const mockedCurrentUser = {
   subscription_status: 'active',
 };
 
+export const mockedExport = {
+  user: {
+    user_id: 'user-1',
+    email: 'ada@example.com',
+    display_name: 'Ada Lovelace',
+  },
+  profile: null,
+  processing_runs: [],
+  documents: [],
+  generated_files: [],
+  exported_at: '2026-09-24T12:00:00+00:00',
+};
+
+export async function mockDataExport(
+  page: Page,
+  body: Record<string, unknown> = mockedExport,
+): Promise<void> {
+  await page.route('**/users/me/export', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    });
+  });
+}
+
+export async function mockDeleteAccount(
+  page: Page,
+  result: { status?: number; body: unknown } = {
+    status: 200,
+    body: {
+      user_id: 'user-1',
+      deleted: true,
+      deleted_at: '2026-09-24T12:00:00+00:00',
+    },
+  },
+): Promise<void> {
+  await page.route(/\/users\/me$/, async (route) => {
+    if (route.request().method() !== 'DELETE') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
 export async function mockCurrentUser(
   page: Page,
   body: Record<string, unknown> | (() => Record<string, unknown>) = mockedCurrentUser,

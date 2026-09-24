@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
 import {
+  DELETE_FAILED,
+  EXPORT_FAILED,
+} from '../api/lgpd';
+import {
   profileErrorLeaksInternals,
   PROFILE_LOAD_FAILED,
   PROFILE_SESSION_EXPIRED,
@@ -57,19 +61,38 @@ function isCurrentUserUrl(url: string): boolean {
   return path.endsWith('/users/me');
 }
 
+const exportBody = {
+  user: {
+    user_id: 'user-1',
+    email: 'ada@example.com',
+    display_name: 'Ada Lovelace',
+  },
+  profile: null,
+  processing_runs: [],
+  documents: [],
+  generated_files: [],
+  exported_at: '2026-09-24T12:00:00+00:00',
+};
+
 type Harness = {
   fetchImpl: ReturnType<typeof vi.fn>;
   profileCalls: string[];
   privacyCalls: string[];
+  exportCalls: { url: string; authorization: string | null }[];
+  deleteCalls: { url: string; body: string | null; authorization: string | null }[];
 };
 
 function createHarness(options: {
   currentUser?: unknown | (() => Response);
   me?: () => Response;
   legal?: () => Response;
+  exportData?: () => Response;
+  deleteAccount?: () => Response;
 } = {}): Harness {
   const profileCalls: string[] = [];
   const privacyCalls: string[] = [];
+  const exportCalls: Harness['exportCalls'] = [];
+  const deleteCalls: Harness['deleteCalls'] = [];
 
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -94,6 +117,29 @@ function createHarness(options: {
     }
     if (url.includes('/users/me/status')) {
       return jsonResponse(statusBody);
+    }
+    if (url.includes('/users/me/export')) {
+      exportCalls.push({
+        url,
+        authorization: headers.get('Authorization'),
+      });
+      return options.exportData?.() ?? jsonResponse(exportBody);
+    }
+    if (isCurrentUserUrl(url) && (init?.method ?? 'GET').toUpperCase() === 'DELETE') {
+      const rawBody = init?.body;
+      deleteCalls.push({
+        url,
+        body: typeof rawBody === 'string' ? rawBody : null,
+        authorization: headers.get('Authorization'),
+      });
+      return (
+        options.deleteAccount?.() ??
+        jsonResponse({
+          user_id: 'user-1',
+          deleted: true,
+          deleted_at: '2026-09-24T12:00:00+00:00',
+        })
+      );
     }
     if (isCurrentUserUrl(url)) {
       profileCalls.push(url);
@@ -121,7 +167,7 @@ function createHarness(options: {
     return jsonResponse({ detail: 'not found' }, 404);
   });
 
-  return { fetchImpl, profileCalls, privacyCalls };
+  return { fetchImpl, profileCalls, privacyCalls, exportCalls, deleteCalls };
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
@@ -144,6 +190,15 @@ function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
       </AuthProvider>
     </MemoryRouter>,
   );
+}
+
+function readBlobText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
 }
 
 function expectTokenOnlyInMemory() {
@@ -183,6 +238,10 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.queryByText(/analises usadas/i)).not.toBeInTheDocument();
     expect(harness.profileCalls.length).toBeGreaterThan(0);
     expect(harness.privacyCalls).toEqual([]);
+    expect(harness.exportCalls).toEqual([]);
+    expect(harness.deleteCalls).toEqual([]);
+    expect(screen.getByTestId('export-data')).toBeInTheDocument();
+    expect(screen.getByTestId('delete-account-open')).toBeInTheDocument();
     expectTokenOnlyInMemory();
   });
 
@@ -347,5 +406,144 @@ describe('Feature: Perfil leve na web', () => {
     });
     expect(screen.queryByText('Outra Pessoa')).not.toBeInTheDocument();
     expect(screen.queryByText('outra@example.com')).not.toBeInTheDocument();
+  });
+
+  it('exporta o JSON da API e baixa meus-dados.json', async () => {
+    const harness = createHarness({});
+    const user = userEvent.setup();
+    const blobs: Blob[] = [];
+    const createObjectURL = vi.fn((blob: Blob) => {
+      blobs.push(blob);
+      return 'blob:export';
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const anchors: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      anchors.push(this);
+    });
+
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('export-data-success')).toHaveTextContent(
+        'Seus dados foram baixados.',
+      );
+    });
+    expect(harness.exportCalls).toHaveLength(1);
+    expect(harness.exportCalls[0]?.authorization).toBe('Bearer jwt-login');
+    expect(anchors[0]?.download).toBe('meus-dados.json');
+    expect(blobs[0]?.type).toBe('application/json');
+    expect(JSON.parse(await readBlobText(blobs[0]!))).toEqual(exportBody);
+    expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
+    expectTokenOnlyInMemory();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:export');
+  });
+
+  it('erro de exportacao nao mostra path, URL ou token', async () => {
+    const harness = createHarness({
+      exportData: () =>
+        jsonResponse(
+          {
+            detail:
+              'File "/app/main.py", line 4, in export GET /users/me/export Bearer jwt-abc https://meu-agente-de-emprego.onrender.com',
+          },
+          500,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('export-data'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('export-data-error')).toHaveTextContent(EXPORT_FAILED);
+    });
+    const errorText = screen.getByTestId('export-data-error').textContent ?? '';
+    expect(errorText).not.toContain('/users/me');
+    expect(errorText).not.toContain('onrender.com');
+    expect(errorText).not.toContain('jwt-abc');
+    expect(errorText).not.toContain('main.py');
+    expect(screen.queryByTestId('export-data-success')).not.toBeInTheDocument();
+  });
+
+  it('cancelar o confirm de exclusao nao chama DELETE', async () => {
+    const harness = createHarness({});
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('delete-account-open'));
+
+    expect(screen.getByTestId('delete-account-dialog')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+    await user.click(screen.getByTestId('delete-account-cancel'));
+
+    expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
+    expect(harness.deleteCalls).toEqual([]);
+    expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expectTokenOnlyInMemory();
+  });
+
+  it('confirmar exclusao chama DELETE e encerra a sessao', async () => {
+    const harness = createHarness({});
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('delete-account-open'));
+    await user.click(screen.getByTestId('delete-account-confirm'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+    });
+    expect(harness.deleteCalls).toEqual([
+      {
+        url: expect.stringMatching(/\/users\/me$/),
+        body: JSON.stringify({ confirm: 'DELETE' }),
+        authorization: 'Bearer jwt-login',
+      },
+    ]);
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
+    expectTokenOnlyInMemory();
+  });
+
+  it('exclusao sem deleted true mantem a sessao e mostra erro generico', async () => {
+    const harness = createHarness({
+      deleteAccount: () =>
+        jsonResponse(
+          {
+            detail:
+              'Confirmacao obrigatoria. Envie {"confirm": "DELETE"} /users/me Bearer jwt-abc',
+          },
+          400,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await user.click(await screen.findByTestId('nav-perfil'));
+    await user.click(await screen.findByTestId('delete-account-open'));
+    await user.click(screen.getByTestId('delete-account-confirm'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('delete-account-error')).toHaveTextContent(DELETE_FAILED);
+    });
+    const errorText = screen.getByTestId('delete-account-error').textContent ?? '';
+    expect(errorText).not.toContain('/users/me');
+    expect(errorText).not.toContain('DELETE');
+    expect(errorText).not.toContain('jwt-abc');
+    expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expectTokenOnlyInMemory();
   });
 });

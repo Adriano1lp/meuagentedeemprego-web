@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`) e **W-Perfil** (`GET /users/me`).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`), **W-Perfil** (`GET /users/me`) e **W-LGPD** (`GET /users/me/export`, `DELETE /users/me`).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
 
 ## Variaveis de ambiente
 
@@ -130,7 +130,30 @@ Atalho **Politica de privacidade** reutiliza `GET /legal/privacy?version=1.0` (o
 
 Sem JWT: redirect para `/` e a API de perfil nao e chamada.
 
-Fora desta fatia: edicao de CV, upload, biometria, perfil manual, Stripe/checkout, carta, PDI, exportar/apagar conta.
+Fora desta fatia: edicao de CV, upload, biometria, perfil manual, Stripe/checkout, carta, PDI. Exportar e apagar conta entraram na fatia W-LGPD.
+
+## Escopo W-LGPD (exportar e excluir conta)
+
+Na tela autenticada **Perfil** (`/perfil`), secao **Seus dados**:
+
+1. **Exportar meus dados** — `GET /users/me/export` com Bearer.
+2. **Solicitar exclusao de conta** — dialogo destrutivo; so no confirmar, `DELETE /users/me` com body `{"confirm":"DELETE"}`. Sucesso (`deleted: true`) faz logout e volta ao login. O JWT continua so em memoria.
+
+Sem JWT: a rota `/perfil` redireciona para `/` e esses endpoints nao sao chamados.
+
+Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `application/json` com `additionalProperties`):
+
+**GET `/users/me/export`**
+
+- Exige termos vigentes (`_require_terms_accepted`). `403` OUTDATED segue no ConsentGate.
+- 200 `application/json`, **sem** `Content-Disposition`. O browser baixa esse objeto como `meus-dados.json`.
+- O cliente nao filtra chaves. O pacote real inclui `user`, `profile`, `processing_runs`, `job_analysis_insights`, `development_plans`, `documents`, `generated_files`, `processar_usage` e `exported_at`.
+
+**DELETE `/users/me`**
+
+- Body JSON obrigatorio: `{"confirm":"DELETE"}` (qualquer outro valor → 400).
+- 200: `{ "user_id", "deleted": true, "deleted_at" }`. Sem `deleted: true`, a sessao permanece.
+- Este endpoint nao passa por `_require_terms_accepted`. A UI de perfil fica atras do ConsentGate, entao o botao nao e clicavel enquanto o reaceite estiver aberto.
 
 ## Contrato descoberto (OpenAPI live + `main.py`)
 
@@ -180,7 +203,7 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
 
 ## Fora desta fatia
 
-Nao implementar: Stripe/checkout (W3), exportar/apagar conta (W4), perfil manual, edicao de perfil, mudancas no backend, cookies ou header `X-User-Id`.
+Nao implementar: Stripe/checkout (W3), perfil manual, edicao de perfil, mudancas no backend, cookies ou header `X-User-Id`. Exportar e apagar conta estao na fatia W-LGPD.
 
 ## HTTPS em producao
 

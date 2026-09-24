@@ -9,6 +9,18 @@ import {
   parseRebuildEmbeddingsResponse,
   parseUploadCvResponse,
 } from './cv';
+import {
+  DELETE_ACCOUNT_BODY,
+  DELETE_FAILED,
+  DELETE_LOGIN_REQUIRED,
+  EXPORT_FAILED,
+  EXPORT_LOGIN_REQUIRED,
+  EXPORT_PATH,
+  parseDeleteAccountResponse,
+  parseUserDataExport,
+  safeDeleteErrorMessage,
+  safeExportErrorMessage,
+} from './lgpd';
 import { parseOutdatedResponse, type OutdatedDetail } from './outdated';
 import {
   buildGapHistoryPath,
@@ -32,6 +44,7 @@ import { bearerHeaders, extractAccessToken } from './token';
 import type {
   AuthResponse,
   CurrentUser,
+  DeleteAccountResult,
   GapHistoryResponse,
   ProcessarRequest,
   ProcessarResponse,
@@ -40,6 +53,7 @@ import type {
   RegisterPayload,
   UploadCvResponse,
   User,
+  UserDataExport,
   UserStatus,
 } from './types';
 
@@ -373,6 +387,58 @@ export function createApiClient(options: ApiClientOptions) {
           );
         }
         throw new ApiError(0, null, HISTORY_LOAD_FAILED);
+      }
+    },
+
+    async exportMyData(): Promise<UserDataExport> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, EXPORT_LOGIN_REQUIRED);
+      }
+
+      try {
+        const body = await request(EXPORT_PATH, { method: 'GET' });
+        return parseUserDataExport(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError) {
+          throw new ApiError(
+            error.status,
+            error.body,
+            safeExportErrorMessage(error),
+          );
+        }
+        throw new ApiError(0, null, EXPORT_FAILED);
+      }
+    },
+
+    async deleteMyAccount(): Promise<DeleteAccountResult> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, DELETE_LOGIN_REQUIRED);
+      }
+
+      try {
+        const body = await request(CURRENT_USER_PATH, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(DELETE_ACCOUNT_BODY),
+        });
+        return parseDeleteAccountResponse(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError) {
+          throw new ApiError(
+            error.status,
+            error.body,
+            safeDeleteErrorMessage(error),
+          );
+        }
+        throw new ApiError(0, null, DELETE_FAILED);
       }
     },
 
