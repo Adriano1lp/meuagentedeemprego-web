@@ -144,6 +144,16 @@ export type GapHistoryResponse = {
 };
 
 /**
+ * POST /users/me/cover-letter — body { empresa: company_name }.
+ * 200 de `texto_resposta`, `pdf_url` e `user_id`. A carta nao e persistida.
+ */
+export type CoverLetterResponse = {
+  texto_resposta: string;
+  pdf_url: string;
+  user_id?: string;
+};
+
+/**
  * GET /users/me/export — objeto JSON de `export_current_user`.
  * A API nao envia Content-Disposition; o cliente conserva todas as chaves
  * recebidas. Chaves de topo conhecidas (collect_user_export_payload +
