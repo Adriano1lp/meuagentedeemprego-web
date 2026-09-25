@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`), **W-Perfil** (`GET /users/me`) e **W-LGPD** (`GET /users/me/export`, `DELETE /users/me`).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`), **W-Perfil** (`GET /users/me`), **W-LGPD** (`GET /users/me/export`, `DELETE /users/me`) e **W-Carta** (`POST /users/me/cover-letter`).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -34,7 +34,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/processar` e `/users/me/files/*` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/users/me/cover-letter`, `/processar` e `/users/me/files/*` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
 
 ## Variaveis de ambiente
 
@@ -156,6 +156,20 @@ Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `applic
 - Body JSON obrigatorio: `{"confirm":"DELETE"}` (qualquer outro valor → 400).
 - 200: `{ "user_id", "deleted": true, "deleted_at" }`. Sem `deleted: true`, a sessao permanece.
 - Este endpoint nao passa por `_require_terms_accepted`. A UI de perfil fica atras do ConsentGate, entao o botao nao e clicavel enquanto o reaceite estiver aberto.
+
+## Escopo W-Carta (carta de apresentacao)
+
+Na tela autenticada **Historico** (`/historico`), cada analise ja salva pode gerar uma carta. O texto fica so em memoria (sem `localStorage` ou `sessionStorage`).
+
+1. **Gerar carta** — `POST /users/me/cover-letter` com `{"empresa":"<company_name>"}` e `Authorization: Bearer`. Sem `X-User-Id`.
+2. Enquanto a requisicao esta em curso o botao fica desabilitado (sem segundo POST).
+3. Sucesso mostra `texto_resposta` com as quebras de linha. **Copiar** usa `navigator.clipboard.writeText` e um aviso `aria-live`. **Baixar PDF** faz `GET /users/me/files/{nome}` com Bearer, cria um Blob e revoga a object URL. `pdf_url` absoluto ou relativo vira o nome do arquivo na base ja configurada; o token nao entra na URL e nao ha link direto.
+4. Item sem `company_name` deixa o botao desabilitado, com dica, e nao chama a API.
+5. 500 ou falha de rede: mensagem sem path, URL ou token, com **Tentar de novo**. A lista do historico permanece.
+6. 402 ou 429: aviso de limite, sem botao ou link de pagamento.
+7. Sem JWT, `/historico` redireciona ao login. 401 na carta tambem volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
+
+A rota nao consome cota hoje; 402/429 sao tratados so por defesa.
 
 ## Contrato descoberto (OpenAPI live + `main.py`)
 

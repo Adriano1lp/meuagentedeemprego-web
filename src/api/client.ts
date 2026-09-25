@@ -6,6 +6,14 @@ import {
   type LegalDocId,
 } from '../legal/versions';
 import {
+  COVER_LETTER_COMPANY_REQUIRED,
+  COVER_LETTER_FAILED,
+  COVER_LETTER_LOGIN_REQUIRED,
+  COVER_LETTER_PATH,
+  parseCoverLetterResponse,
+  safeCoverLetterErrorMessage,
+} from './coverLetter';
+import {
   parseRebuildEmbeddingsResponse,
   parseUploadCvResponse,
 } from './cv';
@@ -43,6 +51,7 @@ import { parseUserStatus } from './status';
 import { bearerHeaders, extractAccessToken } from './token';
 import type {
   AuthResponse,
+  CoverLetterResponse,
   CurrentUser,
   DeleteAccountResult,
   GapHistoryResponse,
@@ -387,6 +396,38 @@ export function createApiClient(options: ApiClientOptions) {
           );
         }
         throw new ApiError(0, null, HISTORY_LOAD_FAILED);
+      }
+    },
+
+    async createCoverLetter(empresa: string): Promise<CoverLetterResponse> {
+      const company = empresa.trim();
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, COVER_LETTER_LOGIN_REQUIRED);
+      }
+      if (!company) {
+        throw new ApiError(400, null, COVER_LETTER_COMPANY_REQUIRED);
+      }
+
+      try {
+        const body = await request(COVER_LETTER_PATH, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ empresa: company }),
+        });
+        return parseCoverLetterResponse(body);
+      } catch (error) {
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError) {
+          throw new ApiError(
+            error.status,
+            error.body,
+            safeCoverLetterErrorMessage(error),
+          );
+        }
+        throw new ApiError(0, null, COVER_LETTER_FAILED);
       }
     },
 

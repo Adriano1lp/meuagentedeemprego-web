@@ -215,6 +215,29 @@ export async function mockProcessar(
   });
 }
 
+export async function mockCoverLetter(
+  page: Page,
+  handler: (empresa: string) =>
+    | { status?: number; body: unknown }
+    | Promise<{ status?: number; body: unknown }>,
+): Promise<void> {
+  await page.route('**/users/me/cover-letter', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const payload = (route.request().postDataJSON() ?? {}) as {
+      empresa?: string;
+    };
+    const result = await handler(payload.empresa ?? '');
+    await route.fulfill({
+      status: result.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(result.body),
+    });
+  });
+}
+
 export async function mockUserFile(
   page: Page,
   options: { body?: string; contentType?: string } = {},

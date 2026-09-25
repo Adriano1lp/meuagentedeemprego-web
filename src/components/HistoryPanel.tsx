@@ -8,6 +8,7 @@ import {
 } from '../api/history';
 import type { GapHistoryItem } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { CoverLetterSection } from './CoverLetterSection';
 
 type HistoryView =
   | { kind: 'loading' }
@@ -196,6 +197,8 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
             Lacunas criticas: {item.critical_gaps.join(', ')}
           </p>
         ) : null}
+
+        <CoverLetterSection companyName={item.company_name} />
       </article>
     </li>
   );
