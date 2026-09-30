@@ -4,6 +4,12 @@ Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /proc
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
+## Documentação
+
+Mapa de telas, rotas e fluxos (produto): [docs/frontend.md](docs/frontend.md).
+
+O restante deste README segue o contrato por fatia (W1, W2, upload de CV, historico, perfil, LGPD e carta). Nao substitui o mapa de produto.
+
 ## Stack
 
 - Vite + React + TypeScript
