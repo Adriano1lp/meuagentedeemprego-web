@@ -130,7 +130,15 @@ Em cada analise de `/historico`:
 2. `cv_file_name` null, vazio ou ausente → sem botao de CV e sem chamada.
 3. `pdf_url` (opcional) que aponte para `/users/me/files/{nome}`, e a analise nao esteja com `generation_blocked`, → **Baixar PDF da vaga**, no mesmo fetch autenticado. URL absoluta so fornece o nome do arquivo.
 4. Enquanto o arquivo baixa, o botao fica desabilitado (`aria-busy`) e um segundo clique nao dispara outro GET.
-5. 401 volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate. 404, 5xx e rede mostram mensagem generica, sem path, URL ou token. **Gerar carta** e a lista permanecem.
+5. 401 volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate. 404, 5xx e rede mostram mensagem fixa, sem stack, path, URL, HTML cru ou token. **Gerar carta** e a lista permanecem.
+
+Aceite de seguranca deste download:
+
+- So Bearer, via fetch autenticado e Blob. `pdf_url` e `cv_file_name` nao viram link publico.
+- JWT, PDF e bytes do arquivo nao vao para `localStorage`, `sessionStorage` nem IndexedDB.
+- Sem log de token, `Authorization` ou conteudo do PDF/CV.
+- Erro de download e texto fixo.
+- Sem Stripe/W3.
 
 Fora desta fatia: Stripe/W3, mobile, PDI, edicao de CV, APIs novas e mudancas fora do historico.
 

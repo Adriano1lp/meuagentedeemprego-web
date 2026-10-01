@@ -37,6 +37,10 @@ test('baixa o CV com Bearer e esconde o CTA quando nao ha arquivo', async ({
 }) => {
   const fileGets: Array<{ url: string; authorization?: string; userId?: string }> =
     [];
+  const consoleText: string[] = [];
+  page.on('console', (message) => {
+    consoleText.push(message.text());
+  });
 
   page.on('request', (request) => {
     if (request.url().includes('/users/me/files/')) {
@@ -83,6 +87,18 @@ test('baixa o CV com Bearer e esconde o CTA quando nao ha arquivo', async ({
   expect(fileGets[0].url).not.toContain('jwt-login');
   await expect(page.getByTestId('history-list')).toBeVisible();
   await expect(cards.nth(0).getByTestId('cover-letter-generate')).toBeEnabled();
+  await expect(page.locator('a[href*="http"], a[href*="/users/me/files"]')).toHaveCount(0);
+  await expect(page.getByTestId('history-panel')).not.toContainText(/stripe|checkout|pagamento/i);
+  const storage = await page.evaluate(async () => ({
+    local: localStorage.length,
+    session: sessionStorage.length,
+    databases: (await indexedDB.databases?.())?.length ?? 0,
+  }));
+  expect(storage).toEqual({ local: 0, session: 0, databases: 0 });
+  const logs = consoleText.join('\n');
+  expect(logs).not.toContain('jwt-login');
+  expect(logs.toLowerCase()).not.toContain('authorization');
+  expect(logs).not.toContain('%PDF');
 });
 
 test('erro ao baixar o CV fica generico e a carta continua disponivel', async ({
@@ -106,7 +122,7 @@ test('erro ao baixar o CV fica generico e a carta continua disponivel', async ({
       contentType: 'application/json',
       body: JSON.stringify({
         detail:
-          'GET /users/me/files/cv-acme.pdf Bearer jwt-login https://meu-agente-de-emprego.onrender.com',
+          '<html><script>Bearer jwt-login</script> GET /users/me/files/cv-acme.pdf https://meu-agente-de-emprego.onrender.com\n    at read_file (/app/main.py:12)',
       }),
     });
   });
@@ -123,6 +139,9 @@ test('erro ao baixar o CV fica generico e a carta continua disponivel', async ({
   await expect(error).not.toContainText('/users/me');
   await expect(error).not.toContainText('jwt-login');
   await expect(error).not.toContainText('onrender.com');
+  await expect(error).not.toContainText('<');
+  await expect(error).not.toContainText('script');
+  await expect(error).not.toContainText('read_file');
   await expect(page.getByTestId('history-list')).toBeVisible();
 
   await page.getByTestId('cover-letter-generate').click();

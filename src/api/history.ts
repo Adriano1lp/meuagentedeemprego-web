@@ -259,11 +259,17 @@ export function historyDownloadErrorLeaksInternals(message: string): boolean {
     return true;
   }
   const lower = message.toLowerCase();
-  return (
+  if (
     lower.includes('/files/') ||
     lower.includes('x-user-id') ||
     lower.includes('cv_file_name')
-  );
+  ) {
+    return true;
+  }
+  if (/[<>]/.test(message) || lower.includes('stack trace') || /^\s+at\s+/m.test(message)) {
+    return true;
+  }
+  return false;
 }
 
 export function safeHistoryDownloadMessage(

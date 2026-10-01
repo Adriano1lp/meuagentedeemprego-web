@@ -7,6 +7,7 @@ import {
   HISTORY_DOWNLOAD_INVALID,
   HISTORY_LOAD_FAILED,
   HISTORY_PDF_DOWNLOAD_FAILED,
+  historyDownloadErrorLeaksInternals,
   historyJobPdfFileName,
   safeHistoryDownloadMessage,
   safeHistoryErrorMessage,
@@ -338,7 +339,10 @@ function HistoryDownloadButton({
         logout();
         return;
       }
-      setError(safeHistoryDownloadMessage(cause, failedMessage));
+      const message = safeHistoryDownloadMessage(cause, failedMessage);
+      setError(
+        historyDownloadErrorLeaksInternals(message) ? failedMessage : message,
+      );
     } finally {
       lock.current = false;
       setDownloading(false);

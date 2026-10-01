@@ -669,4 +669,140 @@ describe('Feature: Download do CV no historico', () => {
     );
     expect(harness.fileCalls).toHaveLength(0);
   });
+
+  it('aceite seg: Bearer e Blob, sem link publico, storage, log, HTML ou Stripe', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const idbOpens: string[] = [];
+    vi.stubGlobal('indexedDB', {
+      open(name: string) {
+        idbOpens.push(name);
+        throw new Error('indexedDB nao deve ser usado');
+      },
+    });
+    const consoleSpies = (['log', 'info', 'debug', 'warn', 'error'] as const).map(
+      (method) => vi.spyOn(console, method).mockImplementation(() => {}),
+    );
+    const downloaded: { blob: Blob | null } = { blob: null };
+    const createObjectURL = vi.fn((blob: Blob) => {
+      downloaded.blob = blob;
+      return 'blob:cv-seguro';
+    });
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const anchors: Array<{ href: string; download: string }> = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      anchors.push({
+        href: this.getAttribute('href') ?? '',
+        download: this.download,
+      });
+    });
+    const openWindow = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+    const publicCv =
+      'https://cdn.public.test/cv-publico.pdf?token=jwt-login&access_token=jwt-login';
+    const harness = createHarness({
+      history: {
+        items: [
+          {
+            ...historyItem,
+            cv_file_name: publicCv,
+            pdf_url: 'https://cdn.public.test/arquivo-publico.pdf',
+          },
+        ],
+        limit: 20,
+        offset: 0,
+      },
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await openHistory(user);
+
+    const panel = screen.getByTestId('history-panel');
+    expect(panel.querySelector('a')).toBeNull();
+    expect(panel.textContent).not.toContain('cdn.public.test');
+    expect(panel.textContent).not.toContain('token=');
+    expect(panel.textContent).not.toContain('jwt-login');
+    expect(screen.queryByTestId('history-pdf-download')).not.toBeInTheDocument();
+    expect(screen.getByTestId('history-cv-download')).toBeEnabled();
+    expect(panel.textContent?.toLowerCase()).not.toMatch(
+      /stripe|checkout|pagamento|upgrade/,
+    );
+
+    await user.click(screen.getByTestId('history-cv-download'));
+    await waitFor(() => {
+      expect(screen.getByTestId('history-cv-download-success')).toHaveTextContent(
+        'CV baixado.',
+      );
+    });
+
+    expect(harness.fileCalls).toHaveLength(1);
+    const fileCall = harness.fileCalls[0];
+    expect(fileCall.url).toContain('/users/me/files/cv-publico.pdf');
+    expect(fileCall.url).not.toContain('cdn.public.test');
+    expect(fileCall.url).not.toContain('token=');
+    expect(fileCall.url).not.toContain('jwt-login');
+    expect(fileCall.url).not.toContain('access_token');
+    expect(authHeader(fileCall.init)).toBe('Bearer jwt-login');
+    expect(hasUserIdHeader(fileCall.init)).toBe(false);
+    expect(anchors).toEqual([
+      { href: 'blob:cv-seguro', download: 'cv-publico.pdf' },
+    ]);
+    expect(anchors[0].href.startsWith('blob:')).toBe(true);
+    expect(downloaded.blob).toBeInstanceOf(Blob);
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:cv-seguro');
+    expect(openWindow).not.toHaveBeenCalled();
+    expect(panel.querySelector('a')).toBeNull();
+
+    expect(setItem).not.toHaveBeenCalled();
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+    expect(idbOpens).toEqual([]);
+    const stored = `${window.localStorage} ${window.sessionStorage}`;
+    expect(stored).not.toContain('%PDF');
+    expect(stored).not.toContain('jwt-login');
+
+    const logs = consoleSpies.flatMap((spy) => spy.mock.calls).map((args) =>
+      args.map((arg) => String(arg)).join(' '),
+    ).join('\n');
+    expect(logs.toLowerCase()).not.toContain('jwt-login');
+    expect(logs.toLowerCase()).not.toContain('authorization');
+    expect(logs.toLowerCase()).not.toContain('bearer');
+    expect(logs).not.toContain('%PDF');
+  });
+
+  it('aceite seg: erro HTML ou stack vira so a mensagem fixa', async () => {
+    const harness = createHarness({
+      file: () =>
+        new Response(
+          '<html><script>Bearer jwt-login</script> GET /users/me/files/cv-acme.pdf https://meu-agente-de-emprego.onrender.com\n    at read_file (/app/main.py:12)',
+          { status: 500, headers: { 'Content-Type': 'text/html' } },
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await login(user);
+    await openHistory(user);
+    await user.click(screen.getByTestId('history-cv-download'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('history-cv-download-error')).toHaveTextContent(
+        HISTORY_CV_DOWNLOAD_FAILED,
+      );
+    });
+    const text = screen.getByTestId('history-cv-download-error').textContent ?? '';
+    expect(text).toBe(HISTORY_CV_DOWNLOAD_FAILED);
+    expect(historyDownloadErrorLeaksInternals(text)).toBe(false);
+    expect(text).not.toContain('<');
+    expect(text).not.toContain('script');
+    expect(text).not.toContain('jwt-login');
+    expect(text).not.toContain('/users/me');
+    expect(text).not.toContain('onrender.com');
+    expect(text).not.toMatch(/at read_file/);
+    expect(screen.getByTestId('history-panel').textContent?.toLowerCase()).not.toMatch(
+      /stripe|checkout|pagamento/,
+    );
+  });
 });

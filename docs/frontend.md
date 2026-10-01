@@ -159,7 +159,8 @@ Analisar:
 6. **403** de consentimento abre o ConsentGate. Outro erro (5xx, rede) mostra texto fixo, sem path, URL, token ou stack, e **Tentar novamente**.
 7. **Baixar CV** chama `GET /users/me/files/{cv_file_name}` com Bearer, cria um Blob e revoga a object URL. Sem link direto e sem token na query. Sem `cv_file_name` (null, vazio ou ausente) não há botão e a API de arquivo não é chamada.
 8. **Baixar PDF da vaga** usa `pdf_url` só para achar o nome do arquivo e faz o mesmo GET autenticado. `generation_blocked: true` ou `pdf_url` que não seja `/users/me/files/{nome}` não mostra esse botão.
-9. No download, o botão fica em loading e desabilitado (sem segundo clique). **401** volta ao login. **403** `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. **404**, **5xx** e rede mostram texto fixo, sem path, URL ou token. A lista e **Gerar carta** permanecem.
+9. No download, o botão fica em loading e desabilitado (sem segundo clique). **401** volta ao login. **403** `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. **404**, **5xx**, rede e HTML de erro mostram texto fixo, sem stack, path, URL, HTML cru ou token. A lista e **Gerar carta** permanecem.
+10. O arquivo sai só por fetch com Bearer e Blob. `pdf_url` e `cv_file_name` não viram `<a href>` nem `window.open`. JWT, bytes do PDF/CV e o token não são gravados em `localStorage`, `sessionStorage` ou IndexedDB, e não vão para o console. Não há Stripe nem checkout nesta tela.
 
 ### d) Carta de apresentação
 

@@ -228,5 +228,21 @@ describe('safeHistoryErrorMessage', () => {
       expect(message).not.toContain('cv-acme.pdf');
       expect(message).not.toContain('jwt-abc');
     }
+    const html = safeHistoryDownloadMessage(
+      new ApiError(
+        500,
+        '<html><script>Bearer jwt-abc</script>',
+        '<html><script>Bearer jwt-abc</script>\n    at read_file (/app/main.py:12)',
+      ),
+      HISTORY_CV_DOWNLOAD_FAILED,
+    );
+    expect(html).toBe(HISTORY_CV_DOWNLOAD_FAILED);
+    expect(historyDownloadErrorLeaksInternals(html)).toBe(false);
+    expect(html).not.toContain('<');
+    expect(
+      historyDownloadErrorLeaksInternals(
+        '<html>GET /users/me/files/cv.pdf Bearer jwt-abc\n    at boom',
+      ),
+    ).toBe(true);
   });
 });
