@@ -1,11 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
 import {
   formatHistoryDate,
+  HISTORY_CV_DOWNLOAD_FAILED,
+  HISTORY_DOWNLOAD_INVALID,
   HISTORY_LOAD_FAILED,
+  HISTORY_PDF_DOWNLOAD_FAILED,
+  historyDownloadErrorLeaksInternals,
+  historyJobPdfFileName,
+  safeHistoryDownloadMessage,
   safeHistoryErrorMessage,
 } from '../api/history';
+import {
+  downloadMimeType,
+  isPdfMagic,
+  triggerBrowserDownload,
+} from '../api/processar';
 import type { GapHistoryItem } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { CoverLetterSection } from './CoverLetterSection';
@@ -198,8 +209,186 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
           </p>
         ) : null}
 
+        <HistoryDownloads item={item} title={title} />
+
         <CoverLetterSection companyName={item.company_name} />
       </article>
     </li>
+  );
+}
+
+function HistoryDownloads({
+  item,
+  title,
+}: {
+  item: GapHistoryItem;
+  title: string;
+}) {
+  const cvFileName = item.cv_file_name;
+  const pdfFileName = historyJobPdfFileName(item);
+  if (!cvFileName && !pdfFileName) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+      {cvFileName ? (
+        <HistoryDownloadButton
+          fileName={cvFileName}
+          idleLabel="Baixar CV"
+          busyLabel="Baixando CV..."
+          successLabel="CV baixado."
+          failedMessage={HISTORY_CV_DOWNLOAD_FAILED}
+          requirePdf={cvFileName.toLowerCase().endsWith('.pdf')}
+          tone="yellow"
+          testId="history-cv-download"
+          errorTestId="history-cv-download-error"
+          successTestId="history-cv-download-success"
+          describedTitle={title}
+        />
+      ) : null}
+      {pdfFileName ? (
+        <HistoryDownloadButton
+          fileName={pdfFileName}
+          idleLabel="Baixar PDF da vaga"
+          busyLabel="Baixando PDF..."
+          successLabel="PDF da vaga baixado."
+          failedMessage={HISTORY_PDF_DOWNLOAD_FAILED}
+          requirePdf
+          tone="paper"
+          testId="history-pdf-download"
+          errorTestId="history-pdf-download-error"
+          successTestId="history-pdf-download-success"
+          describedTitle={title}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function HistoryDownloadButton({
+  fileName,
+  idleLabel,
+  busyLabel,
+  successLabel,
+  failedMessage,
+  requirePdf,
+  tone,
+  testId,
+  errorTestId,
+  successTestId,
+  describedTitle,
+}: {
+  fileName: string;
+  idleLabel: string;
+  busyLabel: string;
+  successLabel: string;
+  failedMessage: string;
+  requirePdf: boolean;
+  tone: 'yellow' | 'paper';
+  testId: string;
+  errorTestId: string;
+  successTestId: string;
+  describedTitle: string;
+}) {
+  const { api, logout } = useAuth();
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const lock = useRef(false);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    if (error) {
+      errorRef.current?.focus();
+    }
+  }, [error]);
+
+  async function onDownload() {
+    if (!fileName || lock.current) {
+      return;
+    }
+    lock.current = true;
+    setDownloading(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const bytes = await api.downloadUserFile(fileName);
+      if (bytes.byteLength === 0) {
+        setError(failedMessage);
+        return;
+      }
+      if (requirePdf && !isPdfMagic(bytes)) {
+        setError(HISTORY_DOWNLOAD_INVALID);
+        return;
+      }
+      triggerBrowserDownload(
+        bytes,
+        fileName,
+        undefined,
+        undefined,
+        undefined,
+        downloadMimeType(fileName, requirePdf),
+      );
+      setSuccess(true);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.outdated) {
+        return;
+      }
+      if (cause instanceof ApiError && cause.status === 401) {
+        logout();
+        return;
+      }
+      const message = safeHistoryDownloadMessage(cause, failedMessage);
+      setError(
+        historyDownloadErrorLeaksInternals(message) ? failedMessage : message,
+      );
+    } finally {
+      lock.current = false;
+      setDownloading(false);
+    }
+  }
+
+  const accessibleName = downloading
+    ? `${busyLabel} ${describedTitle}`
+    : `${idleLabel} da analise ${describedTitle}`;
+
+  return (
+    <div className="w-full sm:min-w-0 sm:flex-1">
+      <button
+        type="button"
+        data-testid={testId}
+        onClick={() => void onDownload()}
+        disabled={downloading}
+        aria-busy={downloading}
+        aria-label={accessibleName}
+        className={`w-full rounded-[18px] border-[3px] border-ink px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:cursor-not-allowed disabled:opacity-60 ${
+          tone === 'paper' ? 'bg-paper' : 'bg-yellow'
+        }`}
+      >
+        {downloading ? busyLabel : idleLabel}
+      </button>
+      {success ? (
+        <p
+          data-testid={successTestId}
+          role="status"
+          aria-live="polite"
+          className="mt-2 text-sm text-ink"
+        >
+          {successLabel}
+        </p>
+      ) : null}
+      {error ? (
+        <p
+          ref={errorRef}
+          tabIndex={-1}
+          data-testid={errorTestId}
+          role="alert"
+          className="mt-2 text-sm leading-[1.45] text-ink outline-none"
+        >
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }

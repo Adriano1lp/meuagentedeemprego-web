@@ -5,12 +5,17 @@ import {
   extractGapHistoryItems,
   formatHistoryDate,
   GAP_HISTORY_PATH,
+  historyCvFileName,
+  historyDownloadErrorLeaksInternals,
   historyErrorLeaksInternals,
+  historyJobPdfFileName,
+  HISTORY_CV_DOWNLOAD_FAILED,
   HISTORY_LOAD_FAILED,
   HISTORY_LOGIN_REQUIRED,
   HISTORY_SESSION_EXPIRED,
   parseGapHistoryItem,
   parseGapHistoryResponse,
+  safeHistoryDownloadMessage,
   safeHistoryErrorMessage,
 } from '../api/history';
 import { ApiError } from '../api/client';
@@ -61,6 +66,8 @@ describe('parseGapHistoryResponse', () => {
       strengths: ['Dart', 'Riverpod'],
       critical_gaps: ['Kubernetes'],
       source: 'processar',
+      cv_file_name: null,
+      pdf_url: null,
     });
     expect(result.items[1].id).toBe('mongo-1');
     expect(result.items[1].match_score).toBe(70);
@@ -77,6 +84,66 @@ describe('parseGapHistoryResponse', () => {
   it('rejeita item sem id/insight_id', () => {
     expect(parseGapHistoryItem({ job_title: 'x' })).toBeNull();
     expect(parseGapHistoryItem(null)).toBeNull();
+  });
+
+  it('tipa cv_file_name e pdf_url e trata ausencia como null', () => {
+    const withFiles = parseGapHistoryItem({
+      id: '1',
+      match_score: 10,
+      cv_file_name: ' cv-acme.pdf ',
+      pdf_url: '/users/me/files/vaga-acme.pdf',
+    });
+    expect(withFiles?.cv_file_name).toBe('cv-acme.pdf');
+    expect(withFiles?.pdf_url).toBe('/users/me/files/vaga-acme.pdf');
+
+    for (const cvFileName of [null, '', '   ', undefined]) {
+      const item = parseGapHistoryItem({
+        id: '2',
+        cv_file_name: cvFileName,
+        pdf_url: null,
+      });
+      expect(item?.cv_file_name).toBeNull();
+      expect(item?.pdf_url).toBeNull();
+    }
+
+    const missing = parseGapHistoryItem({ id: '3', job_title: 'Sem arquivo' });
+    expect(missing?.cv_file_name).toBeNull();
+    expect(missing?.pdf_url).toBeNull();
+    expect(historyCvFileName('/users/me/files/cv-acme.pdf?token=jwt-abc')).toBe(
+      'cv-acme.pdf',
+    );
+    expect(historyCvFileName('..')).toBeNull();
+    expect(historyCvFileName('.')).toBeNull();
+  });
+
+  it('pdf_url da vaga so vira arquivo quando nao esta bloqueado', () => {
+    expect(
+      historyJobPdfFileName({
+        pdf_url: '/users/me/files/vaga.pdf',
+        generation_blocked: false,
+      }),
+    ).toBe('vaga.pdf');
+    expect(
+      historyJobPdfFileName({
+        pdf_url: 'https://cdn.evil.test/users/me/files/vaga.pdf?token=jwt-abc',
+        generation_blocked: false,
+      }),
+    ).toBe('vaga.pdf');
+    expect(
+      historyJobPdfFileName({
+        pdf_url: '/users/me/files/vaga.pdf',
+        generation_blocked: true,
+      }),
+    ).toBeNull();
+    expect(
+      historyJobPdfFileName({ pdf_url: null, generation_blocked: false }),
+    ).toBeNull();
+    expect(
+      historyJobPdfFileName({
+        pdf_url: 'https://cdn.evil.test/other/vaga.pdf',
+        generation_blocked: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -138,6 +205,43 @@ describe('safeHistoryErrorMessage', () => {
     expect(
       historyErrorLeaksInternals(
         'GET /users/me/gap-history Bearer jwt-secret',
+      ),
+    ).toBe(true);
+  });
+
+  it('download 401/404/5xx nao devolve path, URL ou token', () => {
+    const leaked =
+      'File "/app/main.py" GET /users/me/files/cv-acme.pdf Bearer jwt-abc https://meu-agente-de-emprego.onrender.com';
+    expect(
+      safeHistoryDownloadMessage(
+        new ApiError(401, { detail: leaked }, leaked),
+        HISTORY_CV_DOWNLOAD_FAILED,
+      ),
+    ).toBe(HISTORY_SESSION_EXPIRED);
+    for (const status of [404, 500, 0]) {
+      const message = safeHistoryDownloadMessage(
+        new ApiError(status, { detail: leaked }, leaked),
+        HISTORY_CV_DOWNLOAD_FAILED,
+      );
+      expect(message).toBe(HISTORY_CV_DOWNLOAD_FAILED);
+      expect(historyDownloadErrorLeaksInternals(message)).toBe(false);
+      expect(message).not.toContain('cv-acme.pdf');
+      expect(message).not.toContain('jwt-abc');
+    }
+    const html = safeHistoryDownloadMessage(
+      new ApiError(
+        500,
+        '<html><script>Bearer jwt-abc</script>',
+        '<html><script>Bearer jwt-abc</script>\n    at read_file (/app/main.py:12)',
+      ),
+      HISTORY_CV_DOWNLOAD_FAILED,
+    );
+    expect(html).toBe(HISTORY_CV_DOWNLOAD_FAILED);
+    expect(historyDownloadErrorLeaksInternals(html)).toBe(false);
+    expect(html).not.toContain('<');
+    expect(
+      historyDownloadErrorLeaksInternals(
+        '<html>GET /users/me/files/cv.pdf Bearer jwt-abc\n    at boom',
       ),
     ).toBe(true);
   });

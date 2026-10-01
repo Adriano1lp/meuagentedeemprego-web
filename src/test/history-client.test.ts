@@ -25,6 +25,8 @@ const sampleItem = {
   generation_blocked: false,
   blocked_reason: null,
   source: 'processar',
+  cv_file_name: 'cv-dados.pdf',
+  pdf_url: '/users/me/files/vaga-dados.pdf',
 };
 
 describe('api.getGapHistory', () => {
@@ -54,6 +56,8 @@ describe('api.getGapHistory', () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0].job_title).toBe('Analista de Dados');
     expect(result.items[0].match_score).toBe(72);
+    expect(result.items[0].cv_file_name).toBe('cv-dados.pdf');
+    expect(result.items[0].pdf_url).toBe('/users/me/files/vaga-dados.pdf');
     expect(result.limit).toBe(20);
   });
 
