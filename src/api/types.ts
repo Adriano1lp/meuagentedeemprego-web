@@ -118,6 +118,8 @@ export type QuotaDetail = {
  * GET /users/me/gap-history — campos reais de
  * `list_job_analysis_insights` / `_insight_row_to_dict` (SQLite) e
  * `_mongo_insight_to_dict` (Mongo). `id` e string (insight_id ou _id).
+ * `cv_file_name` e o CV gerado naquela analise (`string | null`).
+ * `pdf_url` e o PDF da vaga, absoluto ou relativo, quando existir.
  */
 export type GapHistoryItem = {
   id: string;
@@ -135,6 +137,8 @@ export type GapHistoryItem = {
   generation_blocked: boolean;
   blocked_reason?: string | null;
   source?: string;
+  cv_file_name: string | null;
+  pdf_url: string | null;
 };
 
 export type GapHistoryResponse = {

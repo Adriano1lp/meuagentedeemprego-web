@@ -1,3 +1,4 @@
+import { fileNameFromPdfUrl } from './processar';
 import type { GapHistoryItem, GapHistoryResponse } from './types';
 
 type HistoryErrorLike = {
@@ -17,6 +18,12 @@ export const HISTORY_SESSION_EXPIRED =
   'Sessao expirada. Entre novamente para ver o historico.';
 export const HISTORY_LOAD_FAILED =
   'Nao foi possivel carregar o historico. Tente novamente.';
+export const HISTORY_CV_DOWNLOAD_FAILED =
+  'Nao foi possivel baixar o CV desta analise. Tente novamente.';
+export const HISTORY_PDF_DOWNLOAD_FAILED =
+  'Nao foi possivel baixar o PDF desta analise. Tente novamente.';
+export const HISTORY_DOWNLOAD_INVALID =
+  'O arquivo recebido nao e um PDF valido.';
 
 export type GapHistoryQuery = {
   limit?: number;
@@ -138,7 +145,46 @@ export function parseGapHistoryItem(
     generation_blocked: record.generation_blocked === true,
     blocked_reason: asNullableString(record.blocked_reason) ?? null,
     source: asOptionalString(record.source),
+    cv_file_name: historyCvFileName(record.cv_file_name),
+    pdf_url: normalizePdfUrl(record.pdf_url),
   };
+}
+
+/** So o nome do arquivo. Path, query ou vazio nao viram CTA nem entram na URL. */
+export function historyCvFileName(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutFragment = trimmed.split('#')[0] ?? '';
+  const withoutQuery = withoutFragment.split('?')[0] ?? '';
+  const base = withoutQuery.split(/[/\\]/).pop()?.trim() ?? '';
+  if (!base || base === '.' || base === '..') {
+    return null;
+  }
+  return base;
+}
+
+function normalizePdfUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+/** PDF da vaga so quando `pdf_url` aponta para `/users/me/files/{nome}` e nao esta bloqueado. */
+export function historyJobPdfFileName(item: {
+  pdf_url?: string | null;
+  generation_blocked?: boolean;
+}): string | null {
+  if (item.generation_blocked) {
+    return null;
+  }
+  return fileNameFromPdfUrl(item.pdf_url);
 }
 
 /**
@@ -206,6 +252,34 @@ export function historyErrorLeaksInternals(message: string): boolean {
     return true;
   }
   return false;
+}
+
+export function historyDownloadErrorLeaksInternals(message: string): boolean {
+  if (historyErrorLeaksInternals(message)) {
+    return true;
+  }
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('/files/') ||
+    lower.includes('x-user-id') ||
+    lower.includes('cv_file_name')
+  );
+}
+
+export function safeHistoryDownloadMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  const safeFallback = historyDownloadErrorLeaksInternals(fallback)
+    ? HISTORY_CV_DOWNLOAD_FAILED
+    : fallback;
+  if (error && typeof error === 'object') {
+    const record = error as HistoryErrorLike;
+    if (record.status === 401) {
+      return HISTORY_SESSION_EXPIRED;
+    }
+  }
+  return safeFallback;
 }
 
 export function safeHistoryErrorMessage(error: unknown): string {

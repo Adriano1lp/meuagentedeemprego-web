@@ -66,6 +66,13 @@ export function fileNameFromPdfUrl(
   }
 }
 
+export function downloadMimeType(fileName: string, requirePdf: boolean): string {
+  if (requirePdf || fileName.toLowerCase().endsWith('.pdf')) {
+    return 'application/pdf';
+  }
+  return 'application/octet-stream';
+}
+
 /** PDF so quando o servidor gerou: pdf_url presente e generation_blocked nao e true. */
 export function canOfferPdfDownload(result: ProcessarResponse): boolean {
   if (result.generation_blocked === true) {
@@ -93,8 +100,9 @@ export function triggerBrowserDownload(
   revokeObjectUrl: (url: string) => void = (url) => URL.revokeObjectURL(url),
   clickAnchor: (anchor: HTMLAnchorElement) => void = (anchor) =>
     anchor.click(),
+  mimeType = 'application/pdf',
 ): void {
-  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const blob = new Blob([bytes], { type: mimeType });
   const href = createObjectUrl(blob);
   const anchor = document.createElement('a');
   anchor.href = href;

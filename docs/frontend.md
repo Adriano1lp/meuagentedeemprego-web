@@ -88,6 +88,8 @@ Cada card mostra, quando o item traz o campo:
 - “Aderencia: N/100”
 - aviso de PDF não gerado, com `blocked_reason` se houver
 - resumo da vaga, pontos fortes e lacunas críticas
+- **Baixar CV** somente se `cv_file_name` vier preenchido
+- **Baixar PDF da vaga** somente se `pdf_url` apontar para `/users/me/files/{nome}` e `generation_blocked` não for verdadeiro
 
 `matching_skills` e `missing_skills` entram no parse e não aparecem no card. Abaixo de cada análise fica a seção de carta (fluxo d).
 
@@ -155,6 +157,9 @@ Analisar:
 4. Sem JWT a rota nem monta o painel: redirect para `/`, sem Bearer vazio.
 5. **401**: “Sessao expirada. Entre novamente para ver o historico.” O painel não chama logout sozinho; **Sair** (ou F5) limpa a sessão.
 6. **403** de consentimento abre o ConsentGate. Outro erro (5xx, rede) mostra texto fixo, sem path, URL, token ou stack, e **Tentar novamente**.
+7. **Baixar CV** chama `GET /users/me/files/{cv_file_name}` com Bearer, cria um Blob e revoga a object URL. Sem link direto e sem token na query. Sem `cv_file_name` (null, vazio ou ausente) não há botão e a API de arquivo não é chamada.
+8. **Baixar PDF da vaga** usa `pdf_url` só para achar o nome do arquivo e faz o mesmo GET autenticado. `generation_blocked: true` ou `pdf_url` que não seja `/users/me/files/{nome}` não mostra esse botão.
+9. No download, o botão fica em loading e desabilitado (sem segundo clique). **401** volta ao login. **403** `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. **404**, **5xx** e rede mostram texto fixo, sem path, URL ou token. A lista e **Gerar carta** permanecem.
 
 ### d) Carta de apresentação
 
