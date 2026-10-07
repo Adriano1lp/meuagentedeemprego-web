@@ -12,7 +12,6 @@ import {
   mockUserStatus,
 } from './helpers';
 
-const artifacts = '/opt/cursor/artifacts';
 const stripeUrl = 'https://checkout.stripe.com/c/pay/cs_test_e2e';
 
 const essencialStatus = {
@@ -34,7 +33,7 @@ async function login(page: import('@playwright/test').Page) {
 
 test('Free vê o CTA, o POST não leva preço e o Checkout é stripe.com', async ({
   page,
-}) => {
+}, testInfo) => {
   const checkoutCalls: { body: string | null; authorization: string | undefined }[] =
     [];
   await mockLegalRoutes(page);
@@ -89,7 +88,7 @@ test('Free vê o CTA, o POST não leva preço e o Checkout é stripe.com', async
     'Assinar Essencial R$19,90/mês',
   );
   await page.screenshot({
-    path: `${artifacts}/billing-cta.png`,
+    path: testInfo.outputPath('billing-cta.png'),
     fullPage: true,
   });
 
@@ -113,7 +112,7 @@ test('Free vê o CTA, o POST não leva preço e o Checkout é stripe.com', async
 
 test('volta sem sessão pede login e só então mostra o limite 30', async ({
   page,
-}) => {
+}, testInfo) => {
   let confirmed = false;
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
@@ -146,7 +145,7 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
 
   await page.goto('/?billing=success&session_id=cs_test_secret');
   await expect(page.getByTestId('billing-login-notice')).toHaveText(
-    'Pagamento recebido. Entre para confirmar sua assinatura.',
+    'Se você concluiu o pagamento, entre para confirmar sua assinatura.',
   );
   await expect(page).toHaveURL('http://127.0.0.1:5173/');
   const href = page.url();
@@ -164,10 +163,11 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
 
   await login(page);
   await expect(page.getByTestId('billing-confirming')).toHaveText(
-    'Confirmando pagamento…',
+    'Estamos confirmando seu pagamento…',
   );
+  await expect(page.getByText('Plano Essencial ativo')).toHaveCount(0);
   await page.screenshot({
-    path: `${artifacts}/billing-confirming.png`,
+    path: testInfo.outputPath('billing-confirming.png'),
     fullPage: true,
   });
   await expect(page.getByTestId('status-quota')).toContainText('5 de 30');
@@ -175,7 +175,7 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
   await expect(page.getByTestId('subscribe-essencial')).toHaveCount(0);
 });
 
-test('webhook atrasado mostra Atualizar sem erro vermelho', async ({ page }) => {
+test('webhook atrasado mostra Atualizar sem erro vermelho', async ({ page }, testInfo) => {
   await page.clock.install();
   await page.clock.resume();
   await mockLegalRoutes(page);
@@ -194,8 +194,9 @@ test('webhook atrasado mostra Atualizar sem erro vermelho', async ({ page }) => 
   await expect(page.getByTestId('billing-confirming')).toBeVisible();
   await page.clock.pauseAt(Date.now() + 60_000);
   await expect(page.getByTestId('billing-timeout')).toContainText(
-    'Recebemos seu pagamento. A confirmação pode levar alguns minutos.',
+    'Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos.',
   );
+  await expect(page.getByText('Plano Essencial ativo')).toHaveCount(0);
   await expect(page.getByTestId('billing-refresh')).toHaveText('Atualizar');
   await expect(page.getByTestId('billing-timeout')).not.toHaveAttribute(
     'role',
@@ -203,12 +204,12 @@ test('webhook atrasado mostra Atualizar sem erro vermelho', async ({ page }) => 
   );
   await expect(page.getByTestId('status-quota')).toContainText('5 de 5');
   await page.screenshot({
-    path: `${artifacts}/billing-timeout.png`,
+    path: testInfo.outputPath('billing-timeout.png'),
     fullPage: true,
   });
 });
 
-test('cancelamento deixa o Free com aviso neutro', async ({ page }) => {
+test('cancelamento deixa o Free com aviso neutro', async ({ page }, testInfo) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockBillingMe(page, () => ({ ...mockedBillingFree }));
@@ -232,7 +233,7 @@ test('cancelamento deixa o Free com aviso neutro', async ({ page }) => {
   await expect(page.getByTestId('status-plan')).toHaveText('Free');
   await expect(page.getByTestId('status-quota')).toContainText('1 de 5');
   await page.screenshot({
-    path: `${artifacts}/billing-cancel.png`,
+    path: testInfo.outputPath('billing-cancel.png'),
     fullPage: true,
   });
   expect(billingHits).toEqual([]);

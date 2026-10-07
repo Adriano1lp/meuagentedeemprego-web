@@ -210,7 +210,7 @@ Contrato confirmado (API master `a536c41`). Mapeamento em `src/api/billing.ts`.
 
 - Bearer JWT. Sem body. Sem `price_id`, sem valor e sem chave Stripe no cliente.
 - 200: `{ "checkout_url": string, "session_id": "cs_..." }`.
-- O browser faz `window.location.assign(checkout_url)` so se a URL for `https` e o host for exatamente `checkout.stripe.com`. Qualquer outra coisa vira o erro fixo abaixo.
+- O browser faz `window.location.assign(checkout_url)` so se a URL for `https`, o host for exatamente `checkout.stripe.com` e a porta estiver vazia (sem `:443` nem outra porta). Qualquer outra coisa vira o erro fixo abaixo.
 - `session_id` da resposta e ignorado. Nao e guardado.
 - 401 volta ao login (`/`).
 - 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
@@ -225,7 +225,7 @@ O preco **R$19,90** existe so no rotulo do botao.
 
 Depois de ler, `history.replaceState` tira `billing` e `session_id` da URL. O valor de `session_id` nao entra em estado, `localStorage`, `sessionStorage` nem IndexedDB. O JWT continua so em memoria: a volta da Stripe e um carregamento completo e o usuario chega sem sessao.
 
-- Sem JWT e `billing=success`: o login mostra "Pagamento recebido. Entre para confirmar sua assinatura." A intencao fica em memoria ate o login; ai comeca a confirmacao.
+- Sem JWT e `billing=success`: o login mostra "Se você concluiu o pagamento, entre para confirmar sua assinatura." A query nao prova pagamento. A intencao fica em memoria ate o login; ai comeca a confirmacao.
 - Sem JWT e `billing=cancel`: login sem aviso de erro. Depois de entrar, a conta continua Free com "Pagamento cancelado. Você continua no plano Free."
 
 **GET `/billing/me`**
@@ -237,10 +237,10 @@ Depois de ler, `history.replaceState` tira `billing` e `session_id` da URL. O va
 
 Confirmacao (so depois do login, se a volta foi sucesso):
 
-1. A Home mostra "Confirmando pagamento…".
+1. A Home mostra "Estamos confirmando seu pagamento…".
 2. `GET /billing/me` na hora e depois a cada 3s, por ate 60s. Para ao desmontar ou trocar de rota (`AbortController` / `clearTimeout`).
-3. Quando `plan === "essencial"`, recarrega `GET /users/me/status` e a cota passa a mostrar o limite que o status devolver (30 no plano Essencial). O cliente nao grava 30 por conta propria.
-4. Se os 60s acabam sem Essencial: "Recebemos seu pagamento. A confirmação pode levar alguns minutos." e o botao **Atualizar**, que repete o polling. Nao e erro vermelho.
+3. Quando `plan === "essencial"`, a tela mostra "Plano Essencial ativo", recarrega `GET /users/me/status` e a cota passa a mostrar o limite que o status devolver (30 no plano Essencial). O cliente nao grava 30 por conta propria. Esse rotulo nao aparece antes da API confirmar.
+4. Se os 60s acabam sem Essencial: "Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos." e o botao **Atualizar**, que repete o polling. Nao e erro vermelho.
 
 Infra: o retorno so chega no web se `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` apontarem para a origem do site, por exemplo `https://meuagentedeemprego-web.onrender.com/?billing=success` e `https://meuagentedeemprego-web.onrender.com/?billing=cancel`. O Stripe acrescenta `session_id` na URL de sucesso.
 

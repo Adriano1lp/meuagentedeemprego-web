@@ -213,26 +213,26 @@ O preço R$ 19,90 é só o texto do botão. O cliente não envia `price_id`, val
 
 1. Free em `/perfil` ou no 402 `SUBSCRIPTION_REQUIRED` clica **Assinar Essencial R$19,90/mês**.
 2. `POST /billing/checkout` com Bearer e sem body. O botão desabilita até a resposta (sem segundo POST).
-3. 200 `{ checkout_url, session_id }`. `session_id` é descartado. `window.location.assign` só aceita `https://checkout.stripe.com/...`. Outra URL mostra "Não foi possível iniciar a assinatura agora. Tente novamente em instantes."
+3. 200 `{ checkout_url, session_id }`. `session_id` é descartado. `window.location.assign` só aceita `https://checkout.stripe.com/...` com porta vazia. Outra URL mostra "Não foi possível iniciar a assinatura agora. Tente novamente em instantes."
 4. 401 volta ao login. 403 `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. 404, 500, 502 e 503 usam a mesma mensagem fixa, sem detalhe do servidor.
 
 **Volta na raiz**
 
-O Stripe devolve o browser em `/?billing=success&session_id=cs_...` ou `/?billing=cancel`. Isso só acontece se a infra apontar `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` para o web. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
+O Stripe devolve o browser em `/?billing=success&session_id=cs_...` ou `/?billing=cancel`. Isso só acontece se a infra apontar `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` para o web. `billing=success` não prova que o pagamento ocorreu: o link pode ser aberto à mão e a confirmação é assíncrona. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
 
 O JWT não sobrevive a esse carregamento. Sem sessão:
 
-- sucesso: login com "Pagamento recebido. Entre para confirmar sua assinatura."
+- sucesso: login com "Se você concluiu o pagamento, entre para confirmar sua assinatura."
 - cancelamento: login sem aviso de erro
 
 Depois do login a Home segue o fluxo. Cancelamento mostra "Pagamento cancelado. Você continua no plano Free." e não chama `GET /billing/me` para promover plano.
 
 **Confirmar o pagamento**
 
-1. "Confirmando pagamento…".
+1. "Estamos confirmando seu pagamento…".
 2. `GET /billing/me` imediatamente e a cada 3s, no máximo 60s. Essencial ativo é `plan === "essencial"` (o servidor já devolve `free` em `past_due`).
-3. Aí `GET /users/me/status` de novo e a cota mostra o `limit` que esse JSON trouxer. O browser não escreve 30 sozinho.
-4. Se os 60s passam: "Recebemos seu pagamento. A confirmação pode levar alguns minutos." e **Atualizar** (repete o polling). Não é alerta de erro.
+3. Só então a tela mostra "Plano Essencial ativo", chama `GET /users/me/status` de novo e a cota mostra o `limit` que esse JSON trouxer. O browser não escreve 30 sozinho.
+4. Se os 60s passam: "Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos." e **Atualizar** (repete o polling). Não é alerta de erro.
 5. Sair da Home ou desmontar o componente aborta o polling.
 
 `GET /users/me` continua sendo só a ficha da conta. Não decide o CTA nem encerra o polling.

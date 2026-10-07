@@ -45,18 +45,19 @@ export const BILLING_READ_FAILED =
 export const BILLING_SESSION_EXPIRED =
   'Sessao expirada. Entre novamente para continuar.';
 
-export const BILLING_CONFIRMING = 'Confirmando pagamento…';
+export const BILLING_CONFIRMING = 'Estamos confirmando seu pagamento…';
 
 export const BILLING_TIMEOUT =
-  'Recebemos seu pagamento. A confirmação pode levar alguns minutos.';
+  'Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos.';
 
 export const BILLING_LOGIN_AFTER_PAYMENT =
-  'Pagamento recebido. Entre para confirmar sua assinatura.';
+  'Se você concluiu o pagamento, entre para confirmar sua assinatura.';
 
 export const BILLING_CANCELLED =
   'Pagamento cancelado. Você continua no plano Free.';
 
-export const BILLING_CONFIRMED = 'Assinatura confirmada.';
+/** Só depois de GET /billing/me com plan === "essencial". */
+export const BILLING_CONFIRMED = 'Plano Essencial ativo';
 
 export const SUBSCRIBE_ESSENCIAL_LABEL = 'Assinar Essencial R$19,90/mês';
 
@@ -91,7 +92,7 @@ export function isEssencialActive(billing: {
   return billing.plan === ESSENCIAL_PLAN;
 }
 
-/** Só https no host exato do Checkout. Qualquer outro valor é recusado. */
+/** Só https, host exato do Checkout e sem porta explícita. */
 export function isStripeCheckoutUrl(value: string): boolean {
   let url: URL;
   try {
@@ -103,6 +104,9 @@ export function isStripeCheckoutUrl(value: string): boolean {
     return false;
   }
   if (url.username || url.password) {
+    return false;
+  }
+  if (url.port !== '') {
     return false;
   }
   return url.hostname === STRIPE_CHECKOUT_HOST;

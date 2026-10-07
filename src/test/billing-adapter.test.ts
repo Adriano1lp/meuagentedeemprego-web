@@ -56,6 +56,14 @@ describe('adaptador de billing', () => {
     expect(
       isStripeCheckoutUrl('https://user:pass@checkout.stripe.com/pay'),
     ).toBe(false);
+    expect(new URL(stripeUrl).port).toBe('');
+    expect(new URL('https://checkout.stripe.com:8443/pay').port).toBe('8443');
+    expect(isStripeCheckoutUrl('https://checkout.stripe.com:8443/pay')).toBe(
+      false,
+    );
+    expect(isStripeCheckoutUrl('https://checkout.stripe.com:444/c/pay/cs_test')).toBe(
+      false,
+    );
   });
 
   it('le checkout_url e descarta session_id', () => {
@@ -129,12 +137,16 @@ describe('adaptador de billing', () => {
     expect(BILLING_POLL_DEADLINE_MS).toBe(60000);
     expect(CHECKOUT_START_FAILED).not.toMatch(/https?:|\/billing|price_id|pk_|sk_|whsec_/);
     expect(BILLING_READ_FAILED).not.toMatch(/https?:|\/billing|price_id/);
-    expect(BILLING_CONFIRMING).toBe('Confirmando pagamento…');
-    expect(BILLING_TIMEOUT).toContain('Recebemos seu pagamento');
+    expect(BILLING_CONFIRMING).toBe('Estamos confirmando seu pagamento…');
+    expect(BILLING_TIMEOUT).toBe(
+      'Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos.',
+    );
     expect(BILLING_REFRESH_LABEL).toBe('Atualizar');
-    expect(BILLING_LOGIN_AFTER_PAYMENT).toContain('Entre para confirmar');
+    expect(BILLING_LOGIN_AFTER_PAYMENT).toBe(
+      'Se você concluiu o pagamento, entre para confirmar sua assinatura.',
+    );
     expect(BILLING_CANCELLED).not.toMatch(/erro/i);
-    expect(BILLING_CONFIRMED.length).toBeGreaterThan(0);
+    expect(BILLING_CONFIRMED).toBe('Plano Essencial ativo');
   });
 
   it('o codigo de producao nao tem chave Stripe', () => {

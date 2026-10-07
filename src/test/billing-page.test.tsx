@@ -7,6 +7,7 @@ import { App } from '../App';
 import * as billing from '../api/billing';
 import {
   BILLING_CANCELLED,
+  BILLING_CONFIRMED,
   BILLING_CONFIRMING,
   BILLING_LOGIN_AFTER_PAYMENT,
   BILLING_POLL_INTERVAL_MS,
@@ -404,6 +405,7 @@ describe('W3a assinatura Essencial', () => {
 
     expect(screen.queryByTestId('billing-login-notice')).not.toBeInTheDocument();
     expect(screen.getByTestId('billing-confirming')).toHaveTextContent(BILLING_CONFIRMING);
+    expect(screen.queryByText(BILLING_CONFIRMED)).not.toBeInTheDocument();
     await waitFor(() => {
       expect(billingReads).toBe(1);
     });
@@ -411,7 +413,7 @@ describe('W3a assinatura Essencial', () => {
 
     await vi.advanceTimersByTimeAsync(BILLING_POLL_INTERVAL_MS);
     await waitFor(() => {
-      expect(screen.getByTestId('billing-confirmed')).toBeInTheDocument();
+      expect(screen.getByTestId('billing-confirmed')).toHaveTextContent(BILLING_CONFIRMED);
     });
     expect(billingReads).toBe(2);
     expect(screen.getByTestId('status-plan')).toHaveTextContent('Essencial');
@@ -454,6 +456,7 @@ describe('W3a assinatura Essencial', () => {
     expect(screen.queryByTestId('subscribe-error')).not.toBeInTheDocument();
     expect(screen.getByTestId('status-quota')).toHaveTextContent('5 de 5 analises usadas');
     expect(screen.getByTestId('status-plan')).toHaveTextContent('Free');
+    expect(screen.queryByText(BILLING_CONFIRMED)).not.toBeInTheDocument();
 
     const readsAtTimeout = harness.billingMeCalls;
     await user.click(screen.getByTestId('billing-refresh'));
