@@ -64,7 +64,7 @@ Não há `localStorage` nem `sessionStorage` para o token. Recarregar a página 
 
 Quatro blocos, nesta ordem:
 
-1. **Saudação** — “Ola, {nome}” (cai para o e-mail, depois para “usuario”). O texto da tela ainda diz que billing Stripe e exportação LGPD ficam para as próximas fatias. A exportação e a exclusão já estão em Perfil; Stripe continua fora.
+1. **Saudação** — “Ola, {nome}” (cai para o e-mail, depois para “usuario”). Exportação e exclusão ficam em Perfil. A assinatura Essencial fica no bloqueio de cota desta tela e em Perfil.
 2. **Cota e status** — espelha `GET /users/me/status`. Mostra só o que o JSON trouxer: plano, período UTC, cota (`used` / `limit` / `remaining`), embeddings, currículo e quantidade de arquivos gerados. O browser não calcula Free nem Essencial e não guarda cota.
 3. **Currículo e embeddings** — arquivo `.pdf` ou `.txt`. Estados: idle → enviando → reconstruindo embeddings → pronto ou erro, com “Tentar de novo”.
 4. **Análise de vaga** — textarea “Texto da vaga” e **Analisar vaga**. O botão só habilita com texto não vazio, `has_embeddings === true` no status e sem upload/rebuild em andamento. Enquanto o CV está ocupado, a mensagem é “Reconstruindo embeddings…”. Sem status, sem CV ou sem embeddings, o painel explica o bloqueio e não envia `POST /processar`.
@@ -73,7 +73,7 @@ Resultados possíveis no próprio painel (não há outra página):
 
 - **Análise concluída** — match em “Match: N%” quando vier número, texto da resposta e, se couber, **Baixar PDF autenticado**.
 - **PDF não gerado** — `generation_blocked: true` (aderência abaixo do mínimo). Mostra `blocked_reason` quando existe. Não oferece link de PDF.
-- **Cota mensal esgotada** — HTTP 402. Sem botão de pagamento e sem descontar cota no navegador.
+- **Cota mensal esgotada** — HTTP 402. Sem descontar cota no navegador. `SUBSCRIPTION_REQUIRED` com plano que não é Essencial mostra **Assinar Essencial R$19,90/mês**. `QUOTA_EXCEEDED`, ou plano já Essencial, não mostra o botão.
 - **Não foi possível analisar** — inclui HTTP 400 (por exemplo embeddings ausentes). Não é tratado como sucesso.
 
 ### Histórico (`/historico`)
@@ -99,7 +99,7 @@ A tela pede a primeira página com `limit=20` e `offset=0`. Não há controle de
 
 Três seções:
 
-1. **Perfil** — `GET /users/me`. Exibe nome, e-mail, plano e status da assinatura somente se o JSON trouxer. Rótulos de plano: `free` → “Free”, `essencial` → “Essencial”; outro valor aparece cru. Status: `none` → “Sem assinatura”, `active` → “Ativa”, `past_due` → “Pagamento pendente”, `canceled` → “Cancelada”; valor desconhecido fica cru. Sem nome, e-mail, plano e status, a tela diz “A conta nao trouxe nome, email ou plano.” Cota (`used` / `limit` / `remaining`) não faz parte deste endpoint. Há um segundo botão **Sair**, com o mesmo efeito do header. Erro de carga tem **Tentar novamente**.
+1. **Perfil** — `GET /users/me`. Exibe nome, e-mail, plano e status da assinatura somente se o JSON trouxer. Rótulos de plano: `free` → “Free”, `essencial` → “Essencial”; outro valor aparece cru. Status: `none` → “Sem assinatura”, `active` → “Ativa”, `past_due` → “Pagamento pendente”, `canceled` → “Cancelada”; valor desconhecido fica cru. Sem nome, e-mail, plano e status, a tela diz “A conta nao trouxe nome, email ou plano.” Cota (`used` / `limit` / `remaining`) não faz parte deste endpoint. O CTA **Assinar Essencial R$19,90/mês** usa `GET /billing/me`, não `GET /users/me`: aparece quando `plan` desse JSON não é `"essencial"`. Quem já é Essencial não vê o botão. Há um segundo botão **Sair**, com o mesmo efeito do header. Erro de carga tem **Tentar novamente**.
 2. **Privacidade e LGPD** — abre a política vigente com o mesmo `GET /legal/privacy?version=1.0` do cadastro.
 3. **Seus dados** — **Exportar meus dados** e **Solicitar exclusao de conta** (fluxo f).
 
@@ -144,7 +144,7 @@ Analisar:
 1. `POST /processar` com `{ "texto": "<descrição colada>" }`.
 2. Sucesso com PDF: a UI mostra o texto e o match. **Baixar PDF autenticado** extrai o nome do arquivo de `pdf_url` (absoluta ou relativa, no padrão `/users/me/files/{nome}`) e faz `GET /users/me/files/{nome}` com Bearer. O token não entra na URL e não há `<a href>` direto para a API. Os bytes só contam como download se começam com `%PDF`; aí o browser baixa um Blob e a object URL é revogada. Senão, erro no painel (“O arquivo baixado nao e um PDF valido…”).
 3. `generation_blocked: true` ou `pdf_url` nulo/ausente: bloco “PDF nao gerado”, sem botão de download.
-4. **402** com `detail.code` `QUOTA_EXCEEDED` ou `SUBSCRIPTION_REQUIRED`: bloco “Cota mensal esgotada” com a mensagem da API (ou o texto padrão do cliente). Não há retry em loop nem cota gravada no browser. A mensagem orienta a esperar o próximo período UTC ou uma assinatura no servidor. Não há checkout.
+4. **402** com `detail.code` `QUOTA_EXCEEDED` ou `SUBSCRIPTION_REQUIRED`: bloco “Cota mensal esgotada” com a mensagem da API (ou o texto padrão do cliente). Não há retry em loop nem cota gravada no browser. `SUBSCRIPTION_REQUIRED` mostra **Assinar Essencial R$19,90/mês** quando o `plan` de `GET /users/me/status` não é `"essencial"`. O clique chama o checkout (fluxo g). Plano Essencial não vê o botão.
 5. **400** e outras falhas: alerta “Nao foi possivel analisar”, com a mensagem devolvida. Não vira sucesso.
 6. **403** `TERMS_OUTDATED` / `PRIVACY_OUTDATED` volta ao ConsentGate.
 7. Depois de um processar aceito, a Home atualiza o status. Falha nesse refresh não transforma a análise já recebida em erro.
@@ -205,6 +205,38 @@ Os botões só agem com JWT e gate fechado. Sem sessão, `/perfil` redireciona e
 4. **401** também volta ao login, sem essa mensagem.
 5. Este DELETE não passa pela checagem de termos no backend. A UI de perfil fica atrás do ConsentGate, então o botão não é clicável enquanto o reaceite está aberto.
 
+### g) Assinatura Essencial (W3a)
+
+O preço R$ 19,90 é só o texto do botão. O cliente não envia `price_id`, valor nem chave Stripe (`pk_`, `sk_`, `whsec_`). Não grava JWT, `session_id` nem resposta de billing em `localStorage`, `sessionStorage` ou IndexedDB, e não escreve isso no console.
+
+**Começar o checkout**
+
+1. Free em `/perfil` ou no 402 `SUBSCRIPTION_REQUIRED` clica **Assinar Essencial R$19,90/mês**.
+2. `POST /billing/checkout` com Bearer e sem body. O botão desabilita até a resposta (sem segundo POST).
+3. 200 `{ checkout_url, session_id }`. `session_id` é descartado. `window.location.assign` só aceita `https://checkout.stripe.com/...`. Outra URL mostra "Não foi possível iniciar a assinatura agora. Tente novamente em instantes."
+4. 401 volta ao login. 403 `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. 404, 500, 502 e 503 usam a mesma mensagem fixa, sem detalhe do servidor.
+
+**Volta na raiz**
+
+O Stripe devolve o browser em `/?billing=success&session_id=cs_...` ou `/?billing=cancel`. Isso só acontece se a infra apontar `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` para o web. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
+
+O JWT não sobrevive a esse carregamento. Sem sessão:
+
+- sucesso: login com "Pagamento recebido. Entre para confirmar sua assinatura."
+- cancelamento: login sem aviso de erro
+
+Depois do login a Home segue o fluxo. Cancelamento mostra "Pagamento cancelado. Você continua no plano Free." e não chama `GET /billing/me` para promover plano.
+
+**Confirmar o pagamento**
+
+1. "Confirmando pagamento…".
+2. `GET /billing/me` imediatamente e a cada 3s, no máximo 60s. Essencial ativo é `plan === "essencial"` (o servidor já devolve `free` em `past_due`).
+3. Aí `GET /users/me/status` de novo e a cota mostra o `limit` que esse JSON trouxer. O browser não escreve 30 sozinho.
+4. Se os 60s passam: "Recebemos seu pagamento. A confirmação pode levar alguns minutos." e **Atualizar** (repete o polling). Não é alerta de erro.
+5. Sair da Home ou desmontar o componente aborta o polling.
+
+`GET /users/me` continua sendo só a ficha da conta. Não decide o CTA nem encerra o polling.
+
 ## Regras transversais
 
 - **Bearer only.** Header `Authorization: Bearer <access_token>`. Nunca `X-User-Id`, nunca cookie de sessão. O JWT não entra em query string, nem no `href` de download.
@@ -217,7 +249,7 @@ Os botões só agem com JWT e gate fechado. Sem sessão, `/perfil` redireciona e
 
 Não há tela nem fluxo para:
 
-- Stripe, checkout ou upgrade de plano (W3). Cota esgotada não abre pagamento.
+- Portal do cliente Stripe, cancelamento de assinatura, cupons ou troca de cartão. O W3a só inicia o checkout do Essencial e espera a API confirmar.
 - UI de PDI (plano de desenvolvimento). O export pode trazer `development_plans` no JSON; o app não tem tela para isso.
 - Edição de currículo, edição da carta, perfil manual ou biometria. O CV só entra pelo upload `.pdf`/`.txt` do Início; a carta só é gerada, copiada e baixada na sessão.
 - App mobile. A paridade visual com o Flutter é referência de UX; este repositório é o cliente web.

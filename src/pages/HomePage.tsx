@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { isEssencialActive } from '../api/billing';
 import { ApiError } from '../api/client';
 import { analyzeBlockReason, canAnalyzeVaga } from '../api/status';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { AppHeader } from '../components/AppHeader';
+import { BillingConfirmation } from '../components/BillingConfirmation';
 import { CvUploadPanel } from '../components/CvUploadPanel';
 import { ProcessarPanel } from '../components/ProcessarPanel';
 import { QuotaStatusCard } from '../components/QuotaStatusCard';
@@ -67,10 +69,11 @@ export function HomePage() {
         </h2>
         <p className="mt-3 text-base leading-[1.45] text-ink">
           Voce esta logado. Envie o curriculo (.pdf ou .txt), aguarde os
-          embeddings e so entao analise uma vaga. Billing Stripe e exportacao
-          LGPD ficam para as proximas fatias.
+          embeddings e so entao analise uma vaga.
         </p>
       </section>
+
+      <BillingConfirmation enabled={canUseProduct} onConfirmed={loadStatus} />
 
       <QuotaStatusCard
         status={status}
@@ -91,6 +94,7 @@ export function HomePage() {
         enabled={canAnalyze}
         blockedMessage={canAnalyze ? null : processarGate}
         onProcessed={loadStatus}
+        allowSubscriptionCta={!isEssencialActive({ plan: status?.plan })}
       />
     </div>
   );

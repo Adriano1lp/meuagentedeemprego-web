@@ -1,4 +1,16 @@
 import {
+  BILLING_CHECKOUT_PATH,
+  BILLING_ME_PATH,
+  BILLING_READ_FAILED,
+  BILLING_SESSION_EXPIRED,
+  CHECKOUT_START_FAILED,
+  isAbortError,
+  parseBillingMe,
+  parseCheckoutResponse,
+  type BillingMe,
+  type CheckoutRedirect,
+} from './billing';
+import {
   buildConsentRequest,
   buildRegisterConsentFields,
   CURRENT_PRIVACY_VERSION,
@@ -190,7 +202,12 @@ export function createApiClient(options: ApiClientOptions) {
         ...rest,
         headers,
       });
-    } catch {
+    } catch (cause) {
+      const aborted =
+        rest.signal?.aborted === true || isAbortError(cause);
+      if (aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       throw new ApiError(
         0,
         null,
@@ -317,6 +334,52 @@ export function createApiClient(options: ApiClientOptions) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildConsentRequest(doc, version)),
       });
+    },
+
+    async startCheckout(): Promise<CheckoutRedirect> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, BILLING_SESSION_EXPIRED);
+      }
+      try {
+        const body = await request(BILLING_CHECKOUT_PATH, { method: 'POST' });
+        return parseCheckoutResponse(body);
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          throw new ApiError(401, null, BILLING_SESSION_EXPIRED);
+        }
+        const status = error instanceof ApiError ? error.status : 0;
+        throw new ApiError(status, null, CHECKOUT_START_FAILED);
+      }
+    },
+
+    async getBillingMe(signal?: AbortSignal): Promise<BillingMe> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, BILLING_SESSION_EXPIRED);
+      }
+      try {
+        const body = await request(BILLING_ME_PATH, { method: 'GET', signal });
+        return parseBillingMe(body);
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+        if (error instanceof ApiError && error.outdated) {
+          throw error;
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          throw new ApiError(401, null, BILLING_SESSION_EXPIRED);
+        }
+        const status = error instanceof ApiError ? error.status : 0;
+        throw new ApiError(status, null, BILLING_READ_FAILED);
+      }
     },
 
     async getStatus(): Promise<UserStatus> {
