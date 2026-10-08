@@ -1,6 +1,6 @@
 # Meu Agente de Emprego (web / PWA)
 
-Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`), **W-Perfil** (`GET /users/me`), **W-LGPD** (`GET /users/me/export`, `DELETE /users/me`) e **W-Carta** (`POST /users/me/cover-letter`).
+Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /processar`), **Fatia 1** (upload de CV + rebuild de embeddings), **W-Historico** (`GET /users/me/gap-history`), **W-Perfil** (`GET /users/me`), **W-LGPD** (`GET /users/me/export`, `DELETE /users/me`), **W-Carta** (`POST /users/me/cover-letter`) e **W3a** (checkout Stripe do plano Essencial).
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
@@ -40,7 +40,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/users/me/cover-letter`, `/processar` e `/users/me/files/*` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/users/me/cover-letter`, `/processar`, `/users/me/files/*`, `/billing/checkout` e `/billing/me` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
 
 ## Variaveis de ambiente
 
@@ -195,6 +195,57 @@ Na tela autenticada **Historico** (`/historico`), cada analise ja salva pode ger
 
 A rota nao consome cota hoje; 402/429 sao tratados so por defesa.
 
+## Escopo W3a (checkout Essencial)
+
+CTA **Assinar Essencial R$19,90/mês** para quem esta no Free:
+
+- Em `/perfil`, se `GET /billing/me` nao vier com `plan === "essencial"`.
+- No bloqueio **402** `SUBSCRIPTION_REQUIRED` da analise de vaga, no Inicio, se `GET /users/me/status` nao vier com `plan === "essencial"`.
+
+Quem ja e Essencial nao ve o botao. O clique fica desabilitado enquanto o `POST` nao volta. Nao existe 409 no servidor: um segundo clique criaria outra assinatura, entao o cliente esconde o CTA.
+
+Contrato confirmado (API master `a536c41`). Mapeamento em `src/api/billing.ts`.
+
+**POST `/billing/checkout`**
+
+- Bearer JWT. Sem body. Sem `price_id`, sem valor e sem chave Stripe no cliente.
+- 200: `{ "checkout_url": string, "session_id": "cs_..." }`.
+- O browser faz `window.location.assign(checkout_url)` so se a URL for `https`, o host for exatamente `checkout.stripe.com` e a porta estiver vazia (sem `:443` nem outra porta). Qualquer outra coisa vira o erro fixo abaixo.
+- `session_id` da resposta e ignorado. Nao e guardado.
+- 401 volta ao login (`/`).
+- 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
+- 404, 500, 502 e 503 mostram "Não foi possível iniciar a assinatura agora. Tente novamente em instantes." Sem detalhe do servidor, sem path, URL ou token.
+
+O preco **R$19,90** existe so no rotulo do botao.
+
+**Volta do Checkout** (raiz do web, `/?`):
+
+- Sucesso: `/?billing=success&session_id=cs_...`
+- Cancelamento: `/?billing=cancel`
+
+Depois de ler, `history.replaceState` tira `billing` e `session_id` da URL. O valor de `session_id` nao entra em estado, `localStorage`, `sessionStorage` nem IndexedDB. O JWT continua so em memoria: a volta da Stripe e um carregamento completo e o usuario chega sem sessao.
+
+- Sem JWT e `billing=success`: o login mostra "Se você concluiu o pagamento, entre para confirmar sua assinatura." A query nao prova pagamento. A intencao fica em memoria ate o login; ai comeca a confirmacao.
+- Sem JWT e `billing=cancel`: login sem aviso de erro. Depois de entrar, a conta continua Free com "Pagamento cancelado. Você continua no plano Free."
+
+**GET `/billing/me`**
+
+- Bearer. 200: `{ plan, subscription_status, used, limit, period, remaining }`.
+- Essencial ativo = `plan === "essencial"`. `past_due` volta `plan: "free"` no servidor; o cliente nao reinterpreta `subscription_status`.
+- `GET /users/me` nao decide o plano nem o CTA.
+- O contador na Home continua vindo de `GET /users/me/status` (mesmos campos). `limit` e `remaining` de `/billing/me` sao lidos; o fim do polling usa `plan`.
+
+Confirmacao (so depois do login, se a volta foi sucesso):
+
+1. A Home mostra "Estamos confirmando seu pagamento…".
+2. `GET /billing/me` na hora e depois a cada 3s, por ate 60s. Para ao desmontar ou trocar de rota (`AbortController` / `clearTimeout`).
+3. Quando `plan === "essencial"`, a tela mostra "Plano Essencial ativo", recarrega `GET /users/me/status` e a cota passa a mostrar o limite que o status devolver (30 no plano Essencial). O cliente nao grava 30 por conta propria. Esse rotulo nao aparece antes da API confirmar.
+4. Se os 60s acabam sem Essencial: "Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos." e o botao **Atualizar**, que repete o polling. Nao e erro vermelho.
+
+Infra: o retorno so chega no web se `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` apontarem para a origem do site, por exemplo `https://meuagentedeemprego-web.onrender.com/?billing=success` e `https://meuagentedeemprego-web.onrender.com/?billing=cancel`. O Stripe acrescenta `session_id` na URL de sucesso.
+
+Fora do W3a: app mobile, portal do cliente, cancelamento de assinatura, cupons e os follow-ups B1/B2/B3/B6. Nenhuma mudanca na API.
+
 ## Contrato descoberto (OpenAPI live + `main.py`)
 
 Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-User-Id`.
@@ -245,7 +296,7 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
 
 ## Fora desta fatia
 
-Nao implementar: Stripe/checkout (W3), perfil manual, edicao de perfil, mudancas no backend, cookies ou header `X-User-Id`. Exportar e apagar conta estao na fatia W-LGPD.
+Checkout do Essencial entrou na fatia W3a. Continuam fora: perfil manual, edicao de perfil, portal do cliente, cancelamento de assinatura, cupons, mudancas no backend, cookies e header `X-User-Id`.
 
 ## HTTPS em producao
 

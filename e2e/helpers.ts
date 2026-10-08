@@ -161,10 +161,47 @@ export async function mockDeleteAccount(
   });
 }
 
+export const mockedBillingEssencial = {
+  plan: 'essencial',
+  subscription_status: 'active',
+  used: 1,
+  limit: 30,
+  remaining: 29,
+  period: '2026-10',
+};
+
+export const mockedBillingFree = {
+  plan: 'free',
+  subscription_status: 'none',
+  used: 5,
+  limit: 5,
+  remaining: 0,
+  period: '2026-10',
+};
+
+export async function mockBillingMe(
+  page: Page,
+  body: Record<string, unknown> | (() => Record<string, unknown>) = mockedBillingEssencial,
+): Promise<void> {
+  await page.route('**/billing/me', async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
+    const payload = typeof body === 'function' ? body() : body;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(payload),
+    });
+  });
+}
+
 export async function mockCurrentUser(
   page: Page,
   body: Record<string, unknown> | (() => Record<string, unknown>) = mockedCurrentUser,
 ): Promise<void> {
+  await mockBillingMe(page);
   await page.route(/\/users\/me$/, async (route) => {
     if (route.request().method() !== 'GET') {
       await route.fallback();

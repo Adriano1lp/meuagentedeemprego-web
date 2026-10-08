@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { isAbortError, isEssencialActive } from '../api/billing';
 import { ApiError } from '../api/client';
 import {
   hasProfileIdentity,
@@ -12,6 +13,7 @@ import type { CurrentUser } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { LgpdAccountActions } from './LgpdAccountActions';
 import { PrivacyShortcut } from './PrivacyShortcut';
+import { SubscribeEssencialButton } from './SubscribeEssencialButton';
 
 type ProfileView =
   | { kind: 'loading' }
@@ -21,6 +23,7 @@ type ProfileView =
 export function ProfilePanel() {
   const { api, isAuthenticated, blocksApp, logout } = useAuth();
   const [view, setView] = useState<ProfileView>({ kind: 'loading' });
+  const [showSubscribe, setShowSubscribe] = useState(false);
   const canLoad = isAuthenticated && !blocksApp;
 
   const loadProfile = useCallback(async () => {
@@ -45,6 +48,35 @@ export function ProfilePanel() {
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  useEffect(() => {
+    if (!canLoad) {
+      setShowSubscribe(false);
+      return;
+    }
+    const controller = new AbortController();
+    api
+      .getBillingMe(controller.signal)
+      .then((billing) => {
+        if (!controller.signal.aborted) {
+          setShowSubscribe(!isEssencialActive(billing));
+        }
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted || isAbortError(cause)) {
+          return;
+        }
+        if (cause instanceof ApiError && cause.outdated) {
+          return;
+        }
+        if (cause instanceof ApiError && cause.status === 401) {
+          logout();
+          return;
+        }
+        setShowSubscribe(false);
+      });
+    return () => controller.abort();
+  }, [api, canLoad, logout]);
 
   const user = view.kind === 'ready' ? view.user : null;
   const plan = planLabel(user?.plan);
@@ -150,6 +182,8 @@ export function ProfilePanel() {
             ) : null}
           </dl>
         ) : null}
+
+        {showSubscribe ? <SubscribeEssencialButton /> : null}
 
         <button
           type="button"

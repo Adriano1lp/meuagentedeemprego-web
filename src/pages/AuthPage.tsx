@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react';
 
+import { BILLING_LOGIN_AFTER_PAYMENT } from '../api/billing';
 import { ApiError } from '../api/client';
 import { ACCOUNT_DELETED_NOTICE, useAuth } from '../auth/AuthContext';
+import { useBillingReturn } from '../billing/BillingReturn';
 import { canSubmitSignup, validateSignup } from '../auth/signupValidation';
 import { LegalDocument } from '../components/LegalDocument';
 import { LegalDoc } from '../legal/versions';
@@ -10,6 +12,7 @@ type AuthTab = 'login' | 'signup';
 
 export function AuthPage() {
   const { accountDeleted, login, register } = useAuth();
+  const { intent: billingIntent } = useBillingReturn();
   const [tab, setTab] = useState<AuthTab>('login');
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -131,6 +134,16 @@ export function AuthPage() {
           Criar conta
         </button>
       </div>
+
+      {billingIntent === 'success' ? (
+        <p
+          data-testid="billing-login-notice"
+          role="status"
+          className="mb-4 rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 text-sm text-ink"
+        >
+          {BILLING_LOGIN_AFTER_PAYMENT}
+        </p>
+      ) : null}
 
       {accountDeleted ? (
         <p

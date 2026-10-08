@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { SUBSCRIPTION_REQUIRED } from '../api/quota';
 import { ApiError } from '../api/client';
 import {
   canOfferPdfDownload,
@@ -7,26 +8,29 @@ import {
   isPdfMagic,
   triggerBrowserDownload,
 } from '../api/processar';
-import type { ProcessarResponse } from '../api/types';
+import type { ProcessarResponse, QuotaCode } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { SubscribeEssencialButton } from './SubscribeEssencialButton';
 
 type ProcessarOutcome =
   | { kind: 'idle' }
   | { kind: 'success'; result: ProcessarResponse }
   | { kind: 'blocked'; result: ProcessarResponse }
-  | { kind: 'quota'; message: string }
+  | { kind: 'quota'; message: string; code: QuotaCode }
   | { kind: 'error'; message: string };
 
 type ProcessarPanelProps = {
   enabled: boolean;
   blockedMessage?: string | null;
   onProcessed: () => Promise<void>;
+  allowSubscriptionCta?: boolean;
 };
 
 export function ProcessarPanel({
   enabled,
   blockedMessage,
   onProcessed,
+  allowSubscriptionCta = false,
 }: ProcessarPanelProps) {
   const { api } = useAuth();
   const [texto, setTexto] = useState('');
@@ -72,7 +76,11 @@ export function ProcessarPanel({
       }
     } catch (cause) {
       if (cause instanceof ApiError && cause.quota) {
-        setOutcome({ kind: 'quota', message: cause.quota.message });
+        setOutcome({
+          kind: 'quota',
+          message: cause.quota.message,
+          code: cause.quota.code,
+        });
         return;
       }
       setOutcome({
@@ -287,6 +295,9 @@ export function ProcessarPanel({
             A cota nao e descontada no navegador. Tente de novo so no proximo
             periodo UTC ou apos uma assinatura no servidor.
           </p>
+          {outcome.code === SUBSCRIPTION_REQUIRED ? (
+            <SubscribeEssencialButton blocked={!allowSubscriptionCta} />
+          ) : null}
         </div>
       ) : null}
 
