@@ -75,7 +75,7 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
   return (
     <aside
       data-testid="app-sidebar"
-      className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex"
+      className="fixed top-0 left-0 z-30 hidden h-dvh w-64 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex"
     >
       <div className="flex items-center gap-3 px-5 pb-4 pt-6">
         <span

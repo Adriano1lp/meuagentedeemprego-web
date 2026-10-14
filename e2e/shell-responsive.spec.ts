@@ -55,6 +55,29 @@ async function expectShell(
   );
 }
 
+async function expectSidebarFillsViewport(page: Page) {
+  const metrics = await page.evaluate(() => {
+    const sidebar = document.querySelector('[data-testid="app-sidebar"]');
+    if (!(sidebar instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = sidebar.getBoundingClientRect();
+    const main = document.querySelector('main');
+    return {
+      height: rect.height,
+      innerHeight: window.innerHeight,
+      mainLeft: main instanceof HTMLElement ? main.getBoundingClientRect().left : 0,
+      sidebarRight: rect.right,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  expect(metrics!.height).toBe(metrics!.innerHeight);
+  expect(metrics!.mainLeft).toBeGreaterThanOrEqual(metrics!.sidebarRight - 1);
+  expect(metrics!.scrollWidth).toBeLessThanOrEqual(metrics!.clientWidth);
+}
+
 async function login(page: Page) {
   await page.getByTestId('login-email').fill('ada@example.com');
   await page.getByTestId('login-password').fill('senha-segura');
@@ -118,3 +141,56 @@ for (const width of widths) {
     });
   });
 }
+
+test('sidebar ocupa a viewport em 1280px na pagina curta e depois da rolagem', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockCurrentUser(page);
+  await mockGapHistory(page, () => ({ body: [] }));
+
+  await page.goto('/');
+  await login(page);
+
+  const scrolls = await page.evaluate(
+    () => document.documentElement.scrollHeight > window.innerHeight,
+  );
+  expect(scrolls).toBe(true);
+  await page.evaluate(() => {
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.scrollY + window.innerHeight >=
+          document.documentElement.scrollHeight - 1,
+      ),
+    )
+    .toBe(true);
+  await expectSidebarFillsViewport(page);
+  await page.screenshot({
+    path: testInfo.outputPath('sidebar-rolada-1280.png'),
+  });
+
+  await page.getByTestId('nav-historico').click();
+  await expect(page.getByTestId('history-empty')).toBeVisible();
+  const fits = await page.evaluate(
+    () => document.documentElement.scrollHeight <= window.innerHeight,
+  );
+  expect(fits).toBe(true);
+  await expectSidebarFillsViewport(page);
+  await page.screenshot({
+    path: testInfo.outputPath('sidebar-curta-1280.png'),
+  });
+
+  await page.setViewportSize({ width: 360, height: 800 });
+  await expect(page.getByTestId('app-sidebar')).toBeHidden();
+  await expect(page.getByTestId('app-bottom-nav')).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({
+    path: testInfo.outputPath('shell-360.png'),
+  });
+});
