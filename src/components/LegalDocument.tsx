@@ -8,6 +8,8 @@ import {
   legalTitle,
   type LegalDocId,
 } from '../legal/versions';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
 
 type LegalDocumentProps = {
   doc: LegalDocId;
@@ -63,48 +65,47 @@ export function LegalDocument({
   const checkboxId = `${doc}-accept-checkbox`;
 
   return (
-    <section
-      data-testid={`${doc}DocumentPanel`}
-      className="mb-3 rounded-[18px] border-[3px] border-ink bg-paper p-3.5 shadow-[4px_4px_0_#111]"
-    >
-      <h3 className="font-display text-lg font-bold text-ink">{legalTitle(doc)}</h3>
+    <Card data-testid={`${doc}DocumentPanel`} className="mb-3 p-3.5">
+      <h3 className="font-display text-base font-semibold">{legalTitle(doc)}</h3>
       <p
         data-testid={`${doc}DocumentEndpoint`}
-        className="mt-1 text-xs font-bold text-ink"
+        className="mt-1 break-all text-xs font-medium text-muted-foreground"
       >
         {legalEndpoint(doc)}
       </p>
-      <div className="mt-2.5 max-h-[180px] min-h-24 overflow-auto rounded-xl border-2 border-ink bg-cream">
+      <div className="mt-2.5 max-h-[180px] min-h-24 overflow-auto rounded-lg border border-border bg-muted">
         {loading ? (
-          <p className="p-4 text-sm text-muted" role="status" aria-live="polite">
+          <p className="p-4 text-sm text-muted-foreground" role="status" aria-live="polite">
             Carregando documento...
           </p>
         ) : error ? (
           <div className="p-3">
-            <p className="text-sm text-ink">
+            <p className="text-sm">
               Nao foi possivel carregar o documento. Sem o texto vigente nao e
               possivel aceitar.
             </p>
-            <p className="mt-2 text-xs text-ink">{error}</p>
-            <button
+            <p className="mt-2 break-words text-xs text-muted-foreground">{error}</p>
+            <Button
               type="button"
-              className="mt-2 rounded-xl border-[3px] border-ink bg-paper px-3 py-1.5 text-sm font-extrabold"
+              variant="outline"
+              size="sm"
+              className="mt-2"
               onClick={() => void load()}
               disabled={!enabled}
             >
               Tentar de novo
-            </button>
+            </Button>
           </div>
         ) : (
           <pre
             data-testid={`${doc}DocumentText`}
-            className="m-0 whitespace-pre-wrap p-3 font-body text-sm leading-[1.45] text-ink"
+            className="m-0 whitespace-pre-wrap p-3 font-sans text-sm leading-relaxed text-foreground"
           >
             {markdown}
           </pre>
         )}
       </div>
-      <div className="mt-1 flex items-start gap-2">
+      <div className="mt-3 flex items-start gap-2">
         <input
           id={checkboxId}
           data-testid={`${doc}AcceptCheckbox`}
@@ -115,10 +116,10 @@ export function LegalDocument({
           aria-disabled={!canAccept}
           onChange={(event) => onAcceptedChange(event.target.checked)}
         />
-        <label htmlFor={checkboxId} className="pt-3 text-sm text-ink">
+        <label htmlFor={checkboxId} className="text-sm leading-snug">
           {legalCheckboxLabel(doc)}
         </label>
       </div>
-    </section>
+    </Card>
   );
 }

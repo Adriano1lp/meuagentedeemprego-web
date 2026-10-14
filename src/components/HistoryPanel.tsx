@@ -20,6 +20,16 @@ import {
 import type { GapHistoryItem } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { CoverLetterSection } from './CoverLetterSection';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
 
 type HistoryView =
   | { kind: 'loading' }
@@ -60,85 +70,67 @@ export function HistoryPanel() {
   }, [loadHistory]);
 
   return (
-    <section
+    <Card
       data-testid="history-panel"
       aria-labelledby="history-title"
-      className="mt-8 rounded-3xl border-[3px] border-ink bg-sky p-6 shadow-[8px_8px_0_#111]"
     >
-      <p className="inline-block rounded-full border-[3px] border-ink bg-paper px-3 py-1 text-xs font-bold">
-        Analises desta conta
-      </p>
-      <h2
-        id="history-title"
-        className="mt-4 font-display text-[28px] font-extrabold leading-none text-ink"
-      >
-        Historico
-      </h2>
-      <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Analises anteriores desta conta: titulo, empresa, aderencia e data.
-      </p>
-
-      {view.kind === 'loading' ? (
-        <p
-          data-testid="history-loading"
-          role="status"
-          aria-live="polite"
-          className="mt-5 text-sm text-ink"
-        >
-          Carregando historico...
-        </p>
-      ) : null}
-
-      {view.kind === 'empty' ? (
-        <div
-          data-testid="history-empty"
-          role="status"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-yellow p-5"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Nenhum retorno salvo ainda.
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-muted">
-            Quando o assistente analisar uma vaga, o titulo, a empresa, a
-            aderencia e a data aparecem aqui.
-          </p>
-        </div>
-      ) : null}
-
-      {view.kind === 'error' ? (
-        <div
-          data-testid="history-error"
-          role="alert"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-pink p-5"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Nao foi possivel carregar o historico.
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">
-            {view.message || HISTORY_LOAD_FAILED}
-          </p>
-          <button
-            type="button"
-            data-testid="history-retry"
-            onClick={() => void loadHistory()}
-            className="mt-4 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-2 font-display text-sm font-extrabold"
+      <CardHeader>
+        <Badge variant="outline">Analises desta conta</Badge>
+        <CardTitle id="history-title">Historico</CardTitle>
+        <CardDescription className="text-foreground">
+          Analises anteriores desta conta: titulo, empresa, aderencia e data.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-2">
+        {view.kind === 'loading' ? (
+          <p
+            data-testid="history-loading"
+            role="status"
+            aria-live="polite"
+            className="text-sm text-muted-foreground"
           >
-            Tentar novamente
-          </button>
-        </div>
-      ) : null}
+            Carregando historico...
+          </p>
+        ) : null}
 
-      {view.kind === 'list' ? (
-        <ul
-          data-testid="history-list"
-          className="mt-5 grid gap-4"
-        >
-          {view.items.map((item) => (
-            <HistoryCard key={item.id} item={item} />
-          ))}
-        </ul>
-      ) : null}
-    </section>
+        {view.kind === 'empty' ? (
+          <Alert data-testid="history-empty" role="status">
+            <AlertTitle>Nenhum retorno salvo ainda.</AlertTitle>
+            <AlertDescription className="mt-2 text-muted-foreground">
+              Quando o assistente analisar uma vaga, o titulo, a empresa, a
+              aderencia e a data aparecem aqui.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {view.kind === 'error' ? (
+          <Alert data-testid="history-error" variant="destructive">
+            <AlertTitle>Nao foi possivel carregar o historico.</AlertTitle>
+            <AlertDescription className="mt-2">
+              {view.message || HISTORY_LOAD_FAILED}
+            </AlertDescription>
+            <Button
+              type="button"
+              data-testid="history-retry"
+              onClick={() => void loadHistory()}
+              variant="outline"
+              size="sm"
+              className="mt-4"
+            >
+              Tentar novamente
+            </Button>
+          </Alert>
+        ) : null}
+
+        {view.kind === 'list' ? (
+          <ul data-testid="history-list" className="grid gap-4">
+            {view.items.map((item) => (
+              <HistoryCard key={item.id} item={item} />
+            ))}
+          </ul>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -150,12 +142,12 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
     <li>
       <article
         data-testid="history-item"
-        className="rounded-[18px] border-[3px] border-ink bg-paper p-4 shadow-[6px_6px_0_#111]"
+        className="rounded-xl border border-border bg-background p-4"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h3
             data-testid="history-item-title"
-            className="font-display text-lg font-extrabold text-ink"
+            className="font-display text-lg font-semibold break-words"
           >
             {title}
           </h3>
@@ -163,7 +155,7 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
             <time
               data-testid="history-item-date"
               dateTime={item.created_at}
-              className="text-sm text-muted"
+              className="text-sm text-muted-foreground"
             >
               {formattedDate}
             </time>
@@ -171,17 +163,17 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
         </div>
 
         {item.company_name ? (
-          <p data-testid="history-item-company" className="mt-2 text-sm text-ink">
+          <p data-testid="history-item-company" className="mt-2 break-words text-sm">
             Empresa: {item.company_name}
           </p>
         ) : null}
 
-        <p data-testid="history-item-score" className="mt-2 text-sm text-ink">
+        <p data-testid="history-item-score" className="mt-2 text-sm">
           Aderencia: {item.match_score}/100
         </p>
 
         {item.generation_blocked ? (
-          <p data-testid="history-item-blocked" className="mt-2 text-sm text-ink">
+          <p data-testid="history-item-blocked" className="mt-2 text-sm">
             {item.blocked_reason
               ? `PDF nao gerado: ${item.blocked_reason}`
               : 'PDF nao gerado.'}
@@ -191,20 +183,20 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
         {item.job_summary ? (
           <p
             data-testid="history-item-summary"
-            className="mt-3 text-sm leading-[1.45] text-ink"
+            className="mt-3 break-words text-sm leading-relaxed"
           >
             {item.job_summary}
           </p>
         ) : null}
 
         {item.strengths.length > 0 ? (
-          <p className="mt-3 text-sm text-ink">
+          <p className="mt-3 break-words text-sm">
             Pontos fortes: {item.strengths.join(', ')}
           </p>
         ) : null}
 
         {item.critical_gaps.length > 0 ? (
-          <p className="mt-2 text-sm text-ink">
+          <p className="mt-2 break-words text-sm">
             Lacunas criticas: {item.critical_gaps.join(', ')}
           </p>
         ) : null}
@@ -355,25 +347,24 @@ function HistoryDownloadButton({
 
   return (
     <div className="w-full sm:min-w-0 sm:flex-1">
-      <button
+      <Button
         type="button"
         data-testid={testId}
         onClick={() => void onDownload()}
         disabled={downloading}
         aria-busy={downloading}
         aria-label={accessibleName}
-        className={`w-full rounded-[18px] border-[3px] border-ink px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:cursor-not-allowed disabled:opacity-60 ${
-          tone === 'paper' ? 'bg-paper' : 'bg-yellow'
-        }`}
+        variant={tone === 'paper' ? 'outline' : 'secondary'}
+        className="w-full"
       >
         {downloading ? busyLabel : idleLabel}
-      </button>
+      </Button>
       {success ? (
         <p
           data-testid={successTestId}
           role="status"
           aria-live="polite"
-          className="mt-2 text-sm text-ink"
+          className="mt-2 text-sm"
         >
           {successLabel}
         </p>
@@ -384,7 +375,7 @@ function HistoryDownloadButton({
           tabIndex={-1}
           data-testid={errorTestId}
           role="alert"
-          className="mt-2 text-sm leading-[1.45] text-ink outline-none"
+          className="mt-2 text-sm leading-relaxed outline-none"
         >
           {error}
         </p>

@@ -14,6 +14,8 @@ import {
 } from '../api/coverLetter';
 import { isPdfMagic, triggerBrowserDownload } from '../api/processar';
 import { useAuth } from '../auth/AuthContext';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Button } from './ui/button';
 
 type CoverLetterPhase =
   | { kind: 'idle' }
@@ -172,24 +174,24 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
   }
 
   return (
-    <div data-testid="cover-letter-section" className="mt-4 border-t-[3px] border-ink pt-4">
-      <button
+    <div data-testid="cover-letter-section" className="mt-4 border-t border-border pt-4">
+      <Button
         type="button"
         data-testid="cover-letter-generate"
         onClick={() => void generate()}
         disabled={!company || busy}
         aria-busy={generating}
         aria-describedby={company ? undefined : hintId}
-        className="w-full rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full"
       >
         {generating ? 'Gerando carta...' : 'Gerar carta'}
-      </button>
+      </Button>
 
       {!company ? (
         <p
           id={hintId}
           data-testid="cover-letter-missing-company"
-          className="mt-2 text-sm leading-[1.45] text-muted"
+          className="mt-2 text-sm leading-relaxed text-muted-foreground"
         >
           {COVER_LETTER_MISSING_COMPANY}
         </p>
@@ -202,7 +204,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           data-testid="cover-letter-loading"
           role="status"
           aria-live="polite"
-          className="mt-3 text-sm text-ink outline-none"
+          className="mt-3 text-sm outline-none"
         >
           Gerando a carta de apresentacao...
         </p>
@@ -214,46 +216,45 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           tabIndex={-1}
           aria-labelledby={titleId}
           data-testid="cover-letter-result"
-          className="mt-4 rounded-[18px] border-[3px] border-ink bg-cream p-4 outline-none"
+          className="mt-4 rounded-lg border border-border bg-muted p-4 outline-none"
         >
-          <h4
-            id={titleId}
-            className="font-display text-lg font-extrabold text-ink"
-          >
+          <h4 id={titleId} className="font-display text-lg font-semibold break-words">
             Carta de apresentacao
             {company ? ` para ${company}` : ''}
           </h4>
           <pre
             data-testid="cover-letter-text"
-            className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap font-body text-sm font-semibold leading-[1.45] text-ink"
+            className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap font-sans text-sm leading-relaxed"
           >
             {phase.text}
           </pre>
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <button
+            <Button
               type="button"
               data-testid="cover-letter-copy"
               onClick={() => void copyLetter()}
-              className="w-full rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111]"
+              variant="secondary"
+              className="w-full"
             >
               Copiar
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               data-testid="cover-letter-download"
               onClick={() => void downloadPdf()}
               disabled={downloading}
               aria-busy={downloading}
-              className="w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
+              variant="outline"
+              className="w-full"
             >
               {downloading ? 'Baixando PDF...' : 'Baixar PDF'}
-            </button>
+            </Button>
           </div>
           <p
             data-testid="cover-letter-copy-status"
             role="status"
             aria-live="polite"
-            className="mt-3 text-sm text-ink"
+            className="mt-3 text-sm"
           >
             {copyFeedback === 'success'
               ? COVER_LETTER_COPY_SUCCESS
@@ -266,17 +267,13 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
               data-testid="cover-letter-download-success"
               role="status"
               aria-live="polite"
-              className="text-sm text-ink"
+              className="text-sm"
             >
               PDF da carta baixado.
             </p>
           ) : null}
           {downloadError ? (
-            <p
-              data-testid="cover-letter-download-error"
-              role="alert"
-              className="text-sm text-ink"
-            >
+            <p data-testid="cover-letter-download-error" role="alert" className="text-sm">
               {downloadError}
             </p>
           ) : null}
@@ -284,41 +281,38 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
       ) : null}
 
       {phase.kind === 'error' ? (
-        <div
+        <Alert
           ref={errorRef}
           tabIndex={-1}
           data-testid="cover-letter-error"
-          role="alert"
-          className="mt-4 rounded-[18px] border-[3px] border-ink bg-pink p-4 outline-none"
+          variant="destructive"
+          className="mt-4 outline-none"
         >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Nao foi possivel gerar a carta
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">{phase.message}</p>
-          <button
+          <AlertTitle>Nao foi possivel gerar a carta</AlertTitle>
+          <AlertDescription className="mt-2">{phase.message}</AlertDescription>
+          <Button
             type="button"
             data-testid="cover-letter-retry"
             onClick={() => void generate()}
-            className="mt-4 w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] sm:w-auto"
+            variant="outline"
+            className="mt-4 w-full sm:w-auto"
           >
             Tentar de novo
-          </button>
-        </div>
+          </Button>
+        </Alert>
       ) : null}
 
       {phase.kind === 'quota' ? (
-        <div
+        <Alert
           ref={errorRef}
           tabIndex={-1}
           data-testid="cover-letter-quota"
-          role="alert"
-          className="mt-4 rounded-[18px] border-[3px] border-ink bg-pink p-4 outline-none"
+          variant="destructive"
+          className="mt-4 outline-none"
         >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Limite de uso
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">{phase.message}</p>
-        </div>
+          <AlertTitle>Limite de uso</AlertTitle>
+          <AlertDescription className="mt-2">{phase.message}</AlertDescription>
+        </Alert>
       ) : null}
     </div>
   );

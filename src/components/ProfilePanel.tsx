@@ -14,6 +14,16 @@ import { useAuth } from '../auth/AuthContext';
 import { LgpdAccountActions } from './LgpdAccountActions';
 import { PrivacyShortcut } from './PrivacyShortcut';
 import { SubscribeEssencialButton } from './SubscribeEssencialButton';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
 
 type ProfileView =
   | { kind: 'loading' }
@@ -84,116 +94,106 @@ export function ProfilePanel() {
 
   return (
     <>
-      <section
-        data-testid="profile-panel"
-        aria-labelledby="profile-title"
-        className="mt-8 rounded-3xl border-[3px] border-ink bg-pink p-6 shadow-[8px_8px_0_#111]"
-      >
-        <p className="inline-block rounded-full border-[3px] border-ink bg-paper px-3 py-1 text-xs font-bold">
-          Sua conta
-        </p>
-        <h2
-          id="profile-title"
-          className="mt-4 font-display text-[28px] font-extrabold leading-none text-ink"
-        >
-          Perfil
-        </h2>
-        <p className="mt-3 text-sm leading-[1.45] text-ink">
-          Nome, email e plano que a conta autenticada devolve. Sem edicao de
-          curriculo nesta tela.
-        </p>
-
-        {view.kind === 'loading' ? (
-          <p
-            data-testid="profile-loading"
-            role="status"
-            aria-live="polite"
-            className="mt-5 text-sm text-ink"
-          >
-            Carregando perfil...
-          </p>
-        ) : null}
-
-        {view.kind === 'error' ? (
-          <div
-            data-testid="profile-error"
-            role="alert"
-            className="mt-5 rounded-[18px] border-[3px] border-ink bg-paper p-5"
-          >
-            <p className="font-display text-lg font-extrabold text-ink">
-              Nao foi possivel carregar o perfil.
-            </p>
-            <p className="mt-2 text-sm leading-[1.45] text-ink">
-              {view.message || PROFILE_LOAD_FAILED}
-            </p>
-            <button
-              type="button"
-              data-testid="profile-retry"
-              onClick={() => void loadProfile()}
-              className="mt-4 rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-2 font-display text-sm font-extrabold"
+      <Card data-testid="profile-panel" aria-labelledby="profile-title">
+        <CardHeader>
+          <Badge variant="outline">Sua conta</Badge>
+          <CardTitle id="profile-title">Perfil</CardTitle>
+          <CardDescription className="text-foreground">
+            Nome, email e plano que a conta autenticada devolve. Sem edicao de
+            curriculo nesta tela.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          {view.kind === 'loading' ? (
+            <p
+              data-testid="profile-loading"
+              role="status"
+              aria-live="polite"
+              className="text-sm text-muted-foreground"
             >
-              Tentar novamente
-            </button>
-          </div>
-        ) : null}
+              Carregando perfil...
+            </p>
+          ) : null}
 
-        {user && !hasProfileIdentity(user) ? (
-          <p
-            data-testid="profile-empty"
-            role="status"
-            className="mt-5 text-sm text-ink"
+          {view.kind === 'error' ? (
+            <Alert data-testid="profile-error" variant="destructive">
+              <AlertTitle>Nao foi possivel carregar o perfil.</AlertTitle>
+              <AlertDescription className="mt-2">
+                {view.message || PROFILE_LOAD_FAILED}
+              </AlertDescription>
+              <Button
+                type="button"
+                data-testid="profile-retry"
+                onClick={() => void loadProfile()}
+                variant="outline"
+                size="sm"
+                className="mt-4"
+              >
+                Tentar novamente
+              </Button>
+            </Alert>
+          ) : null}
+
+          {user && !hasProfileIdentity(user) ? (
+            <p
+              data-testid="profile-empty"
+              role="status"
+              className="text-sm text-muted-foreground"
+            >
+              A conta nao trouxe nome, email ou plano.
+            </p>
+          ) : null}
+
+          {user && hasProfileIdentity(user) ? (
+            <dl data-testid="profile-values" className="grid gap-3 text-sm">
+              {user.display_name ? (
+                <div className="rounded-lg bg-muted px-3 py-2">
+                  <dt className="text-xs font-medium text-muted-foreground">Nome</dt>
+                  <dd data-testid="profile-name" className="mt-0.5 break-words font-medium">
+                    {user.display_name}
+                  </dd>
+                </div>
+              ) : null}
+              {user.email ? (
+                <div className="rounded-lg bg-muted px-3 py-2">
+                  <dt className="text-xs font-medium text-muted-foreground">Email</dt>
+                  <dd data-testid="profile-email" className="mt-0.5 break-all font-medium">
+                    {user.email}
+                  </dd>
+                </div>
+              ) : null}
+              {plan ? (
+                <div className="rounded-lg bg-muted px-3 py-2">
+                  <dt className="text-xs font-medium text-muted-foreground">Plano</dt>
+                  <dd data-testid="profile-plan" className="mt-0.5 font-medium">
+                    {plan}
+                  </dd>
+                </div>
+              ) : null}
+              {subscription ? (
+                <div className="rounded-lg bg-muted px-3 py-2">
+                  <dt className="text-xs font-medium text-muted-foreground">Status</dt>
+                  <dd data-testid="profile-status" className="mt-0.5 font-medium">
+                    {subscription}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          ) : null}
+
+          {showSubscribe ? <SubscribeEssencialButton /> : null}
+
+          <Button
+            type="button"
+            data-testid="profile-logout"
+            onClick={logout}
+            variant="outline"
+            className="mt-6 w-full sm:w-auto"
           >
-            A conta nao trouxe nome, email ou plano.
-          </p>
-        ) : null}
-
-        {user && hasProfileIdentity(user) ? (
-          <dl
-            data-testid="profile-values"
-            className="mt-5 grid gap-3 text-sm text-ink"
-          >
-            {user.display_name ? (
-              <div>
-                <dt className="font-bold">Nome</dt>
-                <dd data-testid="profile-name" className="break-words">
-                  {user.display_name}
-                </dd>
-              </div>
-            ) : null}
-            {user.email ? (
-              <div>
-                <dt className="font-bold">Email</dt>
-                <dd data-testid="profile-email" className="break-all">
-                  {user.email}
-                </dd>
-              </div>
-            ) : null}
-            {plan ? (
-              <div>
-                <dt className="font-bold">Plano</dt>
-                <dd data-testid="profile-plan">{plan}</dd>
-              </div>
-            ) : null}
-            {subscription ? (
-              <div>
-                <dt className="font-bold">Status</dt>
-                <dd data-testid="profile-status">{subscription}</dd>
-              </div>
-            ) : null}
-          </dl>
-        ) : null}
-
-        {showSubscribe ? <SubscribeEssencialButton /> : null}
-
-        <button
-          type="button"
-          data-testid="profile-logout"
-          onClick={logout}
-          className="mt-6 w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] sm:w-auto"
-        >
-          Sair
-        </button>
-      </section>
+            Sair
+          </Button>
+        </CardContent>
+      </Card>
 
       <PrivacyShortcut />
       <LgpdAccountActions enabled={canLoad} />

@@ -11,6 +11,17 @@ import {
 } from '../api/lgpd';
 import type { UserDataExport } from '../api/types';
 import { LOGOUT_ACCOUNT_DELETED, useAuth } from '../auth/AuthContext';
+import { Alert, AlertDescription } from './ui/alert';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
 
 type LgpdAccountActionsProps = {
   enabled: boolean;
@@ -128,62 +139,59 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
   }
 
   return (
-    <section
+    <Card
       data-testid="lgpd-account-section"
       aria-labelledby="lgpd-account-title"
-      className="mt-6 rounded-3xl border-[3px] border-ink bg-paper p-6 shadow-[8px_8px_0_#111]"
+      className="mt-6"
     >
-      <h2
-        id="lgpd-account-title"
-        className="font-display text-[22px] font-extrabold text-ink"
-      >
-        Seus dados
-      </h2>
-      <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Baixe uma copia dos dados da conta ou exclua a conta de forma
-        permanente.
-      </p>
-
-      <div className="mt-4 flex flex-col gap-3">
-        <button
+      <CardHeader>
+        <CardTitle id="lgpd-account-title" className="text-xl">
+          Seus dados
+        </CardTitle>
+        <CardDescription className="text-foreground">
+          Baixe uma copia dos dados da conta ou exclua a conta de forma
+          permanente.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 pt-2">
+        <Button
           type="button"
           data-testid="export-data"
           onClick={() => void exportData()}
           disabled={!enabled || exporting || deleting}
           aria-busy={exporting}
-          className="w-full rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
+          variant="secondary"
+          className="w-full"
         >
           Exportar meus dados
-        </button>
+        </Button>
 
         {exporting ? (
           <p
             data-testid="export-data-loading"
             role="status"
             aria-live="polite"
-            className="text-sm text-ink"
+            className="text-sm text-muted-foreground"
           >
             Exportando seus dados...
           </p>
         ) : null}
 
         {exportError ? (
-          <div
-            data-testid="export-data-error"
-            role="alert"
-            className="rounded-[18px] border-[3px] border-ink bg-cream p-4"
-          >
-            <p className="text-sm text-ink">{exportError}</p>
-            <button
+          <Alert data-testid="export-data-error" variant="destructive">
+            <AlertDescription>{exportError}</AlertDescription>
+            <Button
               type="button"
               data-testid="export-data-retry"
               onClick={() => void exportData()}
               disabled={!enabled || exporting || deleting}
-              className="mt-3 rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-2 font-display text-sm font-extrabold"
+              variant="outline"
+              size="sm"
+              className="mt-3"
             >
               Tentar novamente
-            </button>
-          </div>
+            </Button>
+          </Alert>
         ) : null}
 
         {exportSuccess ? (
@@ -191,45 +199,40 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
             data-testid="export-data-success"
             role="status"
             aria-live="polite"
-            className="text-sm text-ink"
+            className="text-sm"
           >
             Seus dados foram baixados.
           </p>
         ) : null}
 
-        <button
+        <Button
           type="button"
           data-testid="delete-account-open"
           onClick={openDeleteDialog}
           disabled={!enabled || exporting || deleting}
           aria-haspopup="dialog"
           aria-expanded={dialogOpen}
-          className="w-full rounded-[18px] border-[3px] border-ink bg-pink px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
+          variant="destructive"
+          className="w-full"
         >
           Solicitar exclusao de conta
-        </button>
-      </div>
+        </Button>
+      </CardContent>
 
       {dialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 px-4 py-4 sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/40 px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:items-center">
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
             aria-describedby={descriptionId}
             data-testid="delete-account-dialog"
-            className="w-full max-w-md rounded-3xl border-[3px] border-ink bg-paper p-6 shadow-[8px_8px_0_#111]"
+            className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-lg"
           >
-            <h3
-              id={titleId}
-              className="font-display text-[22px] font-extrabold text-ink"
-            >
+            <h3 id={titleId} className="font-display text-xl font-semibold">
               Excluir conta
             </h3>
-            <p
-              id={descriptionId}
-              className="mt-3 text-sm leading-[1.45] text-ink"
-            >
+            <p id={descriptionId} className="mt-3 text-sm leading-relaxed">
               Essa acao apaga a conta e encerra a sessao. Nao da para desfazer.
               Digite DELETE para confirmar.
             </p>
@@ -241,13 +244,10 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
                 void confirmDelete();
               }}
             >
-              <label
-                htmlFor={confirmInputId}
-                className="block text-sm font-bold text-ink"
-              >
+              <Label htmlFor={confirmInputId} className="block">
                 Confirmacao
-              </label>
-              <input
+              </Label>
+              <Input
                 ref={confirmInputRef}
                 id={confirmInputId}
                 data-testid="delete-account-confirm-input"
@@ -261,64 +261,62 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
                 spellCheck={false}
                 disabled={deleting}
                 aria-invalid={confirmMismatch}
-                className="mt-2 w-full rounded-[18px] border-[3px] border-ink bg-cream px-4 py-3 text-base text-ink"
+                className="mt-2"
               />
 
-            {deleting ? (
-              <p
-                data-testid="delete-account-loading"
-                role="status"
-                aria-live="polite"
-                className="mt-4 text-sm text-ink"
-              >
-                Excluindo a conta...
-              </p>
-            ) : null}
+              {deleting ? (
+                <p
+                  data-testid="delete-account-loading"
+                  role="status"
+                  aria-live="polite"
+                  className="mt-4 text-sm text-muted-foreground"
+                >
+                  Excluindo a conta...
+                </p>
+              ) : null}
 
-            {confirmMismatch ? (
-              <p
-                data-testid="delete-account-mismatch"
-                role="alert"
-                className="mt-4 text-sm text-ink"
-              >
-                {DELETE_CONFIRM_MISMATCH}
-              </p>
-            ) : null}
+              {confirmMismatch ? (
+                <p
+                  data-testid="delete-account-mismatch"
+                  role="alert"
+                  className="mt-4 text-sm"
+                >
+                  {DELETE_CONFIRM_MISMATCH}
+                </p>
+              ) : null}
 
-            {deleteError ? (
-              <p
-                data-testid="delete-account-error"
-                role="alert"
-                className="mt-4 text-sm text-ink"
-              >
-                {deleteError}
-              </p>
-            ) : null}
+              {deleteError ? (
+                <p data-testid="delete-account-error" role="alert" className="mt-4 text-sm">
+                  {deleteError}
+                </p>
+              ) : null}
 
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                data-testid="delete-account-cancel"
-                onClick={closeDeleteDialog}
-                disabled={deleting}
-                className="w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                data-testid="delete-account-confirm"
-                disabled={deleting}
-                aria-busy={deleting}
-                className="w-full rounded-[18px] border-[3px] border-ink bg-orange px-4 py-3 font-display text-sm font-extrabold shadow-[4px_4px_0_#111] disabled:opacity-60"
-              >
-                Excluir conta
-              </button>
-            </div>
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                <Button
+                  type="button"
+                  data-testid="delete-account-cancel"
+                  onClick={closeDeleteDialog}
+                  disabled={deleting}
+                  variant="outline"
+                  className="w-full"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  data-testid="delete-account-confirm"
+                  disabled={deleting}
+                  aria-busy={deleting}
+                  variant="destructive"
+                  className="w-full"
+                >
+                  Excluir conta
+                </Button>
+              </div>
             </form>
           </div>
         </div>
       ) : null}
-    </section>
+    </Card>
   );
 }

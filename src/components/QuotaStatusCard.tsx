@@ -1,5 +1,15 @@
 import { hasQuotaFields, planLabel } from '../api/status';
 import type { UserStatus } from '../api/types';
+import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
 
 type QuotaStatusCardProps = {
   status: UserStatus | null;
@@ -22,108 +32,122 @@ export function QuotaStatusCard({
   onRetry,
 }: QuotaStatusCardProps) {
   return (
-    <section
+    <Card
       data-testid="status-card"
       aria-labelledby="status-title"
-      className="mt-6 rounded-3xl border-[3px] border-ink bg-yellow p-6 shadow-[8px_8px_0_#111]"
+      className="mt-6"
     >
-      <p className="inline-block rounded-full border-[3px] border-ink bg-paper px-3 py-1 text-xs font-bold">
-        GET /users/me/status
-      </p>
-      <h2
-        id="status-title"
-        className="mt-4 font-display text-[28px] font-extrabold leading-none text-ink"
-      >
-        Cota e status
-      </h2>
-      <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Plano e cota do mes UTC vêm so do servidor. O navegador nao calcula
-        nem guarda o limite.
-      </p>
-
-      {loading ? (
-        <p
-          data-testid="status-loading"
-          role="status"
-          aria-live="polite"
-          className="mt-4 text-sm text-ink"
-        >
-          Carregando status...
-        </p>
-      ) : null}
-
-      {error ? (
-        <div data-testid="status-error" className="mt-4" role="alert">
-          <p className="text-sm text-ink">{error}</p>
-          <button
-            type="button"
-            data-testid="status-retry"
-            onClick={onRetry}
-            className="mt-3 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-2 font-display text-sm font-extrabold"
+      <CardHeader>
+        <Badge variant="outline">GET /users/me/status</Badge>
+        <CardTitle id="status-title">Cota e status</CardTitle>
+        <CardDescription>
+          Plano e cota do mes UTC vêm so do servidor. O navegador nao calcula
+          nem guarda o limite.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-4">
+        {loading ? (
+          <p
+            data-testid="status-loading"
+            role="status"
+            aria-live="polite"
+            className="text-sm text-muted-foreground"
           >
-            Tentar de novo
-          </button>
-        </div>
-      ) : null}
+            Carregando status...
+          </p>
+        ) : null}
 
-      {!loading && !error && !status ? (
-        <p data-testid="status-empty" className="mt-4 text-sm text-ink">
-          Status ainda nao carregado.
-        </p>
-      ) : null}
+        {error ? (
+          <Alert data-testid="status-error" variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+            <Button
+              type="button"
+              data-testid="status-retry"
+              onClick={onRetry}
+              variant="outline"
+              size="sm"
+              className="mt-3"
+            >
+              Tentar de novo
+            </Button>
+          </Alert>
+        ) : null}
 
-      {!loading && !error && status ? (
-        <dl
-          data-testid="status-values"
-          className="mt-4 grid gap-3 text-sm text-ink sm:grid-cols-2"
-        >
-          {planLabel(status.plan) ? (
-            <div>
-              <dt className="font-bold">Plano</dt>
-              <dd data-testid="status-plan">{planLabel(status.plan)}</dd>
-            </div>
-          ) : null}
-          {status.period ? (
-            <div>
-              <dt className="font-bold">Periodo (UTC)</dt>
-              <dd data-testid="status-period">{status.period}</dd>
-            </div>
-          ) : null}
-          {hasQuotaFields(status) ? (
-            <div className="sm:col-span-2">
-              <dt className="font-bold">Cota do mes</dt>
-              <dd data-testid="status-quota">
-                {formatQuota(status)}
-              </dd>
-            </div>
-          ) : null}
-          {yesNo(status.has_embeddings) ? (
-            <div>
-              <dt className="font-bold">Embeddings</dt>
-              <dd data-testid="status-embeddings">
-                {status.has_embeddings
-                  ? 'prontos para analisar'
-                  : 'ausentes — envie o curriculo abaixo'}
-              </dd>
-            </div>
-          ) : null}
-          {yesNo(status.has_cv) ? (
-            <div>
-              <dt className="font-bold">Curriculo</dt>
-              <dd data-testid="status-cv">{yesNo(status.has_cv)}</dd>
-            </div>
-          ) : null}
-          {typeof status.generated_files === 'number' ? (
-            <div>
-              <dt className="font-bold">Arquivos gerados</dt>
-              <dd data-testid="status-generated-files">
-                {status.generated_files}
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-      ) : null}
-    </section>
+        {!loading && !error && !status ? (
+          <p data-testid="status-empty" className="text-sm text-muted-foreground">
+            Status ainda nao carregado.
+          </p>
+        ) : null}
+
+        {!loading && !error && status ? (
+          <dl
+            data-testid="status-values"
+            className="grid gap-3 text-sm sm:grid-cols-2"
+          >
+            {planLabel(status.plan) ? (
+              <div className="rounded-lg bg-muted px-3 py-2">
+                <dt className="text-xs font-medium text-muted-foreground">Plano</dt>
+                <dd data-testid="status-plan" className="mt-0.5 font-medium">
+                  {planLabel(status.plan)}
+                </dd>
+              </div>
+            ) : null}
+            {status.period ? (
+              <div className="rounded-lg bg-muted px-3 py-2">
+                <dt className="text-xs font-medium text-muted-foreground">
+                  Periodo (UTC)
+                </dt>
+                <dd data-testid="status-period" className="mt-0.5 font-medium">
+                  {status.period}
+                </dd>
+              </div>
+            ) : null}
+            {hasQuotaFields(status) ? (
+              <div className="rounded-lg bg-muted px-3 py-2 sm:col-span-2">
+                <dt className="text-xs font-medium text-muted-foreground">
+                  Cota do mes
+                </dt>
+                <dd data-testid="status-quota" className="mt-0.5 font-medium">
+                  {formatQuota(status)}
+                </dd>
+              </div>
+            ) : null}
+            {yesNo(status.has_embeddings) ? (
+              <div className="rounded-lg bg-muted px-3 py-2">
+                <dt className="text-xs font-medium text-muted-foreground">
+                  Embeddings
+                </dt>
+                <dd data-testid="status-embeddings" className="mt-0.5">
+                  {status.has_embeddings
+                    ? 'prontos para analisar'
+                    : 'ausentes — envie o curriculo abaixo'}
+                </dd>
+              </div>
+            ) : null}
+            {yesNo(status.has_cv) ? (
+              <div className="rounded-lg bg-muted px-3 py-2">
+                <dt className="text-xs font-medium text-muted-foreground">
+                  Curriculo
+                </dt>
+                <dd data-testid="status-cv" className="mt-0.5">
+                  {yesNo(status.has_cv)}
+                </dd>
+              </div>
+            ) : null}
+            {typeof status.generated_files === 'number' ? (
+              <div className="rounded-lg bg-muted px-3 py-2">
+                <dt className="text-xs font-medium text-muted-foreground">
+                  Arquivos gerados
+                </dt>
+                <dd data-testid="status-generated-files" className="mt-0.5">
+                  {status.generated_files}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

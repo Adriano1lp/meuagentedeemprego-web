@@ -5,11 +5,18 @@ import { ApiError } from '../api/client';
 import { analyzeBlockReason, canAnalyzeVaga } from '../api/status';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
-import { AppHeader } from '../components/AppHeader';
+import { AppShell } from '../components/AppShell';
 import { BillingConfirmation } from '../components/BillingConfirmation';
 import { CvUploadPanel } from '../components/CvUploadPanel';
 import { ProcessarPanel } from '../components/ProcessarPanel';
 import { QuotaStatusCard } from '../components/QuotaStatusCard';
+import { Badge } from '../components/ui/badge';
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '../components/ui/card';
 
 export function HomePage() {
   const { user, api, isAuthenticated, blocksApp } = useAuth();
@@ -54,24 +61,17 @@ export function HomePage() {
   }, [loadStatus]);
 
   return (
-    <div className="mx-auto min-h-dvh max-w-3xl px-5 py-5">
-      <AppHeader />
-
-      <section
-        data-testid="home-shell"
-        className="mt-8 rounded-3xl border-[3px] border-ink bg-paper p-6 shadow-[8px_8px_0_#111]"
-      >
-        <p className="inline-block rounded-full border-[3px] border-ink bg-green px-3 py-1 text-xs font-bold">
-          logado
-        </p>
-        <h2 className="mt-4 font-display text-[32px] font-extrabold text-ink">
-          Ola, {greeting}
-        </h2>
-        <p className="mt-3 text-base leading-[1.45] text-ink">
-          Voce esta logado. Envie o curriculo (.pdf ou .txt), aguarde os
-          embeddings e so entao analise uma vaga.
-        </p>
-      </section>
+    <AppShell>
+      <Card data-testid="home-shell">
+        <CardHeader className="pb-5 md:pb-6">
+          <Badge variant="secondary">logado</Badge>
+          <CardTitle>Ola, {greeting}</CardTitle>
+          <CardDescription className="text-foreground">
+            Voce esta logado. Envie o curriculo (.pdf ou .txt), aguarde os
+            embeddings e so entao analise uma vaga.
+          </CardDescription>
+        </CardHeader>
+      </Card>
 
       <BillingConfirmation enabled={canUseProduct} onConfirmed={loadStatus} />
 
@@ -96,6 +96,6 @@ export function HomePage() {
         onProcessed={loadStatus}
         allowSubscriptionCta={!isEssencialActive({ plan: status?.plan })}
       />
-    </div>
+    </AppShell>
   );
 }

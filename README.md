@@ -15,7 +15,7 @@ O restante deste README segue o contrato por fatia (W1, W2, upload de CV, histor
 - Vite + React + TypeScript
 - React Router
 - PWA (`vite-plugin-pwa`: manifest + service worker)
-- Tailwind CSS
+- Tailwind CSS v4 (tokens em CSS variables) + shadcn/ui + lucide-react
 - Vitest + Testing Library
 - Playwright (e2e com API mockada)
 

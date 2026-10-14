@@ -7,6 +7,8 @@ import {
 } from '../api/billing';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
+import { Alert, AlertDescription } from './ui/alert';
+import { Button } from './ui/button';
 
 type SubscribeEssencialButtonProps = {
   blocked?: boolean;
@@ -51,24 +53,21 @@ export function SubscribeEssencialButton({
 
   return (
     <div className="mt-4">
-      <button
+      <Button
         type="button"
         data-testid="subscribe-essencial"
         onClick={() => void handleClick()}
         disabled={pending}
         aria-busy={pending}
-        className="w-full rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-3 font-display text-[15px] font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full bg-accent text-accent-foreground hover:bg-accent/80"
+        size="lg"
       >
         {SUBSCRIBE_ESSENCIAL_LABEL}
-      </button>
+      </Button>
       {error ? (
-        <p
-          data-testid="subscribe-error"
-          role="alert"
-          className="mt-3 text-sm leading-[1.45] text-ink"
-        >
-          {error}
-        </p>
+        <Alert data-testid="subscribe-error" variant="destructive" className="mt-3">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       ) : null}
     </div>
   );
