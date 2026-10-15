@@ -1,4 +1,3 @@
-import { mkdirSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
 import {
@@ -54,10 +53,6 @@ async function installNavSpy(page: Page) {
     (window as unknown as { __maeNav: string[] }).__maeNav = urls;
   });
 }
-
-test.beforeAll(() => {
-  mkdirSync('/opt/cursor/artifacts', { recursive: true });
-});
 
 test('CTAs da landing preservam cadastro e a intencao do Essencial', async ({
   page,
