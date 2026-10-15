@@ -489,7 +489,7 @@ describe('W3a assinatura Essencial', () => {
     expect(screen.getByTestId('billing-cancel')).toHaveTextContent(BILLING_CANCELLED);
     expect(screen.getByTestId('billing-cancel')).toHaveAttribute('role', 'status');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByTestId('status-plan')).toHaveTextContent('Free');
+    expect(await screen.findByTestId('status-plan')).toHaveTextContent('Free');
     expect(screen.getByTestId('status-quota')).toHaveTextContent('5 de 5 analises usadas');
     expect(harness.billingMeCalls).toBe(0);
     expectNoBillingPersistence();

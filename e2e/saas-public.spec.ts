@@ -16,6 +16,15 @@ import {
 
 const stripeUrl = 'https://checkout.stripe.com/c/pay/cs_test_saas';
 
+async function clientNavigate(page: Page, path: string) {
+  await page.evaluate((next) => {
+    const current = window.history.state ?? {};
+    const idx = typeof current.idx === 'number' ? current.idx + 1 : 1;
+    window.history.pushState({ ...current, idx, usr: null }, '', next);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, path);
+}
+
 async function login(page: Page) {
   await page.getByTestId('login-email').fill('ada@example.com');
   await page.getByTestId('login-password').fill('senha-segura');
@@ -109,13 +118,13 @@ test('logado em / ve Ir para o app e /entrar volta para /app', async ({ page }) 
   await expect(page.getByTestId('home-shell')).toBeVisible();
   await expect(page).toHaveURL(/\/app$/);
 
-  await page.goto('/');
+  await clientNavigate(page, '/');
   await expect(page.getByTestId('landing-page')).toBeVisible();
   await page.getByTestId('cta-ir-para-o-app').click();
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByTestId('home-shell')).toBeVisible();
 
-  await page.goto('/entrar');
+  await clientNavigate(page, '/entrar');
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByTestId('home-shell')).toBeVisible();
 });
