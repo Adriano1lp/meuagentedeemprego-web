@@ -1,8 +1,13 @@
 /// <reference types="vitest/config" />
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
 function productionHttpsCsp() {
   return {
@@ -24,6 +29,11 @@ const apiProxyTarget = (
 ).replace(/\/$/, '');
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': path.resolve(rootDir, 'src'),
+    },
+  },
   server: {
     proxy: {
       '/__mae_api': {
@@ -45,8 +55,8 @@ export default defineConfig({
         short_name: 'MAE',
         description: 'Autenticacao e aceite de termos do Meu Agente de Emprego',
         lang: 'pt-BR',
-        theme_color: '#FFE16A',
-        background_color: '#FFF6E9',
+        theme_color: '#1c2433',
+        background_color: '#f7f5f1',
         display: 'standalone',
         start_url: '/',
         icons: [

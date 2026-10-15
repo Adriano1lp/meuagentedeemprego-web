@@ -12,7 +12,7 @@ Nada aqui descreve endpoint, campo, cota ou tela que o código não implemente. 
 | API | [https://meu-agente-de-emprego.onrender.com](https://meu-agente-de-emprego.onrender.com) (`VITE_API_BASE_URL`, sem barra final) |
 | OpenAPI / Swagger | `/openapi.json` e `/docs` na mesma base da API |
 
-Stack: Vite, React, TypeScript, React Router, Tailwind CSS e PWA (`vite-plugin-pwa`: manifest + service worker no build).
+Stack: Vite, React, TypeScript, React Router, Tailwind CSS v4, shadcn/ui, lucide-react e PWA (`vite-plugin-pwa`: manifest + service worker no build).
 
 O site é um SPA estático. O Blueprint (`render.yaml`) reescreve `/*` para `/index.html`, então rotas profundas abrem o app em vez de 404 no CDN.
 
@@ -49,16 +49,28 @@ Os checkboxes começam desmarcados e só habilitam depois que o texto correspond
 
 Depois de excluir a conta, esta mesma tela mostra “Sua conta foi excluida.”
 
-### Shell autenticado
+### Tema
 
-`AppHeader` aparece em Início, Histórico e Perfil:
+A base visual usa componentes shadcn/ui copiados em `src/components/ui` (button, card, input, textarea, label, alert, badge). O button usa `@radix-ui/react-slot`; o label usa `@radix-ui/react-label`. Ícones vêm de `lucide-react`. Só entram os componentes que as telas renderizam.
 
-- **Início** → `/`
-- **Histórico** → `/historico`
-- **Perfil** → `/perfil`
-- **Sair** — zera o JWT em memória e o estado de consentimento, e a rota `/` volta a mostrar o login. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido).
+Cores, raio e tipografia são CSS variables em `src/index.css`, ligadas ao Tailwind v4 com `@theme inline` (`--background`, `--primary`, `--radius`, `--font-sans`, `--font-display`, tokens da sidebar e variantes de alert). A fonte é DM Sans, empacotada no bundle por `@fontsource-variable/dm-sans`. O HTML não carrega Google Fonts nem outro CDN de fonte.
 
-Não há `localStorage` nem `sessionStorage` para o token. Recarregar a página desloga.
+O fundo é papel claro, os cards são brancos com borda suave e a cor primária é um verde-petróleo. A sidebar do desktop é escura. Botões, cards, inputs e alerts das três telas autenticadas, do login/cadastro e do ConsentGate usam esse tema. O visual não muda rotas, chamadas, JWT nem storage.
+
+## Shell autenticado
+
+`AppShell` (`src/components/AppShell.tsx`) envolve Início, Histórico e Perfil. Sem JWT, a tela de login/cadastro continua em `/` e **não** mostra o shell.
+
+Os três destinos são os de antes, com ícone lucide e `aria-current="page"` no item da rota atual. O `nav` tem `aria-label="Principal"`. O foco visível usa o token `--ring`.
+
+- **Desktop (`md`, 768px ou mais):** sidebar fixa à esquerda (`data-testid="app-sidebar"`).
+  - **Início** → `/`
+  - **Histórico** → `/historico`
+  - **Perfil** → `/perfil`
+  - **Sair** no rodapé da sidebar (`data-testid="logout-button"`) — zera o JWT em memória e o estado de consentimento, e a rota `/` volta a mostrar o login. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido).
+- **Celular (abaixo de `md`):** a sidebar fica oculta. A bottom nav fixa (`data-testid="app-bottom-nav"`) repete só os três destinos. **Sair** fica numa barra superior compacta e chama o mesmo `logout()`. O `<main>` reserva espaço com `padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px))` (classe `app-shell-main`) para a barra não cobrir o conteúdo. O viewport usa `viewport-fit=cover`.
+
+Não há `localStorage` nem `sessionStorage` para o token. O shell não grava storage e não chama a API. Recarregar a página desloga.
 
 ### Início e análise de vaga (`/`, com JWT)
 
@@ -99,7 +111,7 @@ A tela pede a primeira página com `limit=20` e `offset=0`. Não há controle de
 
 Três seções:
 
-1. **Perfil** — `GET /users/me`. Exibe nome, e-mail, plano e status da assinatura somente se o JSON trouxer. Rótulos de plano: `free` → “Free”, `essencial` → “Essencial”; outro valor aparece cru. Status: `none` → “Sem assinatura”, `active` → “Ativa”, `past_due` → “Pagamento pendente”, `canceled` → “Cancelada”; valor desconhecido fica cru. Sem nome, e-mail, plano e status, a tela diz “A conta nao trouxe nome, email ou plano.” Cota (`used` / `limit` / `remaining`) não faz parte deste endpoint. O CTA **Assinar Essencial R$19,90/mês** usa `GET /billing/me`, não `GET /users/me`: aparece quando `plan` desse JSON não é `"essencial"`. Quem já é Essencial não vê o botão. Há um segundo botão **Sair**, com o mesmo efeito do header. Erro de carga tem **Tentar novamente**.
+1. **Perfil** — `GET /users/me`. Exibe nome, e-mail, plano e status da assinatura somente se o JSON trouxer. Rótulos de plano: `free` → “Free”, `essencial` → “Essencial”; outro valor aparece cru. Status: `none` → “Sem assinatura”, `active` → “Ativa”, `past_due` → “Pagamento pendente”, `canceled` → “Cancelada”; valor desconhecido fica cru. Sem nome, e-mail, plano e status, a tela diz “A conta nao trouxe nome, email ou plano.” Cota (`used` / `limit` / `remaining`) não faz parte deste endpoint. O CTA **Assinar Essencial R$19,90/mês** usa `GET /billing/me`, não `GET /users/me`: aparece quando `plan` desse JSON não é `"essencial"`. Quem já é Essencial não vê o botão. Há um segundo botão **Sair**, com o mesmo efeito do shell. Erro de carga tem **Tentar novamente**.
 2. **Privacidade e LGPD** — abre a política vigente com o mesmo `GET /legal/privacy?version=1.0` do cadastro.
 3. **Seus dados** — **Exportar meus dados** e **Solicitar exclusao de conta** (fluxo f).
 
@@ -182,7 +194,7 @@ Ver a nota no final sobre empresa gravada como `Nao informado`.
 1. Abrir `/perfil` com JWT e sem gate chama `GET /users/me`.
 2. A tela mostra `display_name`, `email`, `plan` e `subscription_status` quando presentes. Não mostra cota.
 3. **Política de privacidade** chama `GET /legal/privacy?version=1.0` e mostra o markdown no painel.
-4. **Sair** (header ou o botão do perfil) limpa o JWT em memória e volta a `/` no estado de login. Nada é escrito em `localStorage` ou `sessionStorage`.
+4. **Sair** (shell ou o botão do perfil) limpa o JWT em memória e volta a `/` no estado de login. Nada é escrito em `localStorage` ou `sessionStorage`.
 5. Sem JWT, redirect para `/` antes do GET. **401** na carga do perfil mostra “Sessao expirada. Entre novamente para ver o perfil.” **403** de consentimento abre o gate.
 
 ### f) LGPD (na mesma tela Perfil)

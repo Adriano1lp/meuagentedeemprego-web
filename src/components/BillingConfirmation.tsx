@@ -12,6 +12,8 @@ import {
 import { ApiError } from '../api/client';
 import { useBillingReturn } from '../billing/BillingReturn';
 import { useAuth } from '../auth/AuthContext';
+import { Alert, AlertDescription } from './ui/alert';
+import { Button } from './ui/button';
 
 type Phase = 'idle' | 'confirming' | 'timeout' | 'confirmed';
 
@@ -84,59 +86,61 @@ export function BillingConfirmation({
 
   if (phase === 'confirming') {
     return (
-      <p
+      <Alert
         data-testid="billing-confirming"
         role="status"
         aria-live="polite"
-        className="mt-6 rounded-[18px] border-[3px] border-ink bg-sky px-4 py-3 text-sm leading-[1.45] text-ink"
+        className="mt-6"
       >
-        {BILLING_CONFIRMING}
-      </p>
+        <AlertDescription>{BILLING_CONFIRMING}</AlertDescription>
+      </Alert>
     );
   }
 
   if (phase === 'timeout') {
     return (
-      <div
+      <Alert
         data-testid="billing-timeout"
         role="status"
         aria-live="polite"
-        className="mt-6 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-4 text-sm leading-[1.45] text-ink"
+        variant="warning"
+        className="mt-6"
       >
-        <p>{BILLING_TIMEOUT}</p>
-        <button
-          type="button"
-          data-testid="billing-refresh"
-          onClick={() => setPhase('confirming')}
-          className="mt-4 rounded-[18px] border-[3px] border-ink bg-yellow px-4 py-2 font-display text-sm font-extrabold"
-        >
-          {BILLING_REFRESH_LABEL}
-        </button>
-      </div>
+        <AlertDescription>
+          <p>{BILLING_TIMEOUT}</p>
+          <Button
+            type="button"
+            data-testid="billing-refresh"
+            onClick={() => setPhase('confirming')}
+            variant="outline"
+            size="sm"
+            className="mt-4"
+          >
+            {BILLING_REFRESH_LABEL}
+          </Button>
+        </AlertDescription>
+      </Alert>
     );
   }
 
   if (enabled && intent === 'cancel') {
     return (
-      <p
-        data-testid="billing-cancel"
-        role="status"
-        className="mt-6 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 text-sm leading-[1.45] text-ink"
-      >
-        {BILLING_CANCELLED}
-      </p>
+      <Alert data-testid="billing-cancel" role="status" className="mt-6">
+        <AlertDescription>{BILLING_CANCELLED}</AlertDescription>
+      </Alert>
     );
   }
 
   if (phase === 'confirmed') {
     return (
-      <p
+      <Alert
         data-testid="billing-confirmed"
         role="status"
-        className="mt-6 rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 text-sm leading-[1.45] text-ink"
+        variant="success"
+        className="mt-6"
       >
-        {BILLING_CONFIRMED}
-      </p>
+        <AlertDescription>{BILLING_CONFIRMED}</AlertDescription>
+      </Alert>
     );
   }
 

@@ -11,6 +11,18 @@ import {
 import type { ProcessarResponse, QuotaCode } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { SubscribeEssencialButton } from './SubscribeEssencialButton';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
+import { Label } from './ui/label';
+import { Textarea } from './ui/textarea';
 
 type ProcessarOutcome =
   | { kind: 'idle' }
@@ -134,185 +146,161 @@ export function ProcessarPanel({
     outcome.kind === 'success' && canOfferPdfDownload(outcome.result);
 
   return (
-    <section
-      data-testid="processar-panel"
-      className="mt-6 rounded-3xl border-[3px] border-ink bg-sky p-6 shadow-[8px_8px_0_#111]"
-    >
-      <p className="inline-block rounded-full border-[3px] border-ink bg-paper px-3 py-1 text-xs font-bold">
-        POST /processar
-      </p>
-      <h2 className="mt-4 font-display text-[28px] font-extrabold leading-none text-ink">
-        Analise de vaga
-      </h2>
-      <p className="mt-3 text-sm leading-[1.45] text-ink">
-        Cole a descricao completa da vaga. A API devolve aderencia, lacunas e,
-        quando o match permite, um PDF otimizado.
-      </p>
+    <Card data-testid="processar-panel" className="mt-6">
+      <CardHeader>
+        <Badge variant="outline">POST /processar</Badge>
+        <CardTitle>Analise de vaga</CardTitle>
+        <CardDescription className="text-foreground">
+          Cole a descricao completa da vaga. A API devolve aderencia, lacunas e,
+          quando o match permite, um PDF otimizado.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-2">
+        {!enabled && blockedMessage ? (
+          <Alert data-testid="processar-gate" role="status" className="mb-4">
+            <AlertDescription>{blockedMessage}</AlertDescription>
+          </Alert>
+        ) : null}
 
-      {!enabled && blockedMessage ? (
-        <p
-          data-testid="processar-gate"
-          role="status"
-          className="mt-4 rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 text-sm leading-[1.45] text-ink"
-        >
-          {blockedMessage}
-        </p>
-      ) : null}
+        <form onSubmit={handleSubmit}>
+          <Label htmlFor="processar-texto">Texto da vaga</Label>
+          <Textarea
+            id="processar-texto"
+            data-testid="processar-texto"
+            rows={8}
+            disabled={submitting}
+            value={texto}
+            onChange={(event) => setTexto(event.target.value)}
+            placeholder="Cole aqui a descricao completa da vaga para enviar ao /processar..."
+            className="mt-1.5"
+          />
+          <Button
+            type="submit"
+            data-testid="processar-submit"
+            disabled={!canSubmit}
+            aria-busy={submitting}
+            className="mt-4 w-full"
+            size="lg"
+          >
+            {submitting ? 'Analisando...' : 'Analisar vaga'}
+          </Button>
+        </form>
 
-      <form onSubmit={handleSubmit} className="mt-5">
-        <label className="block text-sm text-ink" htmlFor="processar-texto">
-          Texto da vaga
-        </label>
-        <textarea
-          id="processar-texto"
-          data-testid="processar-texto"
-          rows={8}
-          disabled={submitting}
-          value={texto}
-          onChange={(event) => setTexto(event.target.value)}
-          placeholder="Cole aqui a descricao completa da vaga para enviar ao /processar..."
-          className="mt-1 w-full rounded-[18px] border-[3px] border-ink bg-paper px-4 py-3 text-ink disabled:opacity-60"
-        />
-        <button
-          type="submit"
-          data-testid="processar-submit"
-          disabled={!canSubmit}
-          aria-busy={submitting}
-          className={`mt-4 w-full rounded-[18px] border-[3px] border-ink px-4 py-3 font-display text-[15px] font-extrabold ${
-            canSubmit
-              ? 'bg-pink text-ink'
-              : 'cursor-not-allowed bg-paper text-muted'
-          }`}
-        >
-          {submitting ? 'Analisando...' : 'Analisar vaga'}
-        </button>
-      </form>
-
-      {submitting ? (
-        <p
-          data-testid="processar-loading"
-          role="status"
-          aria-live="polite"
-          className="mt-4 text-sm text-ink"
-        >
-          A API esta analisando a vaga e preparando a resposta.
-        </p>
-      ) : null}
-
-      {outcome.kind === 'success' ? (
-        <div
-          data-testid="processar-success"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-paper p-4"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Analise concluida
+        {submitting ? (
+          <p
+            data-testid="processar-loading"
+            role="status"
+            aria-live="polite"
+            className="mt-4 text-sm text-muted-foreground"
+          >
+            A API esta analisando a vaga e preparando a resposta.
           </p>
-          {typeof outcome.result.match_score === 'number' ? (
-            <p data-testid="processar-match" className="mt-2 text-sm text-ink">
-              Match: {outcome.result.match_score}%
+        ) : null}
+
+        {outcome.kind === 'success' ? (
+          <div
+            data-testid="processar-success"
+            className="mt-5 rounded-lg border border-border bg-muted/60 p-4"
+          >
+            <p className="font-display text-base font-semibold">
+              Analise concluida
             </p>
-          ) : null}
-          {outcome.result.texto_resposta ? (
-            <pre
-              data-testid="processar-resposta"
-              className="mt-3 whitespace-pre-wrap font-body text-sm leading-[1.45] text-ink"
-            >
-              {outcome.result.texto_resposta}
-            </pre>
-          ) : null}
-          {showPdfButton ? (
-            <button
-              type="button"
-              data-testid="download-pdf"
-              onClick={() => void handleDownload()}
-              disabled={downloading}
-              className="mt-4 w-full rounded-[18px] border-[3px] border-ink bg-green px-4 py-3 font-display text-[15px] font-extrabold disabled:opacity-60"
-            >
-              {downloading ? 'Baixando PDF...' : 'Baixar PDF autenticado'}
-            </button>
-          ) : (
-            <p data-testid="processar-no-pdf" className="mt-3 text-sm text-ink">
-              Nenhum PDF foi gerado nesta resposta.
-            </p>
-          )}
-          {downloadState === 'success' ? (
-            <p
-              data-testid="pdf-download-success"
-              role="status"
-              className="mt-3 text-sm text-ink"
-            >
-              PDF autenticado conferido (%PDF) e baixado.
-            </p>
-          ) : null}
-          {downloadState === 'error' && downloadError ? (
-            <p
-              data-testid="pdf-download-error"
-              role="alert"
-              className="mt-3 text-sm text-ink"
-            >
-              {downloadError}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+            {typeof outcome.result.match_score === 'number' ? (
+              <p data-testid="processar-match" className="mt-2 text-sm">
+                Match: {outcome.result.match_score}%
+              </p>
+            ) : null}
+            {outcome.result.texto_resposta ? (
+              <pre
+                data-testid="processar-resposta"
+                className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed"
+              >
+                {outcome.result.texto_resposta}
+              </pre>
+            ) : null}
+            {showPdfButton ? (
+              <Button
+                type="button"
+                data-testid="download-pdf"
+                onClick={() => void handleDownload()}
+                disabled={downloading}
+                className="mt-4 w-full"
+              >
+                {downloading ? 'Baixando PDF...' : 'Baixar PDF autenticado'}
+              </Button>
+            ) : (
+              <p data-testid="processar-no-pdf" className="mt-3 text-sm">
+                Nenhum PDF foi gerado nesta resposta.
+              </p>
+            )}
+            {downloadState === 'success' ? (
+              <p
+                data-testid="pdf-download-success"
+                role="status"
+                className="mt-3 text-sm"
+              >
+                PDF autenticado conferido (%PDF) e baixado.
+              </p>
+            ) : null}
+            {downloadState === 'error' && downloadError ? (
+              <Alert
+                data-testid="pdf-download-error"
+                variant="destructive"
+                className="mt-3"
+              >
+                <AlertDescription>{downloadError}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+        ) : null}
 
-      {outcome.kind === 'blocked' ? (
-        <div
-          data-testid="processar-blocked"
-          role="status"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-paper p-4"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            PDF nao gerado
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">
-            A aderencia ficou abaixo do minimo. O servidor bloqueou a geracao
-            do curriculo otimizado
-            {outcome.result.blocked_reason
-              ? ` (${outcome.result.blocked_reason})`
-              : ''}
-            . Nenhum link de PDF e oferecido.
-          </p>
-          {outcome.result.texto_resposta ? (
-            <pre className="mt-3 whitespace-pre-wrap font-body text-sm leading-[1.45] text-ink">
-              {outcome.result.texto_resposta}
-            </pre>
-          ) : null}
-        </div>
-      ) : null}
+        {outcome.kind === 'blocked' ? (
+          <Alert
+            data-testid="processar-blocked"
+            role="status"
+            variant="warning"
+            className="mt-5"
+          >
+            <AlertTitle>PDF nao gerado</AlertTitle>
+            <AlertDescription className="mt-2">
+              A aderencia ficou abaixo do minimo. O servidor bloqueou a geracao
+              do curriculo otimizado
+              {outcome.result.blocked_reason
+                ? ` (${outcome.result.blocked_reason})`
+                : ''}
+              . Nenhum link de PDF e oferecido.
+            </AlertDescription>
+            {outcome.result.texto_resposta ? (
+              <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed">
+                {outcome.result.texto_resposta}
+              </pre>
+            ) : null}
+          </Alert>
+        ) : null}
 
-      {outcome.kind === 'quota' ? (
-        <div
-          data-testid="quota-block"
-          role="alert"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-pink p-4"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Cota mensal esgotada
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">{outcome.message}</p>
-          <p className="mt-2 text-sm text-ink">
-            A cota nao e descontada no navegador. Tente de novo so no proximo
-            periodo UTC ou apos uma assinatura no servidor.
-          </p>
-          {outcome.code === SUBSCRIPTION_REQUIRED ? (
-            <SubscribeEssencialButton blocked={!allowSubscriptionCta} />
-          ) : null}
-        </div>
-      ) : null}
+        {outcome.kind === 'quota' ? (
+          <Alert data-testid="quota-block" variant="destructive" className="mt-5">
+            <AlertTitle>Cota mensal esgotada</AlertTitle>
+            <AlertDescription className="mt-2">
+              <p>{outcome.message}</p>
+              <p className="mt-2">
+                A cota nao e descontada no navegador. Tente de novo so no proximo
+                periodo UTC ou apos uma assinatura no servidor.
+              </p>
+            </AlertDescription>
+            {outcome.code === SUBSCRIPTION_REQUIRED ? (
+              <SubscribeEssencialButton blocked={!allowSubscriptionCta} />
+            ) : null}
+          </Alert>
+        ) : null}
 
-      {outcome.kind === 'error' ? (
-        <div
-          data-testid="processar-error"
-          role="alert"
-          className="mt-5 rounded-[18px] border-[3px] border-ink bg-paper p-4"
-        >
-          <p className="font-display text-lg font-extrabold text-ink">
-            Nao foi possivel analisar
-          </p>
-          <p className="mt-2 text-sm leading-[1.45] text-ink">{outcome.message}</p>
-        </div>
-      ) : null}
-    </section>
+        {outcome.kind === 'error' ? (
+          <Alert data-testid="processar-error" variant="destructive" className="mt-5">
+            <AlertTitle>Nao foi possivel analisar</AlertTitle>
+            <AlertDescription className="mt-2">{outcome.message}</AlertDescription>
+          </Alert>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
