@@ -1,8 +1,16 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import { BILLING_LOGIN_AFTER_PAYMENT } from '../api/billing';
 import { ApiError } from '../api/client';
 import { ACCOUNT_DELETED_NOTICE, useAuth } from '../auth/AuthContext';
+import {
+  APP_HOME,
+  consumeReturnTo,
+  forgetReturnTo,
+  isSafeAppPath,
+  rememberReturnTo,
+} from '../auth/returnTo';
 import { useBillingReturn } from '../billing/BillingReturn';
 import { canSubmitSignup, validateSignup } from '../auth/signupValidation';
 import { LegalDocument } from '../components/LegalDocument';
@@ -19,7 +27,25 @@ type AuthTab = 'login' | 'signup';
 export function AuthPage() {
   const { accountDeleted, login, register } = useAuth();
   const { intent: billingIntent } = useBillingReturn();
-  const [tab, setTab] = useState<AuthTab>('login');
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const next = searchParams.get('next');
+  const tabParam = searchParams.get('tab');
+  const [tab, setTab] = useState<AuthTab>(tabParam === 'signup' ? 'signup' : 'login');
+
+  useEffect(() => {
+    if (next && isSafeAppPath(next)) {
+      rememberReturnTo(next);
+      return;
+    }
+    if (tabParam === 'signup') {
+      forgetReturnTo();
+    }
+  }, [next, tabParam]);
+
+  function goAfterAuth() {
+    navigate(consumeReturnTo(APP_HOME), { replace: true });
+  }
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -53,6 +79,7 @@ export function AuthPage() {
     setError(null);
     try {
       await login(loginEmail.trim(), loginPassword);
+      goAfterAuth();
     } catch (cause) {
       setError(
         cause instanceof ApiError
@@ -81,6 +108,7 @@ export function AuthPage() {
         termsAccepted,
         privacyAccepted,
       });
+      goAfterAuth();
     } catch (cause) {
       setError(
         cause instanceof ApiError

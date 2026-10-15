@@ -53,12 +53,14 @@ export default defineConfig({
       manifest: {
         name: 'Meu Agente de Emprego',
         short_name: 'MAE',
-        description: 'Autenticacao e aceite de termos do Meu Agente de Emprego',
+        description:
+          'Analise de vaga com o seu curriculo, historico e carta de apresentacao.',
         lang: 'pt-BR',
         theme_color: '#1c2433',
         background_color: '#f7f5f1',
         display: 'standalone',
-        start_url: '/',
+        start_url: '/app',
+        scope: '/',
         icons: [
           {
             src: 'pwa-192.png',
@@ -80,6 +82,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        // SPA: / , /entrar, /app, /app/historico e /app/perfil caem no index.
         navigateFallback: 'index.html',
       },
       devOptions: {

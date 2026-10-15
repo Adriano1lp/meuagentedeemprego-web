@@ -14,14 +14,14 @@ type Destination = {
 };
 
 const destinations: Destination[] = [
-  { to: '/', label: 'Inicio', icon: House, testId: 'nav-home' },
+  { to: '/app', label: 'Inicio', icon: House, testId: 'nav-home' },
   {
-    to: '/historico',
+    to: '/app/historico',
     label: 'Historico',
     icon: History,
     testId: 'nav-historico',
   },
-  { to: '/perfil', label: 'Perfil', icon: UserRound, testId: 'nav-perfil' },
+  { to: '/app/perfil', label: 'Perfil', icon: UserRound, testId: 'nav-perfil' },
 ];
 
 function DestinationLink({

@@ -29,7 +29,7 @@ test('render dos dados mockados — nome, email, plano e status', async ({ page 
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page, mockedCurrentUser);
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-perfil').click();
 
@@ -54,14 +54,14 @@ test('logout limpa a sessao e volta ao login', async ({ page }) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page);
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-perfil').click();
   await expect(page.getByTestId('profile-logout')).toBeVisible();
 
   await page.getByTestId('profile-logout').click();
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
   await expect(page.getByTestId('profile-name')).toHaveCount(0);
 
@@ -89,7 +89,7 @@ test('sem JWT redireciona ao login e nao chama GET /users/me', async ({ page }) 
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page).not.toHaveURL(/perfil/);
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
@@ -114,7 +114,7 @@ test('atalho LGPD abre a politica de privacidade ja existente', async ({ page })
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page);
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-perfil').click();
   await expect(page.getByTestId('profile-privacy-link')).toBeVisible();

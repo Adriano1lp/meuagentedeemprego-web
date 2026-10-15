@@ -6,7 +6,7 @@ test('signup bloqueado sem leitura/aceite e sem pre-aceite', async ({
   page,
 }) => {
   await mockLegalRoutes(page);
-  await page.goto('/');
+  await page.goto('/entrar');
 
   await page.getByTestId('auth-tab-signup').click();
   await expect(page.getByTestId('termsDocumentText')).toContainText(
@@ -41,7 +41,7 @@ test('signup envia 4 campos vigentes e login com consent vigente', async ({
 }) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
-  await page.goto('/');
+  await page.goto('/entrar');
 
   await page.getByTestId('auth-tab-signup').click();
   await expect(page.getByTestId('termsDocumentText')).toBeVisible();
@@ -82,7 +82,7 @@ test('403 OUTDATED bloqueia o app e checkboxes nao vem pre-marcados', async ({
 }) => {
   await mockLegalRoutes(page);
   await mockOutdatedMe(page);
-  await page.goto('/');
+  await page.goto('/entrar');
 
   await page.getByTestId('login-email').fill('ada@example.com');
   await page.getByTestId('login-password').fill('senha-segura');

@@ -32,7 +32,7 @@ test('lista com itens — autenticado + 200 com itens → lista das minhas anali
   await mockGapHistory(page, () => ({
     body: { items: [mockedHistoryItem], limit: 20, offset: 0 },
   }));
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
 
@@ -56,7 +56,7 @@ test('empty state — autenticado + 200 [] → empty claro sem crash', async ({ 
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockGapHistory(page, () => ({ body: [] }));
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
 
@@ -88,7 +88,7 @@ test('nao autorizado — 401/403 → erro legivel, zero dados de outro user', as
       items: [otherUser],
     },
   }));
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
 
@@ -125,7 +125,7 @@ test('falha de rede/servidor — 5xx/rede → erro sanitizado (sem URL/path inte
       },
     };
   });
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
 
@@ -171,7 +171,7 @@ test('sessao ausente — sem JWT → redirect login e API NAO chamada com token 
 
   await mockLegalRoutes(page);
   await page.goto('/historico');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page).not.toHaveURL(/historico/);
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('history-panel')).toHaveCount(0);

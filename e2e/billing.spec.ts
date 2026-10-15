@@ -77,7 +77,7 @@ test('Free vê o CTA, o POST não leva preço e o Checkout é stripe.com', async
     await route.abort();
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('cv-ready')).toBeVisible();
   await page
@@ -143,11 +143,35 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
     });
   });
 
+  await page.addInitScript(() => {
+    const urls: string[] = [];
+    const record = (url: unknown) => {
+      if (typeof url === 'string') urls.push(url);
+      else if (url instanceof URL) urls.push(`${url.pathname}${url.search}`);
+    };
+    const push = history.pushState.bind(history);
+    const replace = history.replaceState.bind(history);
+    history.pushState = (data, unused, url) => {
+      record(url);
+      return push(data, unused, url);
+    };
+    history.replaceState = (data, unused, url) => {
+      record(url);
+      return replace(data, unused, url);
+    };
+    (window as unknown as { __maeNav: string[] }).__maeNav = urls;
+  });
   await page.goto('/?billing=success&session_id=cs_test_secret');
   await expect(page.getByTestId('billing-login-notice')).toHaveText(
     'Se você concluiu o pagamento, entre para confirmar sua assinatura.',
   );
-  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page).toHaveURL('http://127.0.0.1:5173/entrar');
+  const nav = await page.evaluate(
+    () => (window as unknown as { __maeNav: string[] }).__maeNav,
+  );
+  expect(
+    nav.some((url) => url.includes('/app') && url.includes('billing=success')),
+  ).toBe(true);
   const href = page.url();
   expect(href).not.toContain('session_id');
   expect(href).not.toContain('cs_test');
@@ -216,7 +240,7 @@ test('cancelamento deixa o Free com aviso neutro', async ({ page }, testInfo) =>
   await page.goto('/?billing=cancel&session_id=cs_test_cancel');
   await expect(page.getByTestId('billing-login-notice')).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page).toHaveURL('http://127.0.0.1:5173/entrar');
   expect(page.url()).not.toContain('session_id');
 
   const billingHits: string[] = [];
@@ -262,7 +286,7 @@ test('Essencial não vê o CTA no perfil nem no bloqueio', async ({ page }) => {
     },
   }));
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-perfil').click();
   await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');

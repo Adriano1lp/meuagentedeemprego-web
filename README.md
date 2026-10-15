@@ -4,6 +4,31 @@ Cliente web das fatias **W1** (auth + consentimento), **W2** (cota + `POST /proc
 
 Paridade de UX com o app Flutter `app-release-1.4.1` (abas Entrar / Criar conta, paineis legais, analise de vaga com PDF autenticado).
 
+## Rotas (W4b)
+
+O site público e o app autenticado não dividem mais a mesma URL.
+
+| Path | Quem vê | Destino |
+|---|---|---|
+| `/` | todo mundo | Landing pública, sem shell e sem JWT. Logado, a landing continua e mostra **Ir para o app** (não redireciona sozinha). |
+| `/entrar` | sem sessão | Login e cadastro (a tela que era `/`). `?tab=signup` abre Criar conta. Logado, vai para `/app`. |
+| `/app` | com JWT | Início (cota, CV, análise). |
+| `/app/historico` | com JWT | Histórico e carta. |
+| `/app/perfil` | com JWT | Perfil, LGPD e o CTA de checkout. |
+| `/historico`, `/perfil` | qualquer um | `replace` para `/app/historico` e `/app/perfil`. |
+
+Sem JWT, qualquer `/app/*` vai para `/entrar` e, depois do login ou do cadastro, volta à rota de origem. A origem fica em memória (ou em `?next=`, no CTA **Assinar Essencial**). O JWT não entra em `localStorage`, `sessionStorage` nem na query.
+
+**Começar grátis** abre `/entrar?tab=signup`. **Assinar Essencial** abre `/entrar?next=/app/perfil` e não chama `POST /billing/checkout`. O checkout continua só no Perfil e no 402 da análise, com sessão aberta.
+
+A cota dos planos é **mensal** (a UI autenticada diz “Cota do mês” / “Cota mensal”): Free tem limite de 5 análises por mês e Essencial, de 30. O preço do Essencial no botão é R$19,90/mês.
+
+401 que já deslogava continua deslogando, agora em `/entrar`.
+
+Volta do Stripe recomendada: `/app?billing=success&session_id={CHECKOUT_SESSION_ID}` e `/app?billing=cancel`. Se `/` ainda receber `?billing=...`, o web faz `replace` para `/app` com a mesma query. O fluxo de confirmação (3s/60s, textos neutros, limpeza do `session_id`) funciona a partir de `/app` e de `/entrar`.
+
+PWA: `start_url` `/app`, `scope` `/`. O service worker usa `navigateFallback: index.html`. O rewrite do Render (`/*` → `/index.html`) já cobre as rotas novas; o Blueprint não muda.
+
 ## Documentação
 
 Mapa de telas, rotas e fluxos (produto): [docs/frontend.md](docs/frontend.md).
@@ -108,7 +133,7 @@ Cenarios (testes unitarios + e2e):
 
 ## Escopo W-Historico (paridade mobile app #8)
 
-Tela autenticada **Historico** (`/historico`, link na nav) lista as analises do dono do JWT via `GET /users/me/gap-history`.
+Tela autenticada **Historico** (`/app/historico`, link na nav) lista as analises do dono do JWT via `GET /users/me/gap-history`.
 
 Estados: **loading → lista | vazio | erro**. pt-BR, acessivel, responsivo.
 
@@ -118,13 +143,13 @@ Cenarios (testes unitarios + e2e mockado):
 2. Logado + 200 `items: []` (ou lista nua vazia) → estado vazio claro
 3. 401/403 → erro legivel; nunca mostra dados de outro usuario
 4. 5xx/rede → erro sanitizado (sem path, token, URL ou stack)
-5. Sem JWT → redirect para login (`/`); **nao** chama a API e nao envia Bearer vazio
+5. Sem JWT → redirect para `/entrar` (e volta a `/app/historico` depois do login); **nao** chama a API e nao envia Bearer vazio
 
 `403` OUTDATED continua no ConsentGate do W1. Token so em memoria. Sem `X-User-Id`.
 
 ## Escopo Historico — download do CV
 
-Em cada analise de `/historico`:
+Em cada analise de `/app/historico`:
 
 1. `cv_file_name` preenchido → **Baixar CV**. `GET /users/me/files/{cv_file_name}` com `Authorization: Bearer`. O download e um Blob; a object URL e revogada. Sem `<a href>` para a API e sem token na URL.
 2. `cv_file_name` null, vazio ou ausente → sem botao de CV e sem chamada.
@@ -144,26 +169,26 @@ Fora desta fatia: Stripe/W3, mobile, PDI, edicao de CV, APIs novas e mudancas fo
 
 ## Escopo W-Perfil (paridade minima com o app)
 
-Tela autenticada **Perfil** (`/perfil`, link na nav) mostra a conta do JWT via `GET /users/me`.
+Tela autenticada **Perfil** (`/app/perfil`, link na nav) mostra a conta do JWT via `GET /users/me`.
 
 Campos exibidos somente se o JSON trouxer: `display_name`, `email`, `plan`, `subscription_status`. Sem cota calculada no browser (used/limit/remaining nao fazem parte deste endpoint).
 
-**Sair** zera o JWT em memoria e volta ao login (`/`). Sem token em `localStorage` ou `sessionStorage`.
+**Sair** zera o JWT em memoria e volta ao login (`/entrar`). Sem token em `localStorage` ou `sessionStorage`.
 
 Atalho **Politica de privacidade** reutiliza `GET /legal/privacy?version=1.0` (o mesmo documento do cadastro), sem API nova.
 
-Sem JWT: redirect para `/` e a API de perfil nao e chamada.
+Sem JWT: redirect para `/entrar` e a API de perfil nao e chamada. Depois do login, a rota de origem e `/app/perfil`.
 
 Fora desta fatia: edicao de CV, upload, biometria, perfil manual, Stripe/checkout, carta, PDI. Exportar e apagar conta entraram na fatia W-LGPD.
 
 ## Escopo W-LGPD (exportar e excluir conta)
 
-Na tela autenticada **Perfil** (`/perfil`), secao **Seus dados**:
+Na tela autenticada **Perfil** (`/app/perfil`), secao **Seus dados**:
 
 1. **Exportar meus dados** — `GET /users/me/export` com Bearer.
-2. **Solicitar exclusao de conta** — dialogo destrutivo. A API so e chamada se o usuario digitar exatamente `DELETE` e confirmar. Cancelar, campo vazio ou qualquer outro texto nao chama `DELETE /users/me`. Sucesso (`deleted: true`, com `user_id` e `deleted_at`) limpa o JWT e volta ao login (`/`) com a mensagem "Sua conta foi excluida." 401 tambem volta ao login, sem essa mensagem.
+2. **Solicitar exclusao de conta** — dialogo destrutivo. A API so e chamada se o usuario digitar exatamente `DELETE` e confirmar. Cancelar, campo vazio ou qualquer outro texto nao chama `DELETE /users/me`. Sucesso (`deleted: true`, com `user_id` e `deleted_at`) limpa o JWT e volta ao login (`/entrar`) com a mensagem "Sua conta foi excluida." 401 tambem volta ao login, sem essa mensagem.
 
-Sem JWT: a rota `/perfil` redireciona para `/` e esses endpoints nao sao chamados.
+Sem JWT: a rota `/app/perfil` redireciona para `/entrar` e esses endpoints nao sao chamados.
 
 Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `application/json` com `additionalProperties`):
 
@@ -172,7 +197,7 @@ Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `applic
 - Exige termos vigentes (`_require_terms_accepted`). `403` OUTDATED segue no ConsentGate.
 - 200 `application/json`, **sem** `Content-Disposition`. O browser baixa esse objeto como `meus-dados.json`.
 - Erro 404/5xx: mensagem sem path, URL ou token, com **Tentar novamente**.
-- 401 redireciona ao login (`/`). 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate ja existente.
+- 401 redireciona ao login (`/entrar`). 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate ja existente.
 - Antes do download, o cliente remove em qualquer nivel `password`, `password_hash`, `passwd`, `hash`, `access_token`, `refresh_token`, `jwt`, `token` e `authorization`. Essas chaves nao aparecem na tela. O restante do JSON permanece (`user`, `profile`, `processing_runs`, `job_analysis_insights`, `development_plans`, `documents`, `generated_files`, `processar_usage`, `exported_at`).
 
 **DELETE `/users/me`**
@@ -183,7 +208,7 @@ Contrato (backend `services/account.py` + `main.py`; OpenAPI descreve so `applic
 
 ## Escopo W-Carta (carta de apresentacao)
 
-Na tela autenticada **Historico** (`/historico`), cada analise ja salva pode gerar uma carta. O texto fica so em memoria (sem `localStorage` ou `sessionStorage`).
+Na tela autenticada **Historico** (`/app/historico`), cada analise ja salva pode gerar uma carta. O texto fica so em memoria (sem `localStorage` ou `sessionStorage`).
 
 1. **Gerar carta** — `POST /users/me/cover-letter` com `{"empresa":"<company_name>"}` e `Authorization: Bearer`. Sem `X-User-Id`.
 2. Enquanto a requisicao esta em curso o botao fica desabilitado (sem segundo POST).
@@ -191,7 +216,7 @@ Na tela autenticada **Historico** (`/historico`), cada analise ja salva pode ger
 4. Item sem `company_name` deixa o botao desabilitado, com dica, e nao chama a API.
 5. 500 ou falha de rede: mensagem sem path, URL ou token, com **Tentar de novo**. A lista do historico permanece.
 6. 402 ou 429: aviso de limite, sem botao ou link de pagamento.
-7. Sem JWT, `/historico` redireciona ao login. 401 na carta tambem volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
+7. Sem JWT, `/app/historico` redireciona a `/entrar`. 401 na carta tambem volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
 
 A rota nao consome cota hoje; 402/429 sao tratados so por defesa.
 
@@ -199,7 +224,7 @@ A rota nao consome cota hoje; 402/429 sao tratados so por defesa.
 
 CTA **Assinar Essencial R$19,90/mês** para quem esta no Free:
 
-- Em `/perfil`, se `GET /billing/me` nao vier com `plan === "essencial"`.
+- Em `/app/perfil`, se `GET /billing/me` nao vier com `plan === "essencial"`.
 - No bloqueio **402** `SUBSCRIPTION_REQUIRED` da analise de vaga, no Inicio, se `GET /users/me/status` nao vier com `plan === "essencial"`.
 
 Quem ja e Essencial nao ve o botao. O clique fica desabilitado enquanto o `POST` nao volta. Nao existe 409 no servidor: um segundo clique criaria outra assinatura, entao o cliente esconde o CTA.
@@ -212,16 +237,17 @@ Contrato confirmado (API master `a536c41`). Mapeamento em `src/api/billing.ts`.
 - 200: `{ "checkout_url": string, "session_id": "cs_..." }`.
 - O browser faz `window.location.assign(checkout_url)` so se a URL for `https`, o host for exatamente `checkout.stripe.com` e a porta estiver vazia (sem `:443` nem outra porta). Qualquer outra coisa vira o erro fixo abaixo.
 - `session_id` da resposta e ignorado. Nao e guardado.
-- 401 volta ao login (`/`).
+- 401 volta ao login (`/entrar`).
 - 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
 - 404, 500, 502 e 503 mostram "Não foi possível iniciar a assinatura agora. Tente novamente em instantes." Sem detalhe do servidor, sem path, URL ou token.
 
 O preco **R$19,90** existe so no rotulo do botao.
 
-**Volta do Checkout** (raiz do web, `/?`):
+**Volta do Checkout** (`/app`, com compatibilidade na raiz):
 
-- Sucesso: `/?billing=success&session_id=cs_...`
-- Cancelamento: `/?billing=cancel`
+- Sucesso: `/app?billing=success&session_id=cs_...`
+- Cancelamento: `/app?billing=cancel`
+- Compatibilidade: `/?billing=success&session_id=cs_...` e `/?billing=cancel` fazem `replace` para `/app` com a mesma query, antes da limpeza.
 
 Depois de ler, `history.replaceState` tira `billing` e `session_id` da URL. O valor de `session_id` nao entra em estado, `localStorage`, `sessionStorage` nem IndexedDB. O JWT continua so em memoria: a volta da Stripe e um carregamento completo e o usuario chega sem sessao.
 
@@ -242,7 +268,7 @@ Confirmacao (so depois do login, se a volta foi sucesso):
 3. Quando `plan === "essencial"`, a tela mostra "Plano Essencial ativo", recarrega `GET /users/me/status` e a cota passa a mostrar o limite que o status devolver (30 no plano Essencial). O cliente nao grava 30 por conta propria. Esse rotulo nao aparece antes da API confirmar.
 4. Se os 60s acabam sem Essencial: "Ainda estamos confirmando seu pagamento. Isso pode levar alguns minutos." e o botao **Atualizar**, que repete o polling. Nao e erro vermelho.
 
-Infra: o retorno so chega no web se `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` apontarem para a origem do site, por exemplo `https://meuagentedeemprego-web.onrender.com/?billing=success` e `https://meuagentedeemprego-web.onrender.com/?billing=cancel`. O Stripe acrescenta `session_id` na URL de sucesso.
+Infra: o retorno recomendado e `https://meuagentedeemprego-web.onrender.com/app?billing=success&session_id={CHECKOUT_SESSION_ID}` e `https://meuagentedeemprego-web.onrender.com/app?billing=cancel`. Os valores antigos na raiz (`/?billing=success` e `/?billing=cancel`) continuam funcionando pelo encaminhamento.
 
 Fora do W3a: app mobile, portal do cliente, cancelamento de assinatura, cupons e os follow-ups B1/B2/B3/B6. Nenhuma mudanca na API.
 
@@ -311,7 +337,7 @@ O `npm run dev` em localhost **pode** usar `http://`. Nao force HTTPS no desenvo
 
 Site estatico no Render: `https://meuagentedeemprego-web.onrender.com`. Infra em `render.yaml` (Blueprint).
 
-SPA precisa do rewrite `/*` → `/index.html` (ja no Blueprint). Sem isso, rotas profundas como `/login` retornam 404 no CDN.
+SPA precisa do rewrite `/*` → `/index.html` (ja no Blueprint). Ele ja cobre `/`, `/entrar`, `/app`, `/app/historico` e `/app/perfil`. Nao precisa mudar o `render.yaml` nesta fatia. Sem o rewrite, rotas profundas retornam 404 no CDN.
 
 ## Auth e consentimento (contrato)
 
@@ -326,4 +352,4 @@ O `access_token` vive em memoria. `sessionStorage` nao e usado: sobreviveria ao 
 
 ## PWA
 
-O plugin gera `manifest.webmanifest` e o service worker no `dist/`. Instalar / offline do shell e suportado apos o build. No e2e o service worker e bloqueado para evitar flakiness.
+O plugin gera `manifest.webmanifest` e o service worker no `dist/`. `start_url` e `/app` e `scope` e `/`. O `navigateFallback` continua `index.html`, entao as rotas novas abrem o SPA. Instalar / offline do shell e suportado apos o build. No e2e o service worker e bloqueado para evitar flakiness.

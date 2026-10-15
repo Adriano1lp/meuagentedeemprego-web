@@ -33,7 +33,7 @@ test('1. Status UI reflete so GET /users/me/status', async ({ page }) => {
     remaining: 26,
     period: '2026-09',
   });
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   await expect(page.getByTestId('status-card')).toBeVisible();
@@ -79,7 +79,7 @@ test('2. processar sucesso: pdf_url, download %PDF e refresh de status', async (
     }
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('status-quota')).toContainText(
     '1 de 5 analises usadas',
@@ -119,7 +119,7 @@ test('3. generation_blocked nao oferece PDF', async ({ page }) => {
       blocked_reason: 'low_match_score',
     },
   }));
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   await page.getByTestId('processar-texto').fill(vagaTexto);
@@ -148,7 +148,7 @@ test('4. 402 bloqueia sem loop e sem queimar cota local', async ({ page }) => {
       },
     };
   });
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('status-quota')).toContainText(
     '1 de 5 analises usadas',
@@ -176,7 +176,7 @@ test('5. 400 mostra erro e nao UI de sucesso', async ({ page }) => {
         'Embeddings do usuario nao encontrados. Envie o curriculo e execute POST /users/me/rebuild-embeddings antes de processar a vaga.',
     },
   }));
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   await page.getByTestId('processar-texto').fill(vagaTexto);
@@ -204,7 +204,7 @@ test('6. sem JWT ou 403 OUTDATED nao acessa status/processar', async ({
   });
 
   await mockLegalRoutes(page);
-  await page.goto('/');
+  await page.goto('/entrar');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('status-card')).toHaveCount(0);
   await expect(page.getByTestId('processar-submit')).toHaveCount(0);

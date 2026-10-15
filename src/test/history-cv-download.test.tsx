@@ -146,7 +146,7 @@ function LocationProbe() {
   return <div data-testid="location-pathname">{location.pathname}</div>;
 }
 
-function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
+function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/entrar') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <AuthProvider fetchImpl={fetchImpl}>
@@ -580,7 +580,7 @@ describe('Feature: Download do CV no historico', () => {
     await user.click(screen.getByTestId('history-cv-download'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     });
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-cv-download-error')).not.toBeInTheDocument();

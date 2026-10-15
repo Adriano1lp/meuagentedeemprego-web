@@ -210,7 +210,7 @@ function LocationProbe() {
   );
 }
 
-function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
+function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/entrar') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <AuthProvider fetchImpl={fetchImpl}>
@@ -222,6 +222,7 @@ function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByTestId('login-email');
   await user.type(screen.getByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
@@ -386,12 +387,12 @@ describe('W3a assinatura Essencial', () => {
 
     renderApp(harness.fetchImpl, '/?billing=success&session_id=cs_test_secret');
 
-    expect(screen.getByTestId('billing-login-notice')).toHaveTextContent(
+    expect(await screen.findByTestId('billing-login-notice')).toHaveTextContent(
       BILLING_LOGIN_AFTER_PAYMENT,
     );
     expect(screen.getByTestId('billing-login-notice')).toHaveAttribute('role', 'status');
     await waitFor(() => {
-      expect(screen.getByTestId('location-full')).toHaveTextContent('/');
+      expect(screen.getByTestId('location-full').textContent).toBe('/entrar');
       expect(screen.getByTestId('location-full').textContent).not.toContain('billing');
       expect(screen.getByTestId('location-full').textContent).not.toContain('session_id');
     });

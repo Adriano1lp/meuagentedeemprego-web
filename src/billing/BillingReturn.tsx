@@ -60,6 +60,11 @@ export function BillingReturnProvider({ children }: { children: ReactNode }) {
     if (!fromUrl) {
       return;
     }
+    // /?billing=... é encaminhado para /app com a query intacta.
+    // A limpeza de billing e session_id acontece no destino.
+    if (location.pathname === '/') {
+      return;
+    }
     replaceBrowserUrlWithoutBillingReturn();
     const cleaned = searchWithoutBillingReturn(location.search);
     if (cleaned !== location.search) {

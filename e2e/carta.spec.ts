@@ -70,7 +70,7 @@ test('C1-C3 gera, copia e baixa a carta com Bearer', async ({ page }) => {
   }));
   await mockUserFile(page, { body: mockedPdfBytes });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
   await expect(page.getByTestId('history-list')).toBeVisible();
@@ -130,7 +130,7 @@ test('C4 500 mantem o historico e tentar de novo gera a carta', async ({ page })
     };
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
   await page.getByTestId('cover-letter-generate').click();
@@ -158,7 +158,7 @@ test('C6 429 mostra limite sem CTA de pagamento', async ({ page }) => {
     },
   }));
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
   await page.getByTestId('cover-letter-generate').click();

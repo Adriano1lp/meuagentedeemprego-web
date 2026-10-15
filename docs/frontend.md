@@ -2,7 +2,7 @@
 
 Documentação de produto do cliente web: telas, rotas e fluxos. Os contratos por fatia (campos, status HTTP e cenários de teste) continuam no [README](../README.md).
 
-Nada aqui descreve endpoint, campo, cota ou tela que o código não implemente. A análise de vaga usa a API `POST /processar`, mas **não existe rota de página `/processar`**. Login e cadastro ficam em `/`; **não existe `/login`**.
+Nada aqui descreve endpoint, campo, cota ou tela que o código não implemente. A análise de vaga usa a API `POST /processar`, mas **não existe rota de página `/processar`**. A landing pública fica em `/`. Login e cadastro ficam em `/entrar`. O app autenticado fica em `/app`. **Não existe `/login`**.
 
 ## Visão geral
 
@@ -24,17 +24,36 @@ Definido em `src/App.tsx`. A autenticação é “existe JWT em memória”, nã
 
 | Path | Tela | Exige sessão? | O que faz |
 |---|---|---|---|
-| `/` | **Entrar / Criar conta** (`AuthPage`) | Não | Login e cadastro. É a tela de quem não tem JWT. |
-| `/` | **Início** (`HomePage`) | Sim | Saudação, cota/status, upload de CV + embeddings e análise de vaga. |
-| `/historico` | **Histórico** (`HistoryPage`) | Sim | Lista as análises da conta e, em cada item, a carta de apresentação. Sem JWT, redireciona para `/` e não chama a API. |
-| `/perfil` | **Perfil** (`ProfilePage`) | Sim | Conta leve, política de privacidade, exportar e excluir. Sem JWT, redireciona para `/` e não chama a API. |
+| `/` | **Landing** (`LandingPage`) | Não | Proposta, como funciona e planos. Sem shell. Sem JWT, os CTAs vão para `/entrar`. Logado, a landing permanece e mostra **Ir para o app** (não redireciona sozinha). |
+| `/?billing=…` | encaminha | — | `replace` para `/app` com a mesma query, para o retorno antigo do Stripe. |
+| `/entrar` | **Entrar / Criar conta** (`AuthPage`) | Não | Login e cadastro. `?tab=signup` abre Criar conta. Logado, vai para `/app`. |
+| `/app` | **Início** (`HomePage`) | Sim | Saudação, cota/status, upload de CV + embeddings e análise de vaga. |
+| `/app/historico` | **Histórico** (`HistoryPage`) | Sim | Lista as análises da conta e, em cada item, a carta de apresentação. |
+| `/app/perfil` | **Perfil** (`ProfilePage`) | Sim | Conta leve, política de privacidade, exportar, excluir e o CTA de checkout. |
+| `/historico` | redirect | — | `replace` para `/app/historico`. |
+| `/perfil` | redirect | — | `replace` para `/app/perfil`. |
 | qualquer outro (`/login`, `/processar`, …) | — | — | `Navigate` para `/`. |
 
-O **ConsentGate** não é uma rota. Com JWT e aceite desatualizado, um diálogo cobre o app inteiro (incluindo `/`, `/historico` e `/perfil`) até o reaceite ou o logout.
+Sem JWT, `/app` e qualquer filho vão para `/entrar` e não chamam a API. A rota de origem fica em memória. O CTA **Assinar Essencial** da landing usa `?next=/app/perfil` (só um path interno `/app…`). Depois do login ou do cadastro, o app volta para essa origem. O padrão, sem origem, é `/app`. O JWT não entra na query nem em storage.
+
+O **ConsentGate** não é uma rota. Com JWT e aceite desatualizado, um diálogo cobre o app inteiro (incluindo `/app`, `/app/historico` e `/app/perfil`) até o reaceite ou o logout. A landing e `/entrar` não usam o shell.
 
 ## Telas
 
-### Login e cadastro (`/`, sem JWT)
+### Landing (`/`)
+
+Página pública, sem `AppShell`. Título “Análise de vaga com o seu currículo”. O texto só repete o que o produto já faz: análise da vaga com o currículo (.pdf ou .txt e embeddings), histórico, carta de apresentação e download do CV.
+
+**Como funciona** segue essa ordem: currículo e embeddings, análise da vaga, histórico com CV e carta.
+
+**Planos.** A unidade do limite é a cota mensal (“Cota do mês” / “Cota mensal” na UI autenticada):
+
+- Free — limite de 5 análises por mês. CTA **Começar grátis** → `/entrar?tab=signup`.
+- Essencial — R$19,90/mês, limite de 30 análises por mês. CTA **Assinar Essencial** → `/entrar?next=/app/perfil`. Não chama checkout.
+
+Logado, os mesmos CTAs apontam para `/app` ou `/app/perfil`, e o cabeçalho mostra **Ir para o app**.
+
+### Login e cadastro (`/entrar`, sem JWT)
 
 Cabeçalho “Entrar na conta” e abas **Entrar** | **Criar conta**.
 
@@ -59,20 +78,20 @@ O fundo é papel claro, os cards são brancos com borda suave e a cor primária 
 
 ## Shell autenticado
 
-`AppShell` (`src/components/AppShell.tsx`) envolve Início, Histórico e Perfil. Sem JWT, a tela de login/cadastro continua em `/` e **não** mostra o shell.
+`AppShell` (`src/components/AppShell.tsx`) envolve Início, Histórico e Perfil. A landing e `/entrar` **não** mostram o shell.
 
 Os três destinos são os de antes, com ícone lucide e `aria-current="page"` no item da rota atual. O `nav` tem `aria-label="Principal"`. O foco visível usa o token `--ring`.
 
 - **Desktop (`md`, 768px ou mais):** sidebar fixa à esquerda (`data-testid="app-sidebar"`).
-  - **Início** → `/`
-  - **Histórico** → `/historico`
-  - **Perfil** → `/perfil`
-  - **Sair** no rodapé da sidebar (`data-testid="logout-button"`) — zera o JWT em memória e o estado de consentimento, e a rota `/` volta a mostrar o login. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido).
+  - **Início** → `/app`
+  - **Histórico** → `/app/historico`
+  - **Perfil** → `/app/perfil`
+  - **Sair** no rodapé da sidebar (`data-testid="logout-button"`) — zera o JWT em memória e o estado de consentimento, e a rota protegida manda para `/entrar`. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido).
 - **Celular (abaixo de `md`):** a sidebar fica oculta. A bottom nav fixa (`data-testid="app-bottom-nav"`) repete só os três destinos. **Sair** fica numa barra superior compacta e chama o mesmo `logout()`. O `<main>` reserva espaço com `padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px))` (classe `app-shell-main`) para a barra não cobrir o conteúdo. O viewport usa `viewport-fit=cover`.
 
 Não há `localStorage` nem `sessionStorage` para o token. O shell não grava storage e não chama a API. Recarregar a página desloga.
 
-### Início e análise de vaga (`/`, com JWT)
+### Início e análise de vaga (`/app`, com JWT)
 
 Quatro blocos, nesta ordem:
 
@@ -88,7 +107,7 @@ Resultados possíveis no próprio painel (não há outra página):
 - **Cota mensal esgotada** — HTTP 402. Sem descontar cota no navegador. `SUBSCRIPTION_REQUIRED` com plano que não é Essencial mostra **Assinar Essencial R$19,90/mês**. `QUOTA_EXCEEDED`, ou plano já Essencial, não mostra o botão.
 - **Não foi possível analisar** — inclui HTTP 400 (por exemplo embeddings ausentes). Não é tratado como sucesso.
 
-### Histórico (`/historico`)
+### Histórico (`/app/historico`)
 
 Estados: **Carregando histórico...** → lista, **Nenhum retorno salvo ainda.** ou erro com **Tentar novamente**.
 
@@ -107,7 +126,7 @@ Cada card mostra, quando o item traz o campo:
 
 A tela pede a primeira página com `limit=20` e `offset=0`. Não há controle de paginação.
 
-### Perfil (`/perfil`)
+### Perfil (`/app/perfil`)
 
 Três seções:
 
@@ -163,10 +182,10 @@ Analisar:
 
 ### c) Histórico
 
-1. Com JWT e sem gate, abrir `/historico` dispara `GET /users/me/gap-history?limit=20&offset=0`.
+1. Com JWT e sem gate, abrir `/app/historico` dispara `GET /users/me/gap-history?limit=20&offset=0`. `/historico` só redireciona para essa rota.
 2. **200** `{ items, limit, offset }` com itens: lista das análises desta conta (título, empresa, score, data e o restante descrito na tela).
 3. **200** com `items: []`, ou lista nua vazia: estado vazio. Itens sem `id` (ou `insight_id`) são ignorados.
-4. Sem JWT a rota nem monta o painel: redirect para `/`, sem Bearer vazio.
+4. Sem JWT a rota nem monta o painel: redirect para `/entrar` e, depois do login, volta a `/app/historico`. Sem Bearer vazio.
 5. **401**: “Sessao expirada. Entre novamente para ver o historico.” O painel não chama logout sozinho; **Sair** (ou F5) limpa a sessão.
 6. **403** de consentimento abre o ConsentGate. Outro erro (5xx, rede) mostra texto fixo, sem path, URL, token ou stack, e **Tentar novamente**.
 7. **Baixar CV** chama `GET /users/me/files/{cv_file_name}` com Bearer, cria um Blob e revoga a object URL. Sem link direto e sem token na query. Sem `cv_file_name` (null, vazio ou ausente) não há botão e a API de arquivo não é chamada.
@@ -176,7 +195,7 @@ Analisar:
 
 ### d) Carta de apresentação
 
-Na lista do histórico, cada análise tem **Gerar carta**. O texto da carta vive só no estado do componente: não vai para `localStorage` nem `sessionStorage`. Sair de `/historico` ou recarregar apaga a carta. A lista de análises continua no servidor.
+Na lista do histórico, cada análise tem **Gerar carta**. O texto da carta vive só no estado do componente: não vai para `localStorage` nem `sessionStorage`. Sair de `/app/historico` ou recarregar apaga a carta. A lista de análises continua no servidor.
 
 1. `company_name` vazio, ausente ou só espaços: botão desabilitado, dica “Esta analise nao tem empresa. A carta so pode ser gerada quando a vaga informa o nome da empresa.”, e **nenhuma** chamada.
 2. Com empresa, **Gerar carta** envia `POST /users/me/cover-letter` com `{ "empresa": "<company_name>" }` e Bearer. Enquanto a requisição corre o botão fica desabilitado (sem segundo POST).
@@ -185,21 +204,21 @@ Na lista do histórico, cada análise tem **Gerar carta**. O texto da carta vive
 5. **Baixar PDF** usa `pdf_url` só para achar o nome do arquivo e chama `GET /users/me/files/{nome}` com Bearer. O download é um Blob (`application/pdf`); a object URL é revogada. Sem link direto e sem token na query. O arquivo precisa começar com `%PDF`.
 6. **500** ou rede: “Nao foi possivel gerar a carta.” (ou a variante sanitizada), com **Tentar de novo**. A lista do histórico permanece.
 7. **402** ou **429**: aviso “Limite de uso” / “Limite de uso atingido. Nao e possivel gerar a carta agora.” Sem botão nem link de pagamento. A fatia registra que esta rota não consome cota hoje; a UI trata esses status por defesa.
-8. Sem JWT, `/historico` nem abre. **401** na carta ou no PDF desloga e volta ao login em `/`. **403** de termos/privacidade abre o ConsentGate.
+8. Sem JWT, `/app/historico` nem abre. **401** na carta ou no PDF desloga e volta ao login em `/entrar`. **403** de termos/privacidade abre o ConsentGate.
 
 Ver a nota no final sobre empresa gravada como `Nao informado`.
 
 ### e) Perfil leve
 
-1. Abrir `/perfil` com JWT e sem gate chama `GET /users/me`.
+1. Abrir `/app/perfil` com JWT e sem gate chama `GET /users/me`. `/perfil` só redireciona para essa rota.
 2. A tela mostra `display_name`, `email`, `plan` e `subscription_status` quando presentes. Não mostra cota.
 3. **Política de privacidade** chama `GET /legal/privacy?version=1.0` e mostra o markdown no painel.
-4. **Sair** (shell ou o botão do perfil) limpa o JWT em memória e volta a `/` no estado de login. Nada é escrito em `localStorage` ou `sessionStorage`.
-5. Sem JWT, redirect para `/` antes do GET. **401** na carga do perfil mostra “Sessao expirada. Entre novamente para ver o perfil.” **403** de consentimento abre o gate.
+4. **Sair** (shell ou o botão do perfil) limpa o JWT em memória e volta a `/entrar` no estado de login. Nada é escrito em `localStorage` ou `sessionStorage`.
+5. Sem JWT, redirect para `/entrar` antes do GET e, depois do login, volta a `/app/perfil`. **401** na carga do perfil mostra “Sessao expirada. Entre novamente para ver o perfil.” **403** de consentimento abre o gate.
 
 ### f) LGPD (na mesma tela Perfil)
 
-Os botões só agem com JWT e gate fechado. Sem sessão, `/perfil` redireciona e estes endpoints não são chamados.
+Os botões só agem com JWT e gate fechado. Sem sessão, `/app/perfil` redireciona para `/entrar` e estes endpoints não são chamados.
 
 **Exportar meus dados**
 
@@ -213,7 +232,7 @@ Os botões só agem com JWT e gate fechado. Sem sessão, `/perfil` redireciona e
 
 1. Abre o diálogo “Excluir conta”. Cancelar, Escape, campo vazio ou qualquer texto que não seja exatamente `DELETE` **não** chama a API. Texto diferente mostra “A confirmacao nao confere. A exclusao nao foi enviada.”
 2. Só com `DELETE` exato o cliente envia `DELETE /users/me` e body `{ "confirm": "DELETE" }`.
-3. Sucesso exige `deleted: true` (a resposta também traz `user_id` e `deleted_at`). Aí o JWT é limpo e `/` mostra “Sua conta foi excluida.” Sem `deleted: true`, a sessão permanece e a tela mostra erro.
+3. Sucesso exige `deleted: true` (a resposta também traz `user_id` e `deleted_at`). Aí o JWT é limpo e `/entrar` mostra “Sua conta foi excluida.” Sem `deleted: true`, a sessão permanece e a tela mostra erro.
 4. **401** também volta ao login, sem essa mensagem.
 5. Este DELETE não passa pela checagem de termos no backend. A UI de perfil fica atrás do ConsentGate, então o botão não é clicável enquanto o reaceite está aberto.
 
@@ -223,21 +242,21 @@ O preço R$ 19,90 é só o texto do botão. O cliente não envia `price_id`, val
 
 **Começar o checkout**
 
-1. Free em `/perfil` ou no 402 `SUBSCRIPTION_REQUIRED` clica **Assinar Essencial R$19,90/mês**.
+1. Free em `/app/perfil` ou no 402 `SUBSCRIPTION_REQUIRED` (em `/app`) clica **Assinar Essencial R$19,90/mês**. A landing não inicia esse POST.
 2. `POST /billing/checkout` com Bearer e sem body. O botão desabilita até a resposta (sem segundo POST).
 3. 200 `{ checkout_url, session_id }`. `session_id` é descartado. `window.location.assign` só aceita `https://checkout.stripe.com/...` com porta vazia. Outra URL mostra "Não foi possível iniciar a assinatura agora. Tente novamente em instantes."
 4. 401 volta ao login. 403 `TERMS_OUTDATED` / `PRIVACY_OUTDATED` abre o ConsentGate. 404, 500, 502 e 503 usam a mesma mensagem fixa, sem detalhe do servidor.
 
-**Volta na raiz**
+**Volta do Checkout**
 
-O Stripe devolve o browser em `/?billing=success&session_id=cs_...` ou `/?billing=cancel`. Isso só acontece se a infra apontar `STRIPE_CHECKOUT_SUCCESS_URL` e `STRIPE_CHECKOUT_CANCEL_URL` para o web. `billing=success` não prova que o pagamento ocorreu: o link pode ser aberto à mão e a confirmação é assíncrona. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
+O destino recomendado é `/app?billing=success&session_id={CHECKOUT_SESSION_ID}` ou `/app?billing=cancel`. Se a infra ainda apontar a raiz, `/?billing=...` faz `replace` para `/app` preservando a query. O mesmo fluxo vale se a volta cair em `/entrar?billing=...`. `billing=success` não prova que o pagamento ocorreu: o link pode ser aberto à mão e a confirmação é assíncrona. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
 
-O JWT não sobrevive a esse carregamento. Sem sessão:
+O JWT não sobrevive a esse carregamento. Sem sessão o app manda para `/entrar` e, depois do login, volta a `/app`:
 
 - sucesso: login com "Se você concluiu o pagamento, entre para confirmar sua assinatura."
 - cancelamento: login sem aviso de erro
 
-Depois do login a Home segue o fluxo. Cancelamento mostra "Pagamento cancelado. Você continua no plano Free." e não chama `GET /billing/me` para promover plano.
+Depois do login a Home (`/app`) segue o fluxo. Cancelamento mostra "Pagamento cancelado. Você continua no plano Free." e não chama `GET /billing/me` para promover plano.
 
 **Confirmar o pagamento**
 
@@ -255,7 +274,7 @@ Depois do login a Home segue o fluxo. Cancelamento mostra "Pagamento cancelado. 
 - **JWT só em memória.** Logout, exclusão de conta e F5 zeram a sessão. O store não usa `localStorage` nem `sessionStorage`.
 - **Erros sem path, URL ou token** nas telas de histórico, perfil, carta e LGPD: mensagem que vazaria path (`/users/me`, `/auth/`, `/legal/`, `cover-letter`, `gap-history`), URL, `Bearer`, `access_token` ou stack é trocada por texto fixo em pt-BR. O ConsentGate continua a ver o 403 de aceite. No cliente genérico (login, processar, upload), a mensagem pode ser o `detail`/`message` da API; falha de rede inclui a base configurada.
 - **HTTPS em produção.** No build, `http://` redireciona para `https://` (exceto localhost e `127.0.0.1`) e o HTML ganha CSP `upgrade-insecure-requests`. `npm run dev` em localhost pode ficar em `http://`.
-- **PWA.** Manifest `Meu Agente de Emprego` / short name `MAE`, `lang: pt-BR`, `display: standalone`, `start_url: /`. O service worker registra só no build de produção (`registerType: autoUpdate`). No dev o plugin de PWA fica desligado; no e2e o service worker é bloqueado.
+- **PWA.** Manifest `Meu Agente de Emprego` / short name `MAE`, `lang: pt-BR`, `display: standalone`, `start_url: /app`, `scope: /`. O `navigateFallback` é `index.html`, então `/`, `/entrar` e `/app/*` abrem o SPA. O rewrite `/*` → `/index.html` do Render já cobre essas rotas; o Blueprint não muda. O service worker registra só no build de produção (`registerType: autoUpdate`). No dev o plugin de PWA fica desligado; no e2e o service worker é bloqueado.
 
 ## Fora de escopo atual
 

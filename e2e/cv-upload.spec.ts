@@ -68,7 +68,7 @@ test('1. Happy PDF: upload + rebuild OK → pronto → Analisar enabled', async 
     }
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('cv-panel')).toHaveAttribute(
     'data-cv-state',
@@ -120,7 +120,7 @@ test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar dis
     body: { detail: 'nao deveria rebuildar' },
   }));
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('cv-file').setInputFiles(mockedDocxCv);
   await page.getByTestId('cv-submit').click();
@@ -180,7 +180,7 @@ test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar 
     };
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('cv-file').setInputFiles(mockedPdfCv);
   await page.getByTestId('cv-submit').click();
@@ -212,7 +212,7 @@ test('4. Already ready: status has_cv+has_embeddings → pronto sem reupload', a
   });
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   await expect(page.getByTestId('cv-ready')).toContainText('Pronto');
@@ -241,7 +241,7 @@ test('5. No CV / has_embeddings false: texto preenchido → Analisar disabled', 
     has_cv: false,
     has_embeddings: false,
   });
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   await expect(page.getByTestId('cv-missing')).toBeVisible();
