@@ -125,7 +125,7 @@ async function login(user: ReturnType<typeof userEvent.setup>) {
 
 function renderApp(fetchImpl: Harness['fetchImpl']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={['/entrar']}>
       <AuthProvider fetchImpl={fetchImpl}>
         <App />
       </AuthProvider>

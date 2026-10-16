@@ -59,7 +59,7 @@ test('baixa o CV com Bearer e esconde o CTA quando nao ha arquivo', async ({
   }));
   await mockUserFile(page, { body: mockedPdfBytes });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
 
@@ -127,7 +127,7 @@ test('erro ao baixar o CV fica generico e a carta continua disponivel', async ({
     });
   });
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-historico').click();
   await page.getByTestId('history-cv-download').click();

@@ -118,7 +118,7 @@ function LocationProbe() {
 
 function renderApp(
   fetchImpl: Harness['fetchImpl'],
-  initialPath = '/',
+  initialPath = '/entrar',
 ) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
@@ -314,7 +314,7 @@ describe('Feature: Historico de analises na web', () => {
   it('sessao ausente — sem JWT → redirect login e API NAO chamada com token vazado', () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/historico');
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-list')).not.toBeInTheDocument();

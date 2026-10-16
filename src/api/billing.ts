@@ -3,7 +3,8 @@
  *
  * POST /billing/checkout (sem body) → { checkout_url, session_id }.
  * GET  /billing/me → { plan, subscription_status, used, limit, period, remaining }.
- * Volta do Checkout: /?billing=success&session_id=cs_... ou /?billing=cancel.
+ * Volta do Checkout: /app?billing=success&session_id=cs_... ou /app?billing=cancel.
+ * Compatibilidade: /?billing=... é encaminhado para /app com a mesma query.
  *
  * session_id é descartado. Não entra em estado, storage, log nem na URL depois da leitura.
  * O preço R$ 19,90 é texto de UI; este módulo não envia price_id nem valor.

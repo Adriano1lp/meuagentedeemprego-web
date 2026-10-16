@@ -181,7 +181,7 @@ function LocationProbe() {
   return <div data-testid="location-pathname">{location.pathname}</div>;
 }
 
-function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
+function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/entrar') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <AuthProvider fetchImpl={fetchImpl}>
@@ -301,7 +301,7 @@ describe('Feature: Perfil leve na web', () => {
     await waitFor(() => {
       expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('profile-name')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
@@ -315,7 +315,7 @@ describe('Feature: Perfil leve na web', () => {
   it('C5 sem JWT redireciona ao login e nao chama export nem delete', () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/perfil');
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('lgpd-account-section')).not.toBeInTheDocument();
@@ -569,7 +569,7 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.getByTestId('delete-account-mismatch')).toBeInTheDocument();
     expect(harness.deleteCalls).toEqual([]);
     expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/app/perfil');
 
     await user.clear(screen.getByTestId('delete-account-confirm-input'));
     await user.type(screen.getByTestId('delete-account-confirm-input'), 'DELETE ');
@@ -597,7 +597,7 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
     expect(harness.deleteCalls).toEqual([]);
     expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/app/perfil');
     expectTokenOnlyInMemory();
   });
 
@@ -621,7 +621,7 @@ describe('Feature: Perfil leve na web', () => {
         authorization: 'Bearer jwt-login',
       },
     ]);
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.getByTestId('account-deleted-notice')).toHaveTextContent(
       'Sua conta foi excluida.',
     );
@@ -657,7 +657,7 @@ describe('Feature: Perfil leve na web', () => {
     expect(errorText).not.toContain('DELETE');
     expect(errorText).not.toContain('jwt-abc');
     expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/app/perfil');
     expectTokenOnlyInMemory();
   });
 
@@ -674,7 +674,7 @@ describe('Feature: Perfil leve na web', () => {
     await waitFor(() => {
       expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.queryByTestId('account-deleted-notice')).not.toBeInTheDocument();
     expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
@@ -700,7 +700,7 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.getByTestId('export-data-retry')).toBeInTheDocument();
     const errorText = screen.getByTestId('export-data-error').textContent ?? '';
     expect(errorText).not.toContain('/users/me');
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/app/perfil');
   });
 
   it('403 OUTDATED na exportacao reusa o ConsentGate', async () => {
@@ -730,7 +730,7 @@ describe('Feature: Perfil leve na web', () => {
       'Documentos legais atualizados',
     );
     expect(screen.queryByTestId('export-data-error')).not.toBeInTheDocument();
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/perfil');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/app/perfil');
     expectTokenOnlyInMemory();
   });
 
@@ -749,7 +749,7 @@ describe('Feature: Perfil leve na web', () => {
     await waitFor(() => {
       expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.queryByTestId('account-deleted-notice')).not.toBeInTheDocument();
     expect(screen.queryByTestId('delete-account-error')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();

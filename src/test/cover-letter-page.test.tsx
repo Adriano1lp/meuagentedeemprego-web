@@ -157,7 +157,7 @@ function LocationProbe() {
   return <div data-testid="location-pathname">{location.pathname}</div>;
 }
 
-function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/') {
+function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/entrar') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <AuthProvider fetchImpl={fetchImpl}>
@@ -515,7 +515,7 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
   it('C7 sem auth redireciona para o login e nao chama a carta', () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/historico');
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('cover-letter-generate')).not.toBeInTheDocument();
@@ -547,7 +547,7 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
     await user.click(screen.getByTestId('cover-letter-generate'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/');
+      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     });
     expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('cover-letter-error')).not.toBeInTheDocument();

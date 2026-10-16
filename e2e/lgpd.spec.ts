@@ -21,7 +21,7 @@ async function openProfile(page: import('@playwright/test').Page) {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page);
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
   await page.getByTestId('nav-perfil').click();
   await expect(page.getByTestId('lgpd-account-section')).toBeVisible();
@@ -175,7 +175,7 @@ test('C4 confirmar DELETE encerra a sessao', async ({ page }) => {
   await expect(page.getByTestId('account-deleted-notice')).toHaveText(
     'Sua conta foi excluida.',
   );
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
   await expect(page.getByTestId('delete-account-dialog')).toHaveCount(0);
   expect(deleteHits).toEqual([
@@ -203,7 +203,7 @@ test('C5 sem JWT redireciona ao login e nao chama export nem delete', async ({ p
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('lgpd-account-section')).toHaveCount(0);
   await expect(page.getByTestId('export-data')).toHaveCount(0);
@@ -222,7 +222,7 @@ test('401 na exportacao volta ao login', async ({ page }) => {
   await page.getByTestId('export-data').click();
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('account-deleted-notice')).toHaveCount(0);
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/?$/);
+  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
 });
 
 test('403 OUTDATED na exportacao abre o reaceite', async ({ page }) => {

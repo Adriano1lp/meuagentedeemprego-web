@@ -98,12 +98,21 @@ for (const width of widths) {
     }));
 
     await page.goto('/');
-    await expect(page.getByTestId('auth-tab-login')).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toBeHidden();
-    await expect(page.getByTestId('app-bottom-nav')).toBeHidden();
+    await expect(page.getByTestId('landing-page')).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveCount(0);
+    await expect(page.getByTestId('app-bottom-nav')).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     await page.screenshot({
-      path: testInfo.outputPath(`login-${width}.png`),
+      path: testInfo.outputPath(`landing-${width}.png`),
+    });
+
+    await page.goto('/entrar');
+    await expect(page.getByTestId('auth-tab-login')).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveCount(0);
+    await expect(page.getByTestId('app-bottom-nav')).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({
+      path: testInfo.outputPath(`entrar-${width}.png`),
     });
 
     await page.getByTestId('auth-tab-signup').click();
@@ -112,6 +121,7 @@ for (const width of widths) {
     await page.getByTestId('auth-tab-login').click();
 
     await login(page);
+    await expect(page).toHaveURL(/\/app$/);
     await expectShell(page, 'Inicio');
     await expectNoHorizontalScroll(page);
     await page.screenshot({
@@ -151,7 +161,7 @@ test('sidebar ocupa a viewport em 1280px na pagina curta e depois da rolagem', a
   await mockCurrentUser(page);
   await mockGapHistory(page, () => ({ body: [] }));
 
-  await page.goto('/');
+  await page.goto('/entrar');
   await login(page);
 
   const scrolls = await page.evaluate(
