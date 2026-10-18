@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError } from '../api/client';
+import { formatCvUpdatedAt } from '../api/cv';
 import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
@@ -72,12 +73,12 @@ export function CurriculoPage() {
 
   return (
     <AppShell>
-      <Card data-testid="curriculo-page">
+      <Card data-testid="curriculo-page" className="min-w-0 overflow-hidden">
         <CardHeader>
           <CardTitle>Meu currículo</CardTitle>
           <CardDescription>PDF ou TXT.</CardDescription>
         </CardHeader>
-        <CardContent className="pt-2">
+        <CardContent className="min-w-0 pt-2">
           {loading && !status ? (
             <div data-testid="curriculo-skeleton" role="status" aria-live="polite" className="grid gap-3">
               <span className="sr-only">Carregando currículo</span>
@@ -103,18 +104,25 @@ export function CurriculoPage() {
           ) : null}
 
           {!error && hasCv && !replacing ? (
-            <div className="grid gap-3">
+            <div className="grid min-w-0 gap-3">
               <p data-testid="cv-sent" className="text-sm font-medium">
                 Currículo enviado
               </p>
               {sessionFile?.filename ? (
-                <p data-testid="cv-saved-filename" className="break-all text-sm">
+                <p
+                  data-testid="cv-saved-filename"
+                  title={sessionFile.filename}
+                  className="min-w-0 break-all text-sm"
+                >
                   Currículo atualizado. Nome do arquivo: {sessionFile.filename}
                 </p>
               ) : null}
-              {sessionFile?.updatedAt ? (
-                <p data-testid="cv-saved-updated-at" className="break-all text-sm text-muted-foreground">
-                  {sessionFile.updatedAt}
+              {formatCvUpdatedAt(sessionFile?.updatedAt) ? (
+                <p
+                  data-testid="cv-saved-updated-at"
+                  className="min-w-0 break-all text-sm text-muted-foreground"
+                >
+                  {formatCvUpdatedAt(sessionFile?.updatedAt)}
                 </p>
               ) : null}
               <Button

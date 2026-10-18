@@ -26,8 +26,12 @@ import {
   safeCoverLetterErrorMessage,
 } from './coverLetter';
 import {
+  CV_UNAVAILABLE,
+  cvFailureMessage,
+  mentionsRawUnavailable,
   parseRebuildEmbeddingsResponse,
   parseUploadCvResponse,
+  type CvOperation,
 } from './cv';
 import {
   DELETE_ACCOUNT_BODY,
@@ -122,7 +126,7 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
-function errorMessage(status: number, body: unknown): string {
+function extractedErrorText(body: unknown): string | null {
   if (body && typeof body === 'object') {
     const detail = (body as { detail?: unknown }).detail;
     if (typeof detail === 'string' && detail.trim()) {
@@ -138,6 +142,17 @@ function errorMessage(status: number, body: unknown): string {
   if (typeof body === 'string' && body.trim()) {
     return body;
   }
+  return null;
+}
+
+function errorMessage(status: number, body: unknown): string {
+  const extracted = extractedErrorText(body);
+  if (extracted && mentionsRawUnavailable(extracted)) {
+    return CV_UNAVAILABLE;
+  }
+  if (extracted) {
+    return extracted;
+  }
   if (status === 402) {
     return 'Cota mensal esgotada.';
   }
@@ -148,6 +163,17 @@ function errorMessage(status: number, body: unknown): string {
     return 'Não foi possível concluir agora.';
   }
   return 'Não foi possível concluir agora.';
+}
+
+function rethrowCvFailure(operation: CvOperation, error: unknown): never {
+  if (error instanceof ApiError) {
+    const message = cvFailureMessage(operation, error.status);
+    if (error.outdated) {
+      throw new ApiError(error.status, error.body, message);
+    }
+    throw new ApiError(error.status, null, message);
+  }
+  throw new ApiError(0, null, CV_UNAVAILABLE);
 }
 
 export type RegisterInput = {
@@ -394,29 +420,35 @@ export function createApiClient(options: ApiClientOptions) {
     async uploadCv(file: File): Promise<UploadCvResponse> {
       const form = new FormData();
       form.append('file', file, file.name);
-      const body = await request('/users/me/upload-cv', {
-        method: 'POST',
-        body: form,
-      });
+      let body: unknown;
+      try {
+        body = await request('/users/me/upload-cv', {
+          method: 'POST',
+          body: form,
+        });
+      } catch (error) {
+        rethrowCvFailure('upload', error);
+      }
       try {
         return parseUploadCvResponse(body);
       } catch {
-        throw new ApiError(200, body, 'Não foi possível ler o arquivo enviado.');
+        throw new ApiError(200, null, CV_UNAVAILABLE);
       }
     },
 
     async rebuildEmbeddings(): Promise<RebuildEmbeddingsResponse> {
-      const body = await request('/users/me/rebuild-embeddings', {
-        method: 'POST',
-      });
+      let body: unknown;
+      try {
+        body = await request('/users/me/rebuild-embeddings', {
+          method: 'POST',
+        });
+      } catch (error) {
+        rethrowCvFailure('rebuild', error);
+      }
       try {
         return parseRebuildEmbeddingsResponse(body);
       } catch {
-        throw new ApiError(
-          200,
-          body,
-          'Não foi possível preparar o currículo para análise.',
-        );
+        throw new ApiError(200, null, CV_UNAVAILABLE);
       }
     },
 

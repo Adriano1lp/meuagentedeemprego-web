@@ -1,6 +1,11 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 
-import { safeCvMessage } from '../api/cv';
+import {
+  CV_NOT_READY,
+  cvFailureMessage,
+  formatCvUpdatedAt,
+  type CvOperation,
+} from '../api/cv';
 import { ApiError } from '../api/client';
 import type { UploadCvResponse } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
@@ -10,9 +15,6 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 
 type CvPhase = 'idle' | 'processando' | 'sucesso' | 'erro';
-
-const UPLOAD_FAILED = 'Não foi possível enviar o currículo.';
-const REBUILD_FAILED = 'Não foi possível preparar o currículo para análise.';
 
 export type CvSessionFile = {
   filename?: string;
@@ -69,6 +71,16 @@ export function CvUploadPanel({
     }
   }
 
+  function showFailure(operation: CvOperation, cause: unknown) {
+    if (cause instanceof ApiError && cause.outdated) {
+      return;
+    }
+    const status = cause instanceof ApiError ? cause.status : 0;
+    setRetryMode(operation === 'rebuild' && status === 400 ? 'upload' : operation);
+    setPhase('erro');
+    setError(cvFailureMessage(operation, status));
+  }
+
   async function runRebuild(meta: CvSessionFile | null) {
     setPhase('processando');
     setError(null);
@@ -77,13 +89,7 @@ export function CvUploadPanel({
       await api.rebuildEmbeddings();
       await finishReady(meta ?? held ?? {});
     } catch (cause) {
-      if (cause instanceof ApiError && cause.outdated) {
-        return;
-      }
-      const raw = cause instanceof ApiError ? cause.message : REBUILD_FAILED;
-      setRetryMode('rebuild');
-      setPhase('erro');
-      setError(safeCvMessage(raw, REBUILD_FAILED));
+      showFailure('rebuild', cause);
     }
   }
 
@@ -95,26 +101,16 @@ export function CvUploadPanel({
     try {
       const result = await api.uploadCv(selected);
       const meta = sessionFrom(result);
-      if (result.ready_for_analysis === false) {
+      if (result.ready_for_analysis === false || result.has_embeddings === false) {
         setHeld(meta);
         setRetryMode('rebuild');
         setPhase('erro');
-        setError(
-          result.reason
-            ? safeCvMessage(result.reason, REBUILD_FAILED)
-            : REBUILD_FAILED,
-        );
+        setError(CV_NOT_READY);
         return;
       }
       await finishReady(meta);
     } catch (cause) {
-      if (cause instanceof ApiError && cause.outdated) {
-        return;
-      }
-      const raw = cause instanceof ApiError ? cause.message : UPLOAD_FAILED;
-      setRetryMode('upload');
-      setPhase('erro');
-      setError(safeCvMessage(raw, UPLOAD_FAILED));
+      showFailure('upload', cause);
     }
   }
 
@@ -144,21 +140,27 @@ export function CvUploadPanel({
   }
 
   return (
-    <div data-testid="cv-panel" data-cv-state={phase}>
-      <form onSubmit={(event) => void handleSubmit(event)}>
+    <div data-testid="cv-panel" data-cv-state={phase} className="min-w-0">
+      <form className="min-w-0" onSubmit={(event) => void handleSubmit(event)}>
         <Label className="block" htmlFor="cv-file">
           Arquivo do currículo (PDF ou TXT)
         </Label>
-        <Input
-          id="cv-file"
-          data-testid="cv-file"
-          type="file"
-          accept=".pdf,.txt,application/pdf,text/plain"
-          disabled={!enabled || busy}
-          onChange={handleFileChange}
-          className="mt-1.5 h-auto max-w-full py-2"
-        />
-        <p data-testid="cv-filename" className="mt-2 break-all text-sm text-muted-foreground">
+        <div className="mt-1.5 min-w-0 max-w-full overflow-hidden">
+          <Input
+            id="cv-file"
+            data-testid="cv-file"
+            type="file"
+            accept=".pdf,.txt,application/pdf,text/plain"
+            disabled={!enabled || busy}
+            onChange={handleFileChange}
+            className="h-auto max-w-full overflow-hidden py-2"
+          />
+        </div>
+        <p
+          data-testid="cv-filename"
+          title={file?.name}
+          className="mt-2 min-w-0 break-all text-sm text-muted-foreground"
+        >
           {file ? file.name : 'Nenhum arquivo selecionado ainda.'}
         </p>
         <Button
@@ -184,17 +186,21 @@ export function CvUploadPanel({
         </p>
       ) : null}
 
-      {phase === 'sucesso' && (held?.filename || held?.updatedAt) ? (
-        <Alert data-testid="cv-success" role="status" variant="success" className="mt-4">
+      {phase === 'sucesso' && (held?.filename || formatCvUpdatedAt(held?.updatedAt)) ? (
+        <Alert data-testid="cv-success" role="status" variant="success" className="mt-4 min-w-0">
           <AlertDescription>
-            {held.filename ? (
-              <p data-testid="cv-saved-filename" className="break-all font-medium">
+            {held?.filename ? (
+              <p
+                data-testid="cv-saved-filename"
+                title={held.filename}
+                className="min-w-0 break-all font-medium"
+              >
                 Currículo atualizado. Nome do arquivo: {held.filename}
               </p>
             ) : null}
-            {held.updatedAt ? (
-              <p data-testid="cv-saved-updated-at" className="mt-1 break-all">
-                {held.updatedAt}
+            {formatCvUpdatedAt(held?.updatedAt) ? (
+              <p data-testid="cv-saved-updated-at" className="mt-1 min-w-0 break-all">
+                {formatCvUpdatedAt(held?.updatedAt)}
               </p>
             ) : null}
           </AlertDescription>

@@ -182,7 +182,7 @@ describe('troca de curriculo', () => {
       );
     });
     expect(screen.getByTestId('cv-saved-updated-at')).toHaveTextContent(
-      '2026-11-02T15:04:00Z',
+      '02/11/2026 às 12h04',
     );
     expect(screen.getByTestId('cv-sent')).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/object_key|original_file|\/segredo\//);
@@ -260,7 +260,9 @@ describe('troca de curriculo', () => {
     await user.click(screen.getByTestId('cv-submit'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('cv-error')).toHaveTextContent('Formato de arquivo invalido');
+      expect(screen.getByTestId('cv-error')).toHaveTextContent(
+        'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
+      );
     });
     expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'erro');
     expect(harness.rebuildCalls).toBe(0);

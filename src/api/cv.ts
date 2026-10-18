@@ -48,23 +48,74 @@ export function parseUploadCvResponse(payload: unknown): UploadCvResponse {
   };
 }
 
-/** Troca mensagem que vazaria path, URL ou token por um texto fixo. */
-export function safeCvMessage(message: string, fallback: string): string {
-  const lower = message.toLowerCase();
-  if (
-    /https?:\/\//i.test(message) ||
-    message.includes('/') ||
-    message.includes('\\') ||
-    lower.includes('bearer') ||
-    lower.includes('token') ||
-    lower.includes('object_key') ||
-    lower.includes('cv_file') ||
-    lower.includes('original_file')
-  ) {
-    return fallback;
+export const CV_NOT_READY =
+  'Não conseguimos processar seu currículo. Tente de novo.';
+export const CV_UPLOAD_BAD_REQUEST =
+  'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.';
+export const CV_REBUILD_BAD_REQUEST =
+  'Não conseguimos processar seu currículo. Envie o arquivo de novo.';
+export const CV_TOO_LARGE = 'Arquivo muito grande. Envie um arquivo menor.';
+export const CV_SESSION = 'Sessão expirada. Entre novamente para continuar.';
+export const CV_UNAVAILABLE =
+  'Serviço indisponível no momento. Tente de novo em instantes.';
+
+export type CvOperation = 'upload' | 'rebuild';
+
+/** Texto fixo por status. Nunca devolve detail, reason, statusText nem o corpo. */
+export function cvFailureMessage(operation: CvOperation, status: number): string {
+  if (status === 400) {
+    return operation === 'upload' ? CV_UPLOAD_BAD_REQUEST : CV_REBUILD_BAD_REQUEST;
   }
-  const trimmed = message.trim();
-  return trimmed || fallback;
+  if (status === 413) {
+    return CV_TOO_LARGE;
+  }
+  if (status === 401 || status === 403) {
+    return CV_SESSION;
+  }
+  return CV_UNAVAILABLE;
+}
+
+/** '503 Servico indisponivel' e variantes sem acento ou com código HTTP visível. */
+export function mentionsRawUnavailable(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed === CV_UNAVAILABLE) {
+    return false;
+  }
+  if (/servico\s+indisponivel/i.test(trimmed)) {
+    return true;
+  }
+  return /^\d{3}\b[\s.:_-]*servi[cç]o\s+indispon[ií]vel/i.test(trimmed);
+}
+
+/** pt-BR em America/Sao_Paulo, ex. 18/10/2026 às 15h40. Data inválida some. */
+export function formatCvUpdatedAt(value: string | null | undefined): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const pick = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '';
+  const day = pick('day');
+  const month = pick('month');
+  const year = pick('year');
+  const hour = pick('hour');
+  const minute = pick('minute');
+  if (!day || !month || !year || hour === '' || minute === '') {
+    return null;
+  }
+  return `${day}/${month}/${year} às ${hour}h${minute}`;
 }
 
 export function parseRebuildEmbeddingsResponse(

@@ -242,7 +242,7 @@ describe('BDD W-CV', () => {
     await user.click(screen.getByTestId('cv-submit'));
     await waitFor(() => {
       expect(screen.getByTestId('cv-error')).toHaveTextContent(
-        'Formato de arquivo invalido',
+        'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
       );
     });
     expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'erro');
@@ -253,10 +253,11 @@ describe('BDD W-CV', () => {
     chooseFile(emptyPdf());
     await user.click(screen.getByTestId('cv-submit'));
     await waitFor(() => {
-      expect(screen.getByTestId('cv-error')).toHaveTextContent(
-        'Arquivo enviado esta vazio',
-      );
+      expect(harness.uploadCalls).toBe(2);
     });
+    expect(screen.getByTestId('cv-error')).toHaveTextContent(
+      'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
+    );
     expect(screen.getByTestId('processar-submit')).toBeDisabled();
     expect(screen.queryByTestId('cv-ready')).not.toBeInTheDocument();
   });
@@ -290,7 +291,7 @@ describe('BDD W-CV', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('cv-error')).toHaveTextContent(
-        'Nao foi possivel gerar chunks validos',
+        'Não conseguimos processar seu currículo. Tente de novo.',
       );
     });
     expect(screen.getByTestId('cv-retry')).toBeInTheDocument();

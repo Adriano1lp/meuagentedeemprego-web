@@ -5,6 +5,7 @@ import {
   mockBillingMe,
   mockLegalRoutes,
   mockedStatus,
+  mockUploadCv,
   mockUserStatus,
 } from './helpers';
 
@@ -230,6 +231,52 @@ test('nav mobile tem 4 itens e /app/curriculo exige sessao', async ({ page }, te
   await expectNoHorizontalScroll(page);
   await page.screenshot({
     path: testInfo.outputPath('nav-curriculo-1280.png'),
+    fullPage: true,
+  });
+});
+
+test('nome longo do currículo em 360 não gera scroll horizontal', async ({ page }, testInfo) => {
+  const longName = `${'curriculo-profissional-sem-espaco'.repeat(12)}.pdf`;
+  await page.setViewportSize({ width: 360, height: 800 });
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockUserStatus(page, {
+    ...mockedStatus,
+    has_cv: true,
+    has_embeddings: true,
+  });
+  await mockUploadCv(page, () => ({
+    body: {
+      filename: longName,
+      updated_at: '2026-10-18T18:40:56Z',
+      has_cv: true,
+      has_embeddings: true,
+      ready_for_analysis: true,
+      reason: 'POST json main.py Request Entity',
+    },
+  }));
+
+  await login(page);
+  await navLink(page, 'Currículo').click();
+  await expect(page.getByTestId('curriculo-page')).toBeVisible();
+  await page.getByTestId('cv-replace').click();
+  await page.getByTestId('cv-file').setInputFiles({
+    name: longName,
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4'),
+  });
+  await expect(page.getByTestId('cv-filename')).toContainText(longName);
+  await expectNoHorizontalScroll(page);
+
+  await page.getByTestId('cv-submit').click();
+  await expect(page.getByTestId('cv-saved-filename')).toContainText(
+    `Currículo atualizado. Nome do arquivo: ${longName}`,
+  );
+  await expect(page.getByTestId('cv-saved-updated-at')).toHaveText('18/10/2026 às 15h40');
+  await expect(page.getByTestId('cv-error')).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({
+    path: testInfo.outputPath('curriculo-nome-longo-360.png'),
     fullPage: true,
   });
 });

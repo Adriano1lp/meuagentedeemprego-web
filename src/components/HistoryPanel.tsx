@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
+import { CV_UNAVAILABLE, mentionsRawUnavailable } from '../api/cv';
 import {
   formatHistoryDate,
   HISTORY_CV_DOWNLOAD_FAILED,
@@ -33,6 +34,9 @@ import {
 
 function visibleBlockedReason(reason: string | null | undefined): string {
   const trimmed = reason?.trim() ?? '';
+  if (mentionsRawUnavailable(trimmed)) {
+    return CV_UNAVAILABLE;
+  }
   const lower = trimmed.toLowerCase();
   if (
     !trimmed ||

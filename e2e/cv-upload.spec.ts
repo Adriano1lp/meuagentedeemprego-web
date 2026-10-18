@@ -66,6 +66,7 @@ test('1. Happy PDF: upload sincrono libera Analisar sem rebuild automatico', asy
 test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar disabled', async ({
   page,
 }) => {
+  let uploadHits = 0;
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockUserStatus(page, {
@@ -73,32 +74,39 @@ test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar dis
     has_cv: false,
     has_embeddings: false,
   });
-  await mockUploadCv(page, () => ({
-    status: 400,
-    body: {
-      detail: 'Formato de arquivo invalido. Envie um arquivo .txt ou .pdf',
-    },
-  }));
+  await mockUploadCv(page, () => {
+    uploadHits += 1;
+    return {
+      status: 400,
+      body: {
+        detail: 'Formato de arquivo invalido. Envie um arquivo .txt ou .pdf',
+      },
+    };
+  });
 
   await page.goto('/entrar');
   await login(page);
   await page.getByTestId('cv-file').setInputFiles(mockedDocxCv);
   await page.getByTestId('cv-submit').click();
   await expect(page.getByTestId('cv-error')).toContainText(
-    'Formato de arquivo invalido',
+    'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
   );
   await expect(page.getByTestId('cv-retry')).toBeVisible();
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
   await expect(page.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'erro');
 
-  await mockUploadCv(page, () => ({
-    status: 400,
-    body: { detail: 'Arquivo enviado esta vazio' },
-  }));
+  await mockUploadCv(page, () => {
+    uploadHits += 1;
+    return {
+      status: 400,
+      body: { detail: 'Arquivo enviado esta vazio' },
+    };
+  });
   await page.getByTestId('cv-file').setInputFiles(mockedEmptyCv);
   await page.getByTestId('cv-submit').click();
+  await expect.poll(() => uploadHits).toBe(2);
   await expect(page.getByTestId('cv-error')).toContainText(
-    'Arquivo enviado esta vazio',
+    'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
   );
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
   await expect(page.getByTestId('cv-success')).toHaveCount(0);
@@ -144,14 +152,14 @@ test('3. ready_for_analysis false: erro + retry de rebuild → Analisar disabled
   await page.getByTestId('cv-file').setInputFiles(mockedPdfCv);
   await page.getByTestId('cv-submit').click();
   await expect(page.getByTestId('cv-error')).toContainText(
-    'Não foi possível preparar o currículo para análise.',
+    'Não conseguimos processar seu currículo. Tente de novo.',
   );
   await expect(page.getByTestId('cv-retry')).toBeVisible();
   expect(uploadHits).toBe(1);
   expect(rebuildHits).toBe(0);
   await page.getByTestId('cv-retry').click();
   await expect(page.getByTestId('cv-error')).toContainText(
-    'Nao foi possivel gerar chunks validos',
+    'Não conseguimos processar seu currículo. Envie o arquivo de novo.',
   );
   expect(uploadHits).toBe(1);
   expect(rebuildHits).toBe(1);

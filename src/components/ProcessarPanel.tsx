@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { CV_UNAVAILABLE, mentionsRawUnavailable } from '../api/cv';
 import { SUBSCRIPTION_REQUIRED } from '../api/quota';
 import { ApiError } from '../api/client';
 import {
@@ -33,6 +34,9 @@ type ProcessarOutcome =
 const PROCESSAR_FAILED = 'Não foi possível analisar a vaga.';
 
 function publicProcessarMessage(message: string, fallback = PROCESSAR_FAILED): string {
+  if (mentionsRawUnavailable(message)) {
+    return CV_UNAVAILABLE;
+  }
   const lower = message.toLowerCase();
   if (
     /https?:\/\//i.test(message) ||
@@ -51,10 +55,11 @@ function publicProcessarMessage(message: string, fallback = PROCESSAR_FAILED): s
 
 function publicBlockedReason(reason: string | null | undefined): string {
   const trimmed = reason?.trim() ?? '';
-  if (!trimmed || publicProcessarMessage(trimmed) === PROCESSAR_FAILED) {
+  const safe = publicProcessarMessage(trimmed);
+  if (!trimmed || safe === PROCESSAR_FAILED) {
     return '';
   }
-  return ` (${trimmed})`;
+  return ` (${safe})`;
 }
 
 type ProcessarPanelProps = {

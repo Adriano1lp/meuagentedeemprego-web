@@ -121,7 +121,8 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
       api.uploadCv(new File(['%PDF-1.4'], 'cv.pdf', { type: 'application/pdf' })),
     ).rejects.toMatchObject({
       status: 400,
-      message: expect.stringContaining('Formato de arquivo invalido'),
+      body: null,
+      message: 'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
     });
   });
 });
