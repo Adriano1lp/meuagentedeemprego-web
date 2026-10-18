@@ -1,299 +1,223 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 
+import { safeCvMessage } from '../api/cv';
 import { ApiError } from '../api/client';
-import { canAnalyzeVaga } from '../api/status';
-import type { UserStatus } from '../api/types';
+import type { UploadCvResponse } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 
-type CvPhase = 'idle' | 'uploading' | 'rebuilding' | 'ready' | 'error';
+type CvPhase = 'idle' | 'processando' | 'sucesso' | 'erro';
+
+const UPLOAD_FAILED = 'Não foi possível enviar o currículo.';
+const REBUILD_FAILED = 'Não foi possível preparar o currículo para análise.';
+
+export type CvSessionFile = {
+  filename?: string;
+  updatedAt?: string;
+};
 
 type CvUploadPanelProps = {
-  status: UserStatus | null;
-  statusLoading: boolean;
   enabled: boolean;
   onStatusRefresh: () => Promise<void>;
-  onBusyChange?: (busy: boolean) => void;
+  onReady?: (file: CvSessionFile) => void;
 };
 
 export function CvUploadPanel({
-  status,
-  statusLoading,
   enabled,
   onStatusRefresh,
-  onBusyChange,
+  onReady,
 }: CvUploadPanelProps) {
   const { api } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<CvPhase>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [failedStep, setFailedStep] = useState<'upload' | 'embeddings' | null>(
-    null,
-  );
-  const [uploadSucceeded, setUploadSucceeded] = useState(false);
+  const [retryMode, setRetryMode] = useState<'upload' | 'rebuild' | null>(null);
+  const [held, setHeld] = useState<CvSessionFile | null>(null);
 
-  const ready = canAnalyzeVaga(status);
-  const busy = phase === 'uploading' || phase === 'rebuilding';
-  const showReady = ready && !busy && phase !== 'error';
-  const uiState = showReady
-    ? 'pronto'
-    : phase === 'error'
-      ? 'erro'
-      : phase;
-  const canRebuildOnly =
-    enabled &&
-    !busy &&
-    !file &&
-    (uploadSucceeded || status?.has_cv === true) &&
-    status?.has_embeddings !== true;
-
-  function setBusy(next: boolean) {
-    onBusyChange?.(next);
-  }
+  const busy = phase === 'processando';
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const next = event.target.files?.[0] ?? null;
     setFile(next);
     setError(null);
-    if (phase === 'error') {
+    if (phase === 'erro') {
       setPhase('idle');
-      setFailedStep(null);
+      setRetryMode(null);
     }
   }
 
-  async function runRebuild(): Promise<void> {
-    setPhase('rebuilding');
-    setFailedStep(null);
+  function sessionFrom(result: UploadCvResponse): CvSessionFile {
+    return {
+      filename: result.filename,
+      updatedAt: result.updated_at,
+    };
+  }
+
+  async function finishReady(meta: CvSessionFile) {
+    setHeld(meta);
+    setPhase('sucesso');
+    setRetryMode(null);
     setError(null);
-    setBusy(true);
+    onReady?.(meta);
+    try {
+      await onStatusRefresh();
+    } catch {
+      // O 200 já concluiu o envio. Falha ao recarregar o status não vira erro de upload.
+    }
+  }
+
+  async function runRebuild(meta: CvSessionFile | null) {
+    setPhase('processando');
+    setError(null);
+    setRetryMode(null);
     try {
       await api.rebuildEmbeddings();
-      await onStatusRefresh();
-      setPhase('ready');
+      await finishReady(meta ?? held ?? {});
     } catch (cause) {
       if (cause instanceof ApiError && cause.outdated) {
         return;
       }
-      setFailedStep('embeddings');
-      setPhase('error');
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : 'Nao foi possivel processar os embeddings.',
-      );
-    } finally {
-      setBusy(false);
+      const raw = cause instanceof ApiError ? cause.message : REBUILD_FAILED;
+      setRetryMode('rebuild');
+      setPhase('erro');
+      setError(safeCvMessage(raw, REBUILD_FAILED));
     }
   }
 
-  async function runUploadAndRebuild(selected: File): Promise<void> {
+  async function runUpload(selected: File) {
+    setPhase('processando');
     setError(null);
-    setFailedStep(null);
-    setUploadSucceeded(false);
-    setPhase('uploading');
-    setBusy(true);
-    let uploaded = false;
+    setRetryMode(null);
+    setHeld(null);
     try {
-      await api.uploadCv(selected);
-      uploaded = true;
-      setUploadSucceeded(true);
-      setPhase('rebuilding');
-      await api.rebuildEmbeddings();
-      await onStatusRefresh();
-      setPhase('ready');
+      const result = await api.uploadCv(selected);
+      const meta = sessionFrom(result);
+      if (result.ready_for_analysis === false) {
+        setHeld(meta);
+        setRetryMode('rebuild');
+        setPhase('erro');
+        setError(
+          result.reason
+            ? safeCvMessage(result.reason, REBUILD_FAILED)
+            : REBUILD_FAILED,
+        );
+        return;
+      }
+      await finishReady(meta);
     } catch (cause) {
       if (cause instanceof ApiError && cause.outdated) {
         return;
       }
-      setFailedStep(uploaded ? 'embeddings' : 'upload');
-      setPhase('error');
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : uploaded
-            ? 'Nao foi possivel processar os embeddings.'
-            : 'Nao foi possivel enviar o curriculo.',
-      );
-    } finally {
-      setBusy(false);
+      const raw = cause instanceof ApiError ? cause.message : UPLOAD_FAILED;
+      setRetryMode('upload');
+      setPhase('erro');
+      setError(safeCvMessage(raw, UPLOAD_FAILED));
     }
   }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!enabled || busy) {
+    if (!enabled || busy || !file) {
       return;
     }
-    if (file) {
-      await runUploadAndRebuild(file);
-      return;
-    }
-    if (canRebuildOnly) {
-      await runRebuild();
-    }
+    await runUpload(file);
   }
 
   async function handleRetry() {
     if (!enabled || busy) {
       return;
     }
-    if (failedStep === 'embeddings') {
-      await runRebuild();
+    if (retryMode === 'rebuild') {
+      await runRebuild(held);
       return;
     }
     if (file) {
-      await runUploadAndRebuild(file);
+      await runUpload(file);
       return;
     }
-    setError('Selecione um curriculo em PDF ou TXT para tentar de novo.');
-    setPhase('error');
-    setFailedStep('upload');
+    setRetryMode('upload');
+    setPhase('erro');
+    setError('Selecione um currículo em PDF ou TXT para tentar de novo.');
   }
 
-  const submitEnabled = enabled && !busy && (Boolean(file) || canRebuildOnly);
-  const submitLabel = busy
-    ? phase === 'uploading'
-      ? 'Enviando curriculo...'
-      : 'Reconstruindo embeddings...'
-    : file
-      ? 'Enviar curriculo'
-      : canRebuildOnly
-        ? 'Gerar embeddings'
-        : 'Enviar curriculo';
-
   return (
-    <Card
-      data-testid="cv-panel"
-      data-cv-state={uiState}
-      aria-labelledby="cv-title"
-      className="mt-6"
-    >
-      <CardHeader>
-        <Badge variant="outline">POST /users/me/upload-cv</Badge>
-        <CardTitle id="cv-title">Curriculo e embeddings</CardTitle>
-        <CardDescription className="text-foreground">
-          Envie um arquivo .pdf ou .txt. Ordem: POST /users/me/upload-cv, depois
-          POST /users/me/rebuild-embeddings. Analisar vaga so libera se GET
-          /users/me/status vier com has_embeddings true.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="pt-2">
-        {statusLoading ? (
-          <p
-            data-testid="cv-status-loading"
-            role="status"
-            aria-live="polite"
-            className="text-sm text-muted-foreground"
-          >
-            Carregando status do curriculo...
-          </p>
-        ) : null}
+    <div data-testid="cv-panel" data-cv-state={phase}>
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        <Label className="block" htmlFor="cv-file">
+          Arquivo do currículo (PDF ou TXT)
+        </Label>
+        <Input
+          id="cv-file"
+          data-testid="cv-file"
+          type="file"
+          accept=".pdf,.txt,application/pdf,text/plain"
+          disabled={!enabled || busy}
+          onChange={handleFileChange}
+          className="mt-1.5 h-auto max-w-full py-2"
+        />
+        <p data-testid="cv-filename" className="mt-2 break-all text-sm text-muted-foreground">
+          {file ? file.name : 'Nenhum arquivo selecionado ainda.'}
+        </p>
+        <Button
+          type="submit"
+          data-testid="cv-submit"
+          disabled={!enabled || busy || !file}
+          aria-busy={busy}
+          className="mt-4 w-full"
+          size="lg"
+        >
+          {busy ? 'Processando' : 'Enviar arquivo'}
+        </Button>
+      </form>
 
-        {!statusLoading && !ready && !busy && phase !== 'error' ? (
-          <p
-            data-testid="cv-missing"
-            role="status"
-            className="text-sm leading-relaxed"
-          >
-            {status?.has_cv === true
-              ? 'Curriculo presente, mas embeddings ainda nao estao prontos. Gere os embeddings ou envie o arquivo de novo.'
-              : 'Sem curriculo valido. Envie um PDF ou TXT para habilitar Analisar vaga.'}
-          </p>
-        ) : null}
+      {phase === 'processando' ? (
+        <p
+          data-testid="cv-processing"
+          role="status"
+          aria-live="polite"
+          className="mt-4 text-sm text-muted-foreground"
+        >
+          Processando
+        </p>
+      ) : null}
 
-        <form onSubmit={(event) => void handleSubmit(event)} className="mt-5">
-          <Label className="block" htmlFor="cv-file">
-            Arquivo do curriculo (PDF ou TXT)
-          </Label>
-          <Input
-            id="cv-file"
-            data-testid="cv-file"
-            type="file"
-            accept=".pdf,.txt,application/pdf,text/plain"
-            disabled={!enabled || busy}
-            onChange={handleFileChange}
-            className="mt-1.5 h-auto py-2"
-          />
-          <p data-testid="cv-filename" className="mt-2 break-all text-sm text-muted-foreground">
-            {file ? file.name : 'Nenhum arquivo selecionado ainda.'}
-          </p>
+      {phase === 'sucesso' && (held?.filename || held?.updatedAt) ? (
+        <Alert data-testid="cv-success" role="status" variant="success" className="mt-4">
+          <AlertDescription>
+            {held.filename ? (
+              <p data-testid="cv-saved-filename" className="break-all font-medium">
+                {held.filename}
+              </p>
+            ) : null}
+            {held.updatedAt ? (
+              <p data-testid="cv-saved-updated-at" className="mt-1 break-all">
+                {held.updatedAt}
+              </p>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {phase === 'erro' && error ? (
+        <Alert data-testid="cv-error" variant="destructive" className="mt-4">
+          <AlertTitle>Erro</AlertTitle>
+          <AlertDescription className="mt-2">{error}</AlertDescription>
           <Button
-            type="submit"
-            data-testid="cv-submit"
-            disabled={!submitEnabled}
-            aria-busy={busy}
-            className="mt-4 w-full"
-            size="lg"
+            type="button"
+            data-testid="cv-retry"
+            onClick={() => void handleRetry()}
+            disabled={!enabled || busy}
+            variant="outline"
+            size="sm"
+            className="mt-3"
           >
-            {submitLabel}
+            Tentar de novo
           </Button>
-        </form>
-
-        {phase === 'uploading' ? (
-          <p
-            data-testid="cv-uploading"
-            role="status"
-            aria-live="polite"
-            className="mt-4 text-sm text-muted-foreground"
-          >
-            Enviando curriculo para a API...
-          </p>
-        ) : null}
-
-        {phase === 'rebuilding' ? (
-          <p
-            data-testid="cv-rebuilding"
-            role="status"
-            aria-live="polite"
-            className="mt-4 text-sm text-muted-foreground"
-          >
-            Reconstruindo embeddings...
-          </p>
-        ) : null}
-
-        {showReady ? (
-          <Alert
-            data-testid="cv-ready"
-            role="status"
-            aria-live="polite"
-            variant="success"
-            className="mt-4"
-          >
-            <AlertDescription>
-              Pronto. Embeddings no status liberam Analisar vaga.
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-        {phase === 'error' && error ? (
-          <Alert data-testid="cv-error" variant="destructive" className="mt-4">
-            <AlertTitle>Erro</AlertTitle>
-            <AlertDescription className="mt-2">{error}</AlertDescription>
-            <Button
-              type="button"
-              data-testid="cv-retry"
-              onClick={() => void handleRetry()}
-              disabled={!enabled || busy}
-              variant="outline"
-              size="sm"
-              className="mt-3"
-            >
-              Tentar de novo
-            </Button>
-          </Alert>
-        ) : null}
-      </CardContent>
-    </Card>
+        </Alert>
+      ) : null}
+    </div>
   );
 }

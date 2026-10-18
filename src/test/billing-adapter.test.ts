@@ -108,6 +108,7 @@ describe('adaptador de billing', () => {
       limit: 30,
       remaining: 28,
       period: '2026-10',
+      period_end: undefined,
     });
     expect(JSON.stringify(billing)).not.toContain('price_id');
     expect(JSON.stringify(billing)).not.toContain('cs_nao');

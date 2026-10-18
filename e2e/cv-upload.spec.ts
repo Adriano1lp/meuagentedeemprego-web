@@ -22,17 +22,16 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByTestId('home-shell')).toBeVisible();
 }
 
-test('1. Happy PDF: upload + rebuild OK → pronto → Analisar enabled', async ({
+test('1. Happy PDF: upload sincrono libera Analisar sem rebuild automatico', async ({
   page,
 }) => {
   let hasCv = false;
-  let hasEmbeddings = false;
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockUserStatus(page, () => ({
     ...mockedStatus,
     has_cv: hasCv,
-    has_embeddings: hasEmbeddings,
+    has_embeddings: hasCv,
   }));
   await mockUploadCv(page, () => {
     hasCv = true;
@@ -41,62 +40,27 @@ test('1. Happy PDF: upload + rebuild OK → pronto → Analisar enabled', async 
         filename: 'cv.pdf',
         bytes_received: 18,
         updated_at: '2026-09-14T12:00:00+00:00',
+        has_cv: true,
+        has_embeddings: true,
+        ready_for_analysis: true,
       },
     };
   });
-  await mockRebuildEmbeddings(page, async () => {
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    hasEmbeddings = true;
-    return {
-      body: {
-        chunks: 4,
-        processed_at: '2026-09-14T12:01:00+00:00',
-        embedding_model: 'text-embedding-3-small',
-      },
-    };
-  });
-
-  const flow: string[] = [];
-  page.on('request', (request) => {
-    const pathname = new URL(request.url()).pathname;
-    if (pathname.endsWith('/users/me/upload-cv')) {
-      flow.push('upload-cv');
-    } else if (pathname.endsWith('/users/me/rebuild-embeddings')) {
-      flow.push('rebuild-embeddings');
-    } else if (pathname.endsWith('/users/me/status')) {
-      flow.push('status');
-    }
-  });
+  await mockRebuildEmbeddings(page, () => ({
+    status: 500,
+    body: { detail: 'nao deveria rebuildar' },
+  }));
 
   await page.goto('/entrar');
   await login(page);
-  await expect(page.getByTestId('cv-panel')).toHaveAttribute(
-    'data-cv-state',
-    'idle',
-  );
+  await expect(page.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'idle');
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
 
   await page.getByTestId('cv-file').setInputFiles(mockedPdfCv);
   await page.getByTestId('cv-submit').click();
-  await expect(page.getByTestId('cv-rebuilding')).toContainText(
-    'Reconstruindo embeddings',
-  );
-  await expect(page.getByTestId('processar-submit')).toBeDisabled();
-  await expect(page.getByTestId('cv-ready')).toContainText('Pronto');
-  await expect(page.getByTestId('cv-panel')).toHaveAttribute(
-    'data-cv-state',
-    'pronto',
-  );
-  await expect(page.getByTestId('status-cv')).toHaveText('sim');
-  await expect(page.getByTestId('status-embeddings')).toContainText(
-    'prontos para analisar',
-  );
+  await expect(page.getByTestId('cv-onboarding')).toHaveCount(0);
   await page.getByTestId('processar-texto').fill(vagaTexto);
   await expect(page.getByTestId('processar-submit')).toBeEnabled();
-  expect(flow.indexOf('rebuild-embeddings')).toBeGreaterThan(
-    flow.indexOf('upload-cv'),
-  );
-  expect(flow.slice(flow.indexOf('rebuild-embeddings') + 1)).toContain('status');
 });
 
 test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar disabled', async ({
@@ -115,10 +79,6 @@ test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar dis
       detail: 'Formato de arquivo invalido. Envie um arquivo .txt ou .pdf',
     },
   }));
-  await mockRebuildEmbeddings(page, () => ({
-    status: 500,
-    body: { detail: 'nao deveria rebuildar' },
-  }));
 
   await page.goto('/entrar');
   await login(page);
@@ -129,10 +89,7 @@ test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar dis
   );
   await expect(page.getByTestId('cv-retry')).toBeVisible();
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
-  await expect(page.getByTestId('cv-panel')).toHaveAttribute(
-    'data-cv-state',
-    'erro',
-  );
+  await expect(page.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'erro');
 
   await mockUploadCv(page, () => ({
     status: 400,
@@ -144,10 +101,10 @@ test('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar dis
     'Arquivo enviado esta vazio',
   );
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
-  await expect(page.getByTestId('cv-ready')).toHaveCount(0);
+  await expect(page.getByTestId('cv-success')).toHaveCount(0);
 });
 
-test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar disabled', async ({
+test('3. ready_for_analysis false: erro + retry de rebuild → Analisar disabled', async ({
   page,
 }) => {
   let uploadHits = 0;
@@ -156,7 +113,7 @@ test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar 
   await mockAuthSuccess(page);
   await mockUserStatus(page, {
     ...mockedStatus,
-    has_cv: true,
+    has_cv: false,
     has_embeddings: false,
   });
   await mockUploadCv(page, () => {
@@ -166,6 +123,9 @@ test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar 
         filename: 'cv.pdf',
         bytes_received: 18,
         updated_at: '2026-09-14T12:00:00+00:00',
+        has_cv: true,
+        has_embeddings: false,
+        ready_for_analysis: false,
       },
     };
   });
@@ -174,8 +134,7 @@ test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar 
     return {
       status: 400,
       body: {
-        detail:
-          'Nao foi possivel gerar chunks validos para o curriculo enviado',
+        detail: 'Nao foi possivel gerar chunks validos para o curriculo enviado',
       },
     };
   });
@@ -185,21 +144,21 @@ test('3. Rebuild fails: upload OK, rebuild 400 → UI erro + retry → Analisar 
   await page.getByTestId('cv-file').setInputFiles(mockedPdfCv);
   await page.getByTestId('cv-submit').click();
   await expect(page.getByTestId('cv-error')).toContainText(
-    'Nao foi possivel gerar chunks validos',
+    'Não foi possível preparar o currículo para análise.',
   );
   await expect(page.getByTestId('cv-retry')).toBeVisible();
   expect(uploadHits).toBe(1);
-  expect(rebuildHits).toBe(1);
+  expect(rebuildHits).toBe(0);
   await page.getByTestId('cv-retry').click();
-  await expect(page.getByTestId('cv-error')).toBeVisible();
+  await expect(page.getByTestId('cv-error')).toContainText(
+    'Nao foi possivel gerar chunks validos',
+  );
   expect(uploadHits).toBe(1);
-  expect(rebuildHits).toBe(2);
+  expect(rebuildHits).toBe(1);
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
 });
 
-test('4. Already ready: status has_cv+has_embeddings → pronto sem reupload', async ({
-  page,
-}) => {
+test('4. Com CV a home mostra a analise e nao pede reupload', async ({ page }) => {
   const uploads: string[] = [];
   page.on('request', (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -215,19 +174,14 @@ test('4. Already ready: status has_cv+has_embeddings → pronto sem reupload', a
   await page.goto('/entrar');
   await login(page);
 
-  await expect(page.getByTestId('cv-ready')).toContainText('Pronto');
-  await expect(page.getByTestId('cv-panel')).toHaveAttribute(
-    'data-cv-state',
-    'pronto',
-  );
+  await expect(page.getByTestId('cv-onboarding')).toHaveCount(0);
+  await expect(page.getByTestId('processar-panel')).toBeVisible();
   expect(uploads).toEqual([]);
   await page.getByTestId('processar-texto').fill(vagaTexto);
   await expect(page.getByTestId('processar-submit')).toBeEnabled();
 });
 
-test('5. No CV / has_embeddings false: texto preenchido → Analisar disabled', async ({
-  page,
-}) => {
+test('5. Sem CV a analise fica bloqueada', async ({ page }) => {
   const processarHits: string[] = [];
   page.on('request', (request) => {
     if (new URL(request.url()).pathname.endsWith('/processar')) {
@@ -244,7 +198,11 @@ test('5. No CV / has_embeddings false: texto preenchido → Analisar disabled', 
   await page.goto('/entrar');
   await login(page);
 
-  await expect(page.getByTestId('cv-missing')).toBeVisible();
+  await expect(page.getByTestId('cv-onboarding')).toBeVisible();
+  await expect(page.getByTestId('cv-create-form')).toBeDisabled();
+  await expect(page.getByTestId('processar-gate')).toContainText(
+    'Envie um currículo para liberar a análise de vaga.',
+  );
   await page.getByTestId('processar-texto').fill(vagaTexto);
   await expect(page.getByTestId('processar-submit')).toBeDisabled();
   await page.getByTestId('processar-submit').click({ force: true });

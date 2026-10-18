@@ -38,13 +38,13 @@ export function parseUserStatus(payload: unknown): UserStatus {
 }
 
 /**
- * Gate de Analisar vaga: so `has_embeddings` de GET /users/me/status.
- * Nao inferir prontidao a partir do upload, do rebuild ou de has_cv.
+ * A análise só libera com has_cv e has_embeddings no GET /users/me/status.
+ * Não inferir prontidão a partir do upload ou do rebuild sozinhos.
  */
 export function canAnalyzeVaga(
   status: UserStatus | null | undefined,
 ): boolean {
-  return status?.has_embeddings === true;
+  return status?.has_cv === true && status?.has_embeddings === true;
 }
 
 export function analyzeBlockReason(
@@ -54,12 +54,12 @@ export function analyzeBlockReason(
     return null;
   }
   if (!status) {
-    return 'Aguarde o status do curriculo para analisar a vaga.';
+    return 'Aguarde o status do currículo para analisar a vaga.';
   }
   if (status.has_cv !== true) {
-    return 'Sem curriculo valido. Envie um PDF ou TXT para habilitar Analisar vaga.';
+    return 'Envie um currículo para liberar a análise de vaga.';
   }
-  return 'Embeddings ainda nao estao prontos. Envie o curriculo e aguarde o processamento.';
+  return 'O currículo ainda não está pronto para análise.';
 }
 
 export function hasQuotaFields(status: UserStatus): boolean {

@@ -146,7 +146,7 @@ export function ProcessarPanel({
     outcome.kind === 'success' && canOfferPdfDownload(outcome.result);
 
   return (
-    <Card data-testid="processar-panel" className="mt-6">
+    <Card id="analise" data-testid="processar-panel" className="mt-6 scroll-mt-24">
       <CardHeader>
         <Badge variant="outline">POST /processar</Badge>
         <CardTitle>Analise de vaga</CardTitle>

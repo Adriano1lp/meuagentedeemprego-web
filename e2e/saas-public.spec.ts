@@ -297,7 +297,7 @@ test('402 em /app inicia o checkout', async ({ page }) => {
   await page.goto('/entrar');
   await login(page);
   await expect(page).toHaveURL(/\/app$/);
-  await expect(page.getByTestId('cv-ready')).toBeVisible();
+  await expect(page.getByTestId('processar-panel')).toBeVisible();
   await page
     .getByTestId('processar-texto')
     .fill('Vaga para desenvolvedor Python com requisitos e responsabilidades.');

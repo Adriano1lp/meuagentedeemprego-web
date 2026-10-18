@@ -1,167 +1,108 @@
-import { hasQuotaFields, planLabel } from '../api/status';
-import type { UserStatus } from '../api/types';
+import {
+  formatQuotaResetLabel,
+  isEssencialActive,
+  isQuotaExhausted,
+  quotaUsageText,
+  type BillingMe,
+} from '../api/billing';
+import { planLabel } from '../api/status';
+import { SubscribeEssencialButton } from './SubscribeEssencialButton';
 import { Alert, AlertDescription } from './ui/alert';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from './ui/card';
+import { Skeleton } from './ui/skeleton';
 
 type QuotaStatusCardProps = {
-  status: UserStatus | null;
+  billing: BillingMe | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
 };
 
-function yesNo(value: boolean | undefined): string | null {
-  if (value === undefined) {
-    return null;
-  }
-  return value ? 'sim' : 'nao';
-}
+const QUOTA_LOAD_ERROR = 'Não foi possível carregar a cota agora.';
+const QUOTA_EXHAUSTED_FREE = 'As análises deste período acabaram.';
 
 export function QuotaStatusCard({
-  status,
+  billing,
   loading,
   error,
   onRetry,
 }: QuotaStatusCardProps) {
+  const usage = billing ? quotaUsageText(billing) : null;
+  const resetLabel = formatQuotaResetLabel(billing?.period_end);
+  const exhausted = billing ? isQuotaExhausted(billing) : false;
+  const essencial = billing ? isEssencialActive(billing) : false;
+  const plan = planLabel(billing?.plan ?? undefined);
+
   return (
-    <Card
-      data-testid="status-card"
-      aria-labelledby="status-title"
-      className="mt-6"
-    >
+    <Card data-testid="status-card" aria-labelledby="status-title" className="mt-6">
       <CardHeader>
-        <Badge variant="outline">GET /users/me/status</Badge>
-        <CardTitle id="status-title">Cota e status</CardTitle>
-        <CardDescription>
-          Plano e cota do mes UTC vêm so do servidor. O navegador nao calcula
-          nem guarda o limite.
-        </CardDescription>
+        <CardTitle id="status-title">Cota do mês</CardTitle>
       </CardHeader>
-      <CardContent className="pt-4">
+      <CardContent className="pt-2">
         {loading ? (
-          <p
-            data-testid="status-loading"
-            role="status"
-            aria-live="polite"
-            className="text-sm text-muted-foreground"
-          >
-            Carregando status...
-          </p>
+          <div data-testid="quota-skeleton" role="status" aria-live="polite" className="grid gap-3">
+            <span className="sr-only">Carregando cota</span>
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-8 w-full max-w-xs" />
+            <Skeleton className="h-4 w-56 max-w-full" />
+          </div>
         ) : null}
 
-        {error ? (
-          <Alert data-testid="status-error" variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-            <Button
-              type="button"
-              data-testid="status-retry"
-              onClick={onRetry}
-              variant="outline"
-              size="sm"
-              className="mt-3"
-            >
-              Tentar de novo
-            </Button>
+        {!loading && error ? (
+          <Alert data-testid="quota-error" role="status" variant="warning">
+            <AlertDescription>
+              <p>{error || QUOTA_LOAD_ERROR}</p>
+              <Button
+                type="button"
+                data-testid="quota-retry"
+                onClick={onRetry}
+                variant="outline"
+                size="sm"
+                className="mt-3"
+              >
+                Tentar de novo
+              </Button>
+            </AlertDescription>
           </Alert>
         ) : null}
 
-        {!loading && !error && !status ? (
-          <p data-testid="status-empty" className="text-sm text-muted-foreground">
-            Status ainda nao carregado.
-          </p>
-        ) : null}
-
-        {!loading && !error && status ? (
-          <dl
-            data-testid="status-values"
-            className="grid gap-3 text-sm sm:grid-cols-2"
-          >
-            {planLabel(status.plan) ? (
-              <div className="rounded-lg bg-muted px-3 py-2">
-                <dt className="text-xs font-medium text-muted-foreground">Plano</dt>
-                <dd data-testid="status-plan" className="mt-0.5 font-medium">
-                  {planLabel(status.plan)}
-                </dd>
+        {!loading && !error && billing ? (
+          <div className="grid gap-3">
+            {plan ? (
+              <p className="text-sm text-muted-foreground">
+                Plano{' '}
+                <span data-testid="status-plan" className="font-medium text-foreground">
+                  {plan}
+                </span>
+              </p>
+            ) : null}
+            {usage ? (
+              <p data-testid="status-quota" className="font-display text-2xl font-semibold tracking-tight">
+                {usage}
+              </p>
+            ) : null}
+            {resetLabel ? (
+              <p data-testid="quota-reset" className="text-sm text-muted-foreground">
+                {resetLabel}
+              </p>
+            ) : null}
+            {exhausted && !essencial ? (
+              <div data-testid="quota-exhausted" role="status" className="grid gap-1">
+                <p className="text-sm">{QUOTA_EXHAUSTED_FREE}</p>
+                <SubscribeEssencialButton label="Assinar Essencial" testId="quota-subscribe" />
               </div>
             ) : null}
-            {status.period ? (
-              <div className="rounded-lg bg-muted px-3 py-2">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  Periodo (UTC)
-                </dt>
-                <dd data-testid="status-period" className="mt-0.5 font-medium">
-                  {status.period}
-                </dd>
-              </div>
-            ) : null}
-            {hasQuotaFields(status) ? (
-              <div className="rounded-lg bg-muted px-3 py-2 sm:col-span-2">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  Cota do mes
-                </dt>
-                <dd data-testid="status-quota" className="mt-0.5 font-medium">
-                  {formatQuota(status)}
-                </dd>
-              </div>
-            ) : null}
-            {yesNo(status.has_embeddings) ? (
-              <div className="rounded-lg bg-muted px-3 py-2">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  Embeddings
-                </dt>
-                <dd data-testid="status-embeddings" className="mt-0.5">
-                  {status.has_embeddings
-                    ? 'prontos para analisar'
-                    : 'ausentes — envie o curriculo abaixo'}
-                </dd>
-              </div>
-            ) : null}
-            {yesNo(status.has_cv) ? (
-              <div className="rounded-lg bg-muted px-3 py-2">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  Curriculo
-                </dt>
-                <dd data-testid="status-cv" className="mt-0.5">
-                  {yesNo(status.has_cv)}
-                </dd>
-              </div>
-            ) : null}
-            {typeof status.generated_files === 'number' ? (
-              <div className="rounded-lg bg-muted px-3 py-2">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  Arquivos gerados
-                </dt>
-                <dd data-testid="status-generated-files" className="mt-0.5">
-                  {status.generated_files}
-                </dd>
-              </div>
-            ) : null}
-          </dl>
+          </div>
         ) : null}
       </CardContent>
     </Card>
   );
 }
 
-function formatQuota(status: UserStatus): string {
-  const parts: string[] = [];
-  if (typeof status.used === 'number' && typeof status.limit === 'number') {
-    parts.push(`${status.used} de ${status.limit} analises usadas`);
-  } else if (typeof status.used === 'number') {
-    parts.push(`${status.used} analises usadas`);
-  } else if (typeof status.limit === 'number') {
-    parts.push(`limite ${status.limit}`);
-  }
-  if (typeof status.remaining === 'number') {
-    parts.push(`${status.remaining} restantes`);
-  }
-  return parts.join(' · ') || 'cota informada pelo servidor';
-}
+export { QUOTA_EXHAUSTED_FREE, QUOTA_LOAD_ERROR };

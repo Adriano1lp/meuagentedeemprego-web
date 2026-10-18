@@ -2,7 +2,7 @@
  * Adaptador de billing (contrato confirmado, API master a536c41).
  *
  * POST /billing/checkout (sem body) → { checkout_url, session_id }.
- * GET  /billing/me → { plan, subscription_status, used, limit, period, remaining }.
+ * GET  /billing/me → { plan, subscription_status, used, limit, period, remaining, period_end }.
  * Volta do Checkout: /app?billing=success&session_id=cs_... ou /app?billing=cancel.
  * Compatibilidade: /?billing=... é encaminhado para /app com a mesma query.
  *
@@ -23,6 +23,7 @@ export const BILLING_USED_KEY = 'used';
 export const BILLING_LIMIT_KEY = 'limit';
 export const BILLING_REMAINING_KEY = 'remaining';
 export const BILLING_PERIOD_KEY = 'period';
+export const BILLING_PERIOD_END_KEY = 'period_end';
 
 /** Essencial ativo: o servidor já reduz past_due para plan "free". */
 export const ESSENCIAL_PLAN = 'essencial';
@@ -73,7 +74,62 @@ export type BillingMe = {
   limit?: number;
   remaining?: number;
   period?: string;
+  period_end?: string;
 };
+
+const MONTHS_PT = [
+  'janeiro',
+  'fevereiro',
+  'março',
+  'abril',
+  'maio',
+  'junho',
+  'julho',
+  'agosto',
+  'setembro',
+  'outubro',
+  'novembro',
+  'dezembro',
+] as const;
+
+/**
+ * "Sua cota reinicia em <dia> de <mês>". Dia e mês vêm do instante UTC
+ * (getUTCDate / getUTCMonth). O dia 1 é "1º". Sem hora. Sem period_end, null.
+ */
+export function formatQuotaResetLabel(
+  periodEnd: string | null | undefined,
+): string | null {
+  if (typeof periodEnd !== 'string' || !periodEnd.trim()) {
+    return null;
+  }
+  const date = new Date(periodEnd);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const month = MONTHS_PT[date.getUTCMonth()];
+  if (!month) {
+    return null;
+  }
+  const day = date.getUTCDate();
+  const dayText = day === 1 ? '1º' : String(day);
+  return `Sua cota reinicia em ${dayText} de ${month}`;
+}
+
+/** Só os números que a API mandou. Não calcula remaining nem o limite. */
+export function quotaUsageText(billing: {
+  used?: number;
+  limit?: number;
+}): string | null {
+  if (typeof billing.used !== 'number' || typeof billing.limit !== 'number') {
+    return null;
+  }
+  return `${billing.used} de ${billing.limit} análises usadas`;
+}
+
+/** Esgotada só quando a API manda remaining === 0. */
+export function isQuotaExhausted(billing: { remaining?: number }): boolean {
+  return billing.remaining === 0;
+}
 
 export type CheckoutRedirect = {
   checkoutUrl: string;
@@ -137,6 +193,7 @@ export function parseBillingMe(payload: unknown): BillingMe {
     limit: asOptionalNumber(record[BILLING_LIMIT_KEY]),
     remaining: asOptionalNumber(record[BILLING_REMAINING_KEY]),
     period: asOptionalString(record[BILLING_PERIOD_KEY]),
+    period_end: asOptionalString(record[BILLING_PERIOD_END_KEY]),
   };
 }
 

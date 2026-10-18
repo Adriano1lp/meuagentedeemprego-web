@@ -3,6 +3,7 @@ import { searchWithoutBillingReturn } from '../api/billing';
 /** Destino padrão depois do login, quando não há rota de origem. */
 export const APP_HOME = '/app';
 export const APP_HISTORY = '/app/historico';
+export const APP_CURRICULUM = '/app/curriculo';
 export const APP_PROFILE = '/app/perfil';
 export const ENTER_PATH = '/entrar';
 

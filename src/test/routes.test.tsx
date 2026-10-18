@@ -177,6 +177,23 @@ describe('rotas publicas e app', () => {
     expect(screen.getByTestId('location-full').textContent).toContain('/app/perfil');
   });
 
+  it('sem JWT /app/curriculo volta a origem depois do login', async () => {
+    const fetchImpl = createFetch();
+    const user = userEvent.setup();
+    renderAt('/app/curriculo', fetchImpl);
+    expect(screen.getByTestId('location-full')).toHaveTextContent('/entrar');
+    expect(screen.queryByTestId('curriculo-page')).not.toBeInTheDocument();
+    expect(
+      fetchImpl.mock.calls.some(([input]) => String(input).includes('/users/me/status')),
+    ).toBe(false);
+
+    await login(user);
+    await waitFor(() => {
+      expect(screen.getByTestId('curriculo-page')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('location-full').textContent).toContain('/app/curriculo');
+  });
+
   it('sem JWT /app/historico volta a origem depois do login', async () => {
     const fetchImpl = createFetch();
     const user = userEvent.setup();

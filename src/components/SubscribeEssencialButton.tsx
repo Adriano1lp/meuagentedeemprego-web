@@ -12,10 +12,14 @@ import { Button } from './ui/button';
 
 type SubscribeEssencialButtonProps = {
   blocked?: boolean;
+  label?: string;
+  testId?: string;
 };
 
 export function SubscribeEssencialButton({
   blocked = false,
+  label = SUBSCRIBE_ESSENCIAL_LABEL,
+  testId = 'subscribe-essencial',
 }: SubscribeEssencialButtonProps) {
   const { api, logout } = useAuth();
   const [pending, setPending] = useState(false);
@@ -55,14 +59,14 @@ export function SubscribeEssencialButton({
     <div className="mt-4">
       <Button
         type="button"
-        data-testid="subscribe-essencial"
+        data-testid={testId}
         onClick={() => void handleClick()}
         disabled={pending}
         aria-busy={pending}
         className="w-full bg-accent text-accent-foreground hover:bg-accent/80"
         size="lg"
       >
-        {SUBSCRIBE_ESSENCIAL_LABEL}
+        {label}
       </Button>
       {error ? (
         <Alert data-testid="subscribe-error" variant="destructive" className="mt-3">

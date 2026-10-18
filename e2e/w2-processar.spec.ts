@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 
 import {
   mockAuthSuccess,
+  mockBillingMe,
   mockLegalRoutes,
   mockOutdatedMe,
   mockProcessar,
@@ -19,7 +20,7 @@ async function login(page: import('@playwright/test').Page) {
   await page.getByTestId('login-password').fill('senha-segura');
   await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('home-shell')).toBeVisible();
-  await expect(page.getByTestId('cv-ready')).toBeVisible();
+  await expect(page.getByTestId('processar-panel')).toBeVisible();
 }
 
 test('1. Status UI reflete so GET /users/me/status', async ({ page }) => {
@@ -33,16 +34,26 @@ test('1. Status UI reflete so GET /users/me/status', async ({ page }) => {
     remaining: 26,
     period: '2026-09',
   });
+  await mockBillingMe(page, {
+    plan: 'essencial',
+    subscription_status: 'active',
+    used: 4,
+    limit: 30,
+    remaining: 26,
+    period: '2026-09',
+    period_end: '2026-11-01T00:00:00Z',
+  });
   await page.goto('/entrar');
   await login(page);
 
   await expect(page.getByTestId('status-card')).toBeVisible();
   await expect(page.getByTestId('status-plan')).toHaveText('Essencial');
   await expect(page.getByTestId('status-quota')).toContainText(
-    '4 de 30 analises usadas',
+    '4 de 30 análises usadas',
   );
-  await expect(page.getByTestId('status-quota')).toContainText('26 restantes');
-  await expect(page.getByTestId('status-period')).toHaveText('2026-09');
+  await expect(page.getByTestId('quota-reset')).toHaveText(
+    'Sua cota reinicia em 1º de novembro',
+  );
 });
 
 test('2. processar sucesso: pdf_url, download %PDF e refresh de status', async ({
@@ -55,6 +66,15 @@ test('2. processar sucesso: pdf_url, download %PDF e refresh de status', async (
     ...mockedStatus,
     used,
     remaining: 5 - used,
+  }));
+  await mockBillingMe(page, () => ({
+    plan: 'free',
+    subscription_status: 'none',
+    used,
+    limit: 5,
+    remaining: 5 - used,
+    period: '2026-09',
+    period_end: '2026-11-01T00:00:00Z',
   }));
   await mockProcessar(page, (texto) => {
     expect(texto).toBe(vagaTexto);
@@ -82,7 +102,7 @@ test('2. processar sucesso: pdf_url, download %PDF e refresh de status', async (
   await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('status-quota')).toContainText(
-    '1 de 5 analises usadas',
+    '1 de 5 análises usadas',
   );
 
   await page.getByTestId('processar-texto').fill(vagaTexto);
@@ -102,7 +122,7 @@ test('2. processar sucesso: pdf_url, download %PDF e refresh de status', async (
     true,
   );
   await expect(page.getByTestId('status-quota')).toContainText(
-    '2 de 5 analises usadas',
+    '2 de 5 análises usadas',
   );
 });
 
@@ -151,7 +171,7 @@ test('4. 402 bloqueia sem loop e sem queimar cota local', async ({ page }) => {
   await page.goto('/entrar');
   await login(page);
   await expect(page.getByTestId('status-quota')).toContainText(
-    '1 de 5 analises usadas',
+    '1 de 5 análises usadas',
   );
 
   await page.getByTestId('processar-texto').fill(vagaTexto);
@@ -161,7 +181,7 @@ test('4. 402 bloqueia sem loop e sem queimar cota local', async ({ page }) => {
   );
   await expect(page.getByTestId('processar-success')).toHaveCount(0);
   await expect(page.getByTestId('status-quota')).toContainText(
-    '1 de 5 analises usadas',
+    '1 de 5 análises usadas',
   );
   expect(processarHits).toBe(1);
 });

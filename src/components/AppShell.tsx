@@ -1,7 +1,8 @@
-import { History, House, LogOut, UserRound, type LucideIcon } from 'lucide-react';
+import { FileText, History, House, LogOut, UserRound, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 
+import { APP_CURRICULUM, APP_HISTORY, APP_HOME, APP_PROFILE } from '../auth/returnTo';
 import { useAuth } from '../auth/AuthContext';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
@@ -9,19 +10,34 @@ import { cn } from '@/lib/utils';
 type Destination = {
   to: string;
   label: string;
+  shortLabel: string;
   icon: LucideIcon;
   testId: string;
 };
 
 const destinations: Destination[] = [
-  { to: '/app', label: 'Inicio', icon: House, testId: 'nav-home' },
+  { to: APP_HOME, label: 'Início', shortLabel: 'Início', icon: House, testId: 'nav-home' },
   {
-    to: '/app/historico',
-    label: 'Historico',
+    to: APP_HISTORY,
+    label: 'Histórico',
+    shortLabel: 'Histórico',
     icon: History,
     testId: 'nav-historico',
   },
-  { to: '/app/perfil', label: 'Perfil', icon: UserRound, testId: 'nav-perfil' },
+  {
+    to: APP_CURRICULUM,
+    label: 'Meu currículo',
+    shortLabel: 'Currículo',
+    icon: FileText,
+    testId: 'nav-curriculo',
+  },
+  {
+    to: APP_PROFILE,
+    label: 'Perfil',
+    shortLabel: 'Perfil',
+    icon: UserRound,
+    testId: 'nav-perfil',
+  },
 ];
 
 function DestinationLink({
@@ -47,7 +63,7 @@ function DestinationLink({
                 : 'text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground',
             )
           : cn(
-              'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 text-xs font-medium',
+              'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-0.5 text-[11px] font-medium leading-tight',
               isActive ? 'text-primary' : 'text-muted-foreground',
             )
       }
@@ -64,7 +80,9 @@ function DestinationLink({
             />
           ) : null}
           <Icon aria-hidden="true" className={placement === 'bottom' ? 'size-5' : 'size-4'} />
-          <span className="truncate">{item.label}</span>
+          <span className="max-w-full truncate">
+            {placement === 'bottom' ? item.shortLabel : item.label}
+          </span>
         </>
       )}
     </NavLink>

@@ -178,19 +178,13 @@ describe('BDD W-CV', () => {
     vi.restoreAllMocks();
   });
 
-  it('1. Happy PDF: upload + rebuild OK → has_cv+has_embeddings → pronto → Analisar enabled', async () => {
+  it('1. Happy PDF: upload sincrono ready_for_analysis libera Analisar sem rebuild', async () => {
     let uploaded = false;
-    let rebuilt = false;
-    let releaseRebuild: (() => void) | undefined;
-    const rebuildGate = new Promise<void>((resolve) => {
-      releaseRebuild = resolve;
-    });
-
     const harness = createHarness({
       status: () => ({
         ...baseStatus,
         has_cv: uploaded,
-        has_embeddings: rebuilt,
+        has_embeddings: uploaded,
       }),
       upload: () => {
         uploaded = true;
@@ -198,15 +192,9 @@ describe('BDD W-CV', () => {
           filename: 'cv.pdf',
           bytes_received: 12,
           updated_at: '2026-09-14T12:00:00+00:00',
-        });
-      },
-      rebuild: async () => {
-        await rebuildGate;
-        rebuilt = true;
-        return jsonResponse({
-          chunks: 4,
-          processed_at: '2026-09-14T12:01:00+00:00',
-          embedding_model: 'text-embedding-3-small',
+          has_cv: true,
+          has_embeddings: true,
+          ready_for_analysis: true,
         });
       },
     });
@@ -215,38 +203,18 @@ describe('BDD W-CV', () => {
     await loginHome(user);
 
     expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'idle');
+    expect(screen.getByTestId('cv-create-form')).toBeDisabled();
+    expect(screen.getByTestId('cv-create-form-soon')).toHaveTextContent('em breve');
     chooseFile(pdfFile());
     await user.click(screen.getByTestId('cv-submit'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('cv-rebuilding')).toHaveTextContent(
-        'Reconstruindo embeddings',
-      );
+      expect(screen.queryByTestId('cv-onboarding')).not.toBeInTheDocument();
     });
-    expect(screen.getByTestId('cv-panel')).toHaveAttribute(
-      'data-cv-state',
-      'rebuilding',
-    );
-    expect(screen.getByTestId('processar-submit')).toBeDisabled();
-
-    releaseRebuild?.();
-
-    await waitFor(() => {
-      expect(screen.getByTestId('cv-ready')).toHaveTextContent('Pronto');
-    });
-    expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'pronto');
-    expect(screen.getByTestId('status-cv')).toHaveTextContent('sim');
-    expect(screen.getByTestId('status-embeddings')).toHaveTextContent(
-      'prontos para analisar',
-    );
+    expect(harness.uploadCalls).toBe(1);
+    expect(harness.rebuildCalls).toBe(0);
     await user.type(screen.getByTestId('processar-texto'), vagaTexto);
     expect(screen.getByTestId('processar-submit')).toBeEnabled();
-    expect(harness.uploadCalls).toBe(1);
-    expect(harness.rebuildCalls).toBe(1);
-    const uploadAt = harness.pathCalls.indexOf('upload-cv');
-    const rebuildAt = harness.pathCalls.indexOf('rebuild-embeddings');
-    expect(rebuildAt).toBeGreaterThan(uploadAt);
-    expect(harness.pathCalls.slice(rebuildAt + 1)).toContain('status');
   });
 
   it('2. Invalid format: .docx ou vazio → API 400 → UI erro → Analisar disabled', async () => {
@@ -293,27 +261,22 @@ describe('BDD W-CV', () => {
     expect(screen.queryByTestId('cv-ready')).not.toBeInTheDocument();
   });
 
-  it('3. Rebuild fails: upload OK, rebuild 400/5xx → UI erro + retry → Analisar disabled', async () => {
-    let uploaded = false;
+  it('3. ready_for_analysis false mostra erro e o retry chama rebuild sem reenviar', async () => {
     const harness = createHarness({
-      status: () => ({
-        ...baseStatus,
-        has_cv: uploaded,
-        has_embeddings: false,
-      }),
-      upload: () => {
-        uploaded = true;
-        return jsonResponse({
+      upload: () =>
+        jsonResponse({
           filename: 'cv.pdf',
           bytes_received: 12,
           updated_at: '2026-09-14T12:00:00+00:00',
-        });
-      },
+          has_cv: true,
+          has_embeddings: false,
+          ready_for_analysis: false,
+          reason: 'Nao foi possivel gerar chunks validos para o curriculo enviado',
+        }),
       rebuild: () =>
         jsonResponse(
           {
-            detail:
-              'Nao foi possivel gerar chunks validos para o curriculo enviado',
+            detail: 'Nao foi possivel gerar chunks validos para o curriculo enviado',
           },
           400,
         ),
@@ -334,18 +297,18 @@ describe('BDD W-CV', () => {
     expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'erro');
     expect(screen.getByTestId('processar-submit')).toBeDisabled();
     expect(harness.uploadCalls).toBe(1);
-    expect(harness.rebuildCalls).toBe(1);
+    expect(harness.rebuildCalls).toBe(0);
 
     await user.click(screen.getByTestId('cv-retry'));
     await waitFor(() => {
       expect(screen.getByTestId('cv-error')).toBeInTheDocument();
     });
     expect(harness.uploadCalls).toBe(1);
-    expect(harness.rebuildCalls).toBe(2);
+    expect(harness.rebuildCalls).toBe(1);
     expect(screen.getByTestId('processar-submit')).toBeDisabled();
   });
 
-  it('4. Already ready: status has_cv+has_embeddings → pronto sem reupload → Analisar enabled', async () => {
+  it('4. Com CV o inicio mostra a analise e nao o card de envio', async () => {
     const harness = createHarness({
       status: {
         ...baseStatus,
@@ -356,12 +319,15 @@ describe('BDD W-CV', () => {
     });
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
-    await loginHome(user);
-
+    await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+    await user.type(screen.getByTestId('login-password'), 'senha-segura');
+    await user.click(screen.getByTestId('login-submit'));
     await waitFor(() => {
-      expect(screen.getByTestId('cv-ready')).toHaveTextContent('Pronto');
+      expect(screen.getByTestId('processar-panel')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'pronto');
+
+    expect(screen.queryByTestId('cv-onboarding')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cv-panel')).not.toBeInTheDocument();
     expect(harness.uploadCalls).toBe(0);
     expect(harness.rebuildCalls).toBe(0);
     await user.type(screen.getByTestId('processar-texto'), vagaTexto);
@@ -381,8 +347,11 @@ describe('BDD W-CV', () => {
     await loginHome(user);
 
     await waitFor(() => {
-      expect(screen.getByTestId('cv-missing')).toBeInTheDocument();
+      expect(screen.getByTestId('cv-onboarding')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('processar-gate')).toHaveTextContent(
+      'Envie um currículo para liberar a análise de vaga.',
+    );
     await user.type(screen.getByTestId('processar-texto'), vagaTexto);
     expect(screen.getByTestId('processar-texto')).toHaveValue(vagaTexto);
     expect(screen.getByTestId('processar-submit')).toBeDisabled();

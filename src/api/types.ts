@@ -57,8 +57,10 @@ export type UserStatus = {
 };
 
 /**
- * POST /users/me/upload-cv — multipart field `file`.
- * Campos reais de services/user_data.save_user_cv.
+ * POST /users/me/upload-cv — multipart field `file`, síncrono.
+ * filename, content_type, bytes_received, updated_at, has_cv, has_embeddings,
+ * ready_for_analysis e talvez reason. cv_file, original_file e object_key
+ * não entram neste tipo: a UI não exibe, não loga e não guarda esses campos.
  */
 export type UploadCvResponse = {
   user_id?: string;
@@ -67,10 +69,10 @@ export type UploadCvResponse = {
   content_type?: string;
   bytes_received?: number;
   updated_at?: string;
-  cv_file?: string;
-  original_file?: string;
-  object_key?: string;
-  extracted_text_object_key?: string;
+  has_cv?: boolean;
+  has_embeddings?: boolean;
+  ready_for_analysis?: boolean;
+  reason?: string;
 };
 
 /**
@@ -85,7 +87,6 @@ export type RebuildEmbeddingsResponse = {
   embedding_model?: string;
   chroma_dir?: string;
   vector_store?: string;
-  cv_file?: string;
 };
 
 /** OpenAPI RequestData */

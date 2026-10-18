@@ -3,6 +3,10 @@ import type { RebuildEmbeddingsResponse, UploadCvResponse } from './types';
 /** Default de MAX_UPLOAD_SIZE_MB no backend (config.py). */
 export const MAX_CV_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+function asOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 function asOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -37,11 +41,30 @@ export function parseUploadCvResponse(payload: unknown): UploadCvResponse {
     content_type: asOptionalString(record.content_type),
     bytes_received: asOptionalNumber(record.bytes_received),
     updated_at: asOptionalString(record.updated_at),
-    cv_file: asOptionalString(record.cv_file),
-    original_file: asOptionalString(record.original_file),
-    object_key: asOptionalString(record.object_key),
-    extracted_text_object_key: asOptionalString(record.extracted_text_object_key),
+    has_cv: asOptionalBoolean(record.has_cv),
+    has_embeddings: asOptionalBoolean(record.has_embeddings),
+    ready_for_analysis: asOptionalBoolean(record.ready_for_analysis),
+    reason: asOptionalString(record.reason),
   };
+}
+
+/** Troca mensagem que vazaria path, URL ou token por um texto fixo. */
+export function safeCvMessage(message: string, fallback: string): string {
+  const lower = message.toLowerCase();
+  if (
+    /https?:\/\//i.test(message) ||
+    message.includes('/') ||
+    message.includes('\\') ||
+    lower.includes('bearer') ||
+    lower.includes('token') ||
+    lower.includes('object_key') ||
+    lower.includes('cv_file') ||
+    lower.includes('original_file')
+  ) {
+    return fallback;
+  }
+  const trimmed = message.trim();
+  return trimmed || fallback;
 }
 
 export function parseRebuildEmbeddingsResponse(
@@ -56,7 +79,6 @@ export function parseRebuildEmbeddingsResponse(
     embedding_model: asOptionalString(record.embedding_model),
     chroma_dir: asOptionalString(record.chroma_dir),
     vector_store: asOptionalString(record.vector_store),
-    cv_file: asOptionalString(record.cv_file),
   };
 }
 
