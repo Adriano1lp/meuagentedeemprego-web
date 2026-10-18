@@ -404,7 +404,9 @@ describe('W3a assinatura Essencial', () => {
     await login(user);
 
     expect(screen.queryByTestId('billing-login-notice')).not.toBeInTheDocument();
-    expect(screen.getByTestId('billing-confirming')).toHaveTextContent(BILLING_CONFIRMING);
+    await waitFor(() => {
+      expect(screen.getByTestId('billing-confirming')).toHaveTextContent(BILLING_CONFIRMING);
+    });
     expect(screen.queryByText(BILLING_CONFIRMED)).not.toBeInTheDocument();
     await waitFor(() => {
       expect(billingReads).toBeGreaterThanOrEqual(1);
