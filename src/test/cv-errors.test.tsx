@@ -13,6 +13,7 @@ import {
   CV_UNAVAILABLE,
   CV_UPLOAD_BAD_REQUEST,
   cvFailureMessage,
+  isSuccessfulRebuildBody,
   MAX_CV_UPLOAD_BYTES,
 } from '../api/cv';
 import { AuthProvider } from '../auth/AuthContext';
@@ -175,6 +176,40 @@ describe('cvFailureMessage e o limite de tamanho', () => {
     expect(
       cvFailureMessage('upload', 400, 'Arquivo excede o limite de 10 MB'),
     ).toBe(CV_TOO_LARGE);
+    expect(cvFailureMessage('upload', 400, '10 mb')).toBe(CV_TOO_LARGE);
+    expect(cvFailureMessage('upload', 400, '10MB')).toBe(CV_TOO_LARGE);
+    expect(
+      cvFailureMessage(
+        'rebuild',
+        400,
+        'Curriculo do usuario nao encontrado. Envie o curriculo antes de gerar embeddings',
+      ),
+    ).not.toBe(CV_TOO_LARGE);
+    expect(
+      cvFailureMessage('upload', 400, 'Nao foi possivel gerar os embeddings do curriculo'),
+    ).not.toBe(CV_TOO_LARGE);
+  });
+});
+
+const REAL_REBUILD = {
+  user_id: 'user-1',
+  embedding_run_id: 'run-9',
+  chunks: 4,
+  processed_at: '2026-09-14T12:01:00+00:00',
+  embedding_model: 'text-embedding-3-small',
+  chroma_dir: '/data/chroma',
+  vector_store: 'mongodb',
+  cv_file: '/data/cv.txt',
+};
+
+describe('sucesso do rebuild', () => {
+  it('aceita o corpo real da API e recusa chunks inválido', () => {
+    expect(isSuccessfulRebuildBody(REAL_REBUILD)).toBe(true);
+    expect(isSuccessfulRebuildBody({ chunks: '3' })).toBe(false);
+    expect(isSuccessfulRebuildBody({ chunks: 0 })).toBe(false);
+    expect(isSuccessfulRebuildBody({ chunks: Number.NaN })).toBe(false);
+    expect(isSuccessfulRebuildBody({})).toBe(false);
+    expect(isSuccessfulRebuildBody('nao-e-json')).toBe(false);
   });
 });
 
@@ -445,32 +480,29 @@ describe('erros fixos de upload e rebuild', () => {
     expect(screen.queryByTestId('cv-saved-filename')).not.toBeInTheDocument();
   });
 
-  it('rebuild 200 sem has_embeddings true mostra o erro genérico', async () => {
-    await openRebuildRetry(() =>
-      jsonResponse({
-        chunks: 2,
-        has_embeddings: false,
-        ready_for_analysis: true,
-      }),
-    );
-    await waitFor(() => {
-      expectFixed(CV_UNAVAILABLE);
-    });
-    expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
+  it('rebuild 200 com chunks texto, zero ou ausente mostra o erro genérico', async () => {
+    for (const body of [{ chunks: '3' }, { chunks: 0 }, { processed_at: '2026-09-14T12:01:00Z' }]) {
+      cleanup();
+      await openRebuildRetry(() => jsonResponse(body));
+      await waitFor(() => {
+        expectFixed(CV_UNAVAILABLE);
+      });
+      expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
+    }
   });
 
-  it('rebuild 200 sem ready_for_analysis true mostra o erro genérico', async () => {
-    await openRebuildRetry(() =>
-      jsonResponse({
-        chunks: 2,
-        has_embeddings: true,
-        ready_for_analysis: false,
-      }),
-    );
+  it('rebuild 200 com o corpo real da API conclui sem guardar caminhos', async () => {
+    await openRebuildRetry(() => jsonResponse(REAL_REBUILD));
     await waitFor(() => {
-      expectFixed(CV_UNAVAILABLE);
+      expect(screen.getByTestId('cv-saved-filename')).toHaveTextContent(
+        'Currículo atualizado. Nome do arquivo: cv.pdf',
+      );
     });
-    expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cv-error')).not.toBeInTheDocument();
+    const shown = document.body.textContent ?? '';
+    expect(shown).not.toMatch(/chroma_dir|vector_store|cv_file|mongodb|\/data\//);
+    expect(JSON.stringify(window.localStorage)).not.toMatch(/chroma|cv_file/);
+    expect(JSON.stringify(window.sessionStorage)).not.toMatch(/chroma|cv_file/);
   });
 
   it('422 mostra o texto de dado inválido', async () => {

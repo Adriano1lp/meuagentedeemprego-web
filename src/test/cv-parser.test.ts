@@ -83,8 +83,11 @@ describe('parseRebuildEmbeddingsResponse', () => {
     expect(parsed.chunks).toBe(12);
     expect(parsed.processed_at).toBe('2026-09-14T12:01:00+00:00');
     expect(parsed.embedding_model).toBe('text-embedding-3-small');
-    expect(parsed.vector_store).toBe('mongodb');
     expect(parsed.embedding_run_id).toBe('run-9');
+    expect(parsed).not.toHaveProperty('chroma_dir');
+    expect(parsed).not.toHaveProperty('vector_store');
+    expect(parsed).not.toHaveProperty('cv_file');
+    expect(JSON.stringify(parsed)).not.toMatch(/chroma_dir|vector_store|cv_file|\/data\//);
   });
 
   it('rejeita payload que nao e objeto', () => {

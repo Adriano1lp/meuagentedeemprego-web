@@ -29,6 +29,7 @@ import {
   CV_OFFLINE,
   CV_UNAVAILABLE,
   cvFailureMessage,
+  isSuccessfulRebuildBody,
   mentionsRawUnavailable,
   parseRebuildEmbeddingsResponse,
   parseUploadCvResponse,
@@ -184,14 +185,6 @@ function internalErrorDetail(body: unknown): string | null {
     }
   }
   return null;
-}
-
-function isReadyRebuild(body: unknown): boolean {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return false;
-  }
-  const record = body as Record<string, unknown>;
-  return record.has_embeddings === true && record.ready_for_analysis === true;
 }
 
 function rethrowCvFailure(operation: CvOperation, error: unknown): never {
@@ -484,7 +477,7 @@ export function createApiClient(options: ApiClientOptions) {
       } catch {
         throw new ApiError(200, null, CV_UNAVAILABLE);
       }
-      if (!isReadyRebuild(body)) {
+      if (!isSuccessfulRebuildBody(body)) {
         throw new ApiError(200, null, CV_UNAVAILABLE);
       }
       return parsed;

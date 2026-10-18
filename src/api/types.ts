@@ -77,7 +77,7 @@ export type UploadCvResponse = {
 
 /**
  * POST /users/me/rebuild-embeddings — sem body.
- * Campos reais de services.main_rag.rebuild_vectorstore_for_user.
+ * A API também envia chroma_dir, vector_store e cv_file; o client não guarda esses campos.
  */
 export type RebuildEmbeddingsResponse = {
   user_id?: string;
@@ -85,8 +85,6 @@ export type RebuildEmbeddingsResponse = {
   chunks?: number;
   processed_at?: string;
   embedding_model?: string;
-  chroma_dir?: string;
-  vector_store?: string;
 };
 
 /** OpenAPI RequestData */

@@ -62,7 +62,7 @@ export const CV_SESSION = 'Sessão expirada. Entre novamente para continuar.';
 export const CV_UNAVAILABLE =
   'Serviço indisponível no momento. Tente de novo em instantes.';
 
-const CV_LIMIT_DETAIL = /excede o limite|\b\d+\s?MB\b/;
+const CV_LIMIT_DETAIL = /excede o limite|\b\d+\s?mb\b/i;
 
 export type CvOperation = 'upload' | 'rebuild';
 
@@ -142,6 +142,15 @@ export function formatCvUpdatedAt(value: string | null | undefined): string | nu
   return `${day}/${month}/${year} às ${hour}h${minute}`;
 }
 
+/** 200 de rebuild só vale com chunks numérico, finito e maior que zero. */
+export function isSuccessfulRebuildBody(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return false;
+  }
+  const chunks = (body as { chunks?: unknown }).chunks;
+  return typeof chunks === 'number' && Number.isFinite(chunks) && chunks > 0;
+}
+
 export function parseRebuildEmbeddingsResponse(
   payload: unknown,
 ): RebuildEmbeddingsResponse {
@@ -152,8 +161,6 @@ export function parseRebuildEmbeddingsResponse(
     chunks: asOptionalNumber(record.chunks),
     processed_at: asOptionalString(record.processed_at),
     embedding_model: asOptionalString(record.embedding_model),
-    chroma_dir: asOptionalString(record.chroma_dir),
-    vector_store: asOptionalString(record.vector_store),
   };
 }
 

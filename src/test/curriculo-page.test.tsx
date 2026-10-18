@@ -209,9 +209,14 @@ describe('troca de curriculo', () => {
       rebuild: () => {
         rebuilt = true;
         return jsonResponse({
+          user_id: 'user-1',
+          embedding_run_id: 'run-1',
           chunks: 3,
-          has_embeddings: true,
-          ready_for_analysis: true,
+          processed_at: '2026-11-02T15:04:00Z',
+          embedding_model: 'text-embedding-3-small',
+          chroma_dir: '/segredo/chroma',
+          vector_store: 'mongodb',
+          cv_file: '/segredo/cv.txt',
         });
       },
     });
@@ -241,6 +246,9 @@ describe('troca de curriculo', () => {
     });
     expect(harness.uploadCalls).toBe(1);
     expect(harness.rebuildCalls).toBe(1);
+    expect(document.body.textContent).not.toMatch(
+      /chroma_dir|vector_store|cv_file|mongodb|\/segredo\//,
+    );
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
   });
