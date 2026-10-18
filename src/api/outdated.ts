@@ -12,9 +12,9 @@ export type OutdatedDetail = {
 };
 
 const DEFAULT_MESSAGES: Record<OutdatedCode, string> = {
-  TERMS_OUTDATED: 'Termos de uso desatualizados. Reaceite a versao vigente.',
+  TERMS_OUTDATED: 'Termos de uso desatualizados. Reaceite a versão vigente.',
   PRIVACY_OUTDATED:
-    'Politica de privacidade desatualizada. Reaceite a versao vigente.',
+    'Política de privacidade desatualizada. Reaceite a versão vigente.',
 };
 
 export function isOutdatedCode(value: unknown): value is OutdatedCode {

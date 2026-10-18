@@ -189,7 +189,7 @@ export function CvUploadPanel({
           <AlertDescription>
             {held.filename ? (
               <p data-testid="cv-saved-filename" className="break-all font-medium">
-                {held.filename}
+                Currículo atualizado. Nome do arquivo: {held.filename}
               </p>
             ) : null}
             {held.updatedAt ? (

@@ -24,18 +24,18 @@ export const EXPORT_DOWNLOAD_FILENAME = 'meus-dados.json';
 export const EXPORT_LOGIN_REQUIRED =
   'Entre na sua conta para exportar seus dados.';
 export const EXPORT_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para exportar seus dados.';
+  'Sessão expirada. Entre novamente para exportar seus dados.';
 export const EXPORT_FAILED =
-  'Nao foi possivel exportar seus dados. Tente novamente.';
+  'Não foi possível exportar seus dados. Tente novamente.';
 
 export const DELETE_LOGIN_REQUIRED =
   'Entre na sua conta para excluir a conta.';
 export const DELETE_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para excluir a conta.';
+  'Sessão expirada. Entre novamente para excluir a conta.';
 export const DELETE_FAILED =
-  'Nao foi possivel excluir a conta. Tente novamente.';
+  'Não foi possível excluir a conta. Tente novamente.';
 export const DELETE_CONFIRM_MISMATCH =
-  'A confirmacao nao confere. A exclusao nao foi enviada.';
+  'A confirmação não confere. A exclusão não foi enviada.';
 
 /** Chaves que nao podem aparecer no download nem na UI. */
 const SENSITIVE_EXPORT_KEYS = new Set([

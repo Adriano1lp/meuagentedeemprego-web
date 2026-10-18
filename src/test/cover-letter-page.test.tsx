@@ -210,7 +210,7 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('cover-letter-loading')).toHaveTextContent(
-        'Gerando a carta de apresentacao...',
+        'Gerando a carta de apresentação...',
       );
     });
     expect(screen.getByTestId('cover-letter-generate')).toBeDisabled();

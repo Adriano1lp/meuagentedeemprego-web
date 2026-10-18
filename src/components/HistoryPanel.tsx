@@ -31,6 +31,23 @@ import {
   CardTitle,
 } from './ui/card';
 
+function visibleBlockedReason(reason: string | null | undefined): string {
+  const trimmed = reason?.trim() ?? '';
+  const lower = trimmed.toLowerCase();
+  if (
+    !trimmed ||
+    /[/\\]|https?:/i.test(trimmed) ||
+    /\b(post|get|put|patch|delete)\b/i.test(trimmed) ||
+    lower.includes('bearer') ||
+    lower.includes('has_cv') ||
+    lower.includes('endpoint') ||
+    lower.includes('json')
+  ) {
+    return 'PDF não gerado.';
+  }
+  return `PDF não gerado: ${trimmed}`;
+}
+
 type HistoryView =
   | { kind: 'loading' }
   | { kind: 'list'; items: GapHistoryItem[] }
@@ -75,10 +92,10 @@ export function HistoryPanel() {
       aria-labelledby="history-title"
     >
       <CardHeader>
-        <Badge variant="outline">Analises desta conta</Badge>
-        <CardTitle id="history-title">Historico</CardTitle>
+        <Badge variant="outline">Análises desta conta</Badge>
+        <CardTitle id="history-title">Histórico</CardTitle>
         <CardDescription className="text-foreground">
-          Analises anteriores desta conta: titulo, empresa, aderencia e data.
+          Análises anteriores desta conta: título, empresa, aderência e data.
         </CardDescription>
       </CardHeader>
       <CardContent className="pt-2">
@@ -89,7 +106,7 @@ export function HistoryPanel() {
             aria-live="polite"
             className="text-sm text-muted-foreground"
           >
-            Carregando historico...
+            Carregando histórico...
           </p>
         ) : null}
 
@@ -97,15 +114,15 @@ export function HistoryPanel() {
           <Alert data-testid="history-empty" role="status">
             <AlertTitle>Nenhum retorno salvo ainda.</AlertTitle>
             <AlertDescription className="mt-2 text-muted-foreground">
-              Quando o assistente analisar uma vaga, o titulo, a empresa, a
-              aderencia e a data aparecem aqui.
+              Quando o assistente analisar uma vaga, o título, a empresa, a
+              aderência e a data aparecem aqui.
             </AlertDescription>
           </Alert>
         ) : null}
 
         {view.kind === 'error' ? (
           <Alert data-testid="history-error" variant="destructive">
-            <AlertTitle>Nao foi possivel carregar o historico.</AlertTitle>
+            <AlertTitle>Não foi possível carregar o histórico.</AlertTitle>
             <AlertDescription className="mt-2">
               {view.message || HISTORY_LOAD_FAILED}
             </AlertDescription>
@@ -136,7 +153,7 @@ export function HistoryPanel() {
 
 function HistoryCard({ item }: { item: GapHistoryItem }) {
   const formattedDate = formatHistoryDate(item.created_at);
-  const title = item.job_title?.trim() || 'Analise sem titulo';
+  const title = item.job_title?.trim() || 'Análise sem título';
 
   return (
     <li>
@@ -169,14 +186,12 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
         ) : null}
 
         <p data-testid="history-item-score" className="mt-2 text-sm">
-          Aderencia: {item.match_score}/100
+          Aderência: {item.match_score}/100
         </p>
 
         {item.generation_blocked ? (
           <p data-testid="history-item-blocked" className="mt-2 text-sm">
-            {item.blocked_reason
-              ? `PDF nao gerado: ${item.blocked_reason}`
-              : 'PDF nao gerado.'}
+            {visibleBlockedReason(item.blocked_reason)}
           </p>
         ) : null}
 
@@ -197,7 +212,7 @@ function HistoryCard({ item }: { item: GapHistoryItem }) {
 
         {item.critical_gaps.length > 0 ? (
           <p className="mt-2 break-words text-sm">
-            Lacunas criticas: {item.critical_gaps.join(', ')}
+            Lacunas críticas: {item.critical_gaps.join(', ')}
           </p>
         ) : null}
 
@@ -343,7 +358,7 @@ function HistoryDownloadButton({
 
   const accessibleName = downloading
     ? `${busyLabel} ${describedTitle}`
-    : `${idleLabel} da analise ${describedTitle}`;
+    : `${idleLabel} da análise ${describedTitle}`;
 
   return (
     <div className="w-full sm:min-w-0 sm:flex-1">

@@ -142,12 +142,12 @@ function errorMessage(status: number, body: unknown): string {
     return 'Cota mensal esgotada.';
   }
   if (status === 400) {
-    return 'Nao foi possivel processar o pedido.';
+    return 'Não foi possível processar o pedido.';
   }
   if (status >= 500) {
-    return `Erro no servidor: ${status}`;
+    return 'Não foi possível concluir agora.';
   }
-  return 'Falha ao falar com a API';
+  return 'Não foi possível concluir agora.';
 }
 
 export type RegisterInput = {
@@ -211,7 +211,7 @@ export function createApiClient(options: ApiClientOptions) {
       throw new ApiError(
         0,
         null,
-        `Nao foi possivel alcancar a API em ${options.baseUrl}.`,
+        'Não foi possível concluir agora.',
       );
     }
 
@@ -288,7 +288,7 @@ export function createApiClient(options: ApiClientOptions) {
     async me(): Promise<User> {
       const body = await request('/auth/me', { method: 'GET' });
       if (!body || typeof body !== 'object') {
-        throw new ApiError(200, body, 'Resposta da API em formato invalido');
+        throw new ApiError(200, body, 'Não foi possível ler a resposta.');
       }
       return body as User;
     },
@@ -387,7 +387,7 @@ export function createApiClient(options: ApiClientOptions) {
       try {
         return parseUserStatus(body);
       } catch {
-        throw new ApiError(200, body, 'Resposta de status em formato invalido');
+        throw new ApiError(200, body, 'Não foi possível ler o status.');
       }
     },
 
@@ -401,7 +401,7 @@ export function createApiClient(options: ApiClientOptions) {
       try {
         return parseUploadCvResponse(body);
       } catch {
-        throw new ApiError(200, body, 'Resposta de upload em formato invalido');
+        throw new ApiError(200, body, 'Não foi possível ler o arquivo enviado.');
       }
     },
 
@@ -415,7 +415,7 @@ export function createApiClient(options: ApiClientOptions) {
         throw new ApiError(
           200,
           body,
-          'Resposta de embeddings em formato invalido',
+          'Não foi possível preparar o currículo para análise.',
         );
       }
     },
@@ -430,7 +430,7 @@ export function createApiClient(options: ApiClientOptions) {
       try {
         return parseProcessarResponse(body);
       } catch {
-        throw new ApiError(200, body, 'Resposta de processar em formato invalido');
+        throw new ApiError(200, body, 'Não foi possível ler a análise.');
       }
     },
 
@@ -549,14 +549,14 @@ export function createApiClient(options: ApiClientOptions) {
     async downloadUserFile(fileName: string): Promise<ArrayBuffer> {
       const safeName = fileName.split('/').pop()?.trim() || fileName;
       if (!safeName) {
-        throw new ApiError(400, null, 'Nome de arquivo invalido');
+        throw new ApiError(400, null, 'Nome de arquivo inválido.');
       }
       const body = await request(
         `/users/me/files/${encodeURIComponent(safeName)}`,
         { method: 'GET', parse: 'bytes' },
       );
       if (!(body instanceof ArrayBuffer)) {
-        throw new ApiError(200, body, 'Arquivo em formato invalido');
+        throw new ApiError(200, body, 'Arquivo em formato inválido.');
       }
       return body;
     },
@@ -568,7 +568,7 @@ export type ApiClient = ReturnType<typeof createApiClient>;
 function assertAuthResponse(body: unknown): AuthResponse {
   const token = extractAccessToken(body);
   if (!token || !body || typeof body !== 'object') {
-    throw new ApiError(200, body, 'Resposta de autenticacao incompleta');
+    throw new ApiError(200, body, 'Não foi possível concluir a entrada.');
   }
   const record = body as Record<string, unknown>;
   return {

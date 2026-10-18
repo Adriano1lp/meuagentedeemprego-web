@@ -45,7 +45,7 @@ export const BILLING_READ_FAILED =
   'Não foi possível confirmar a assinatura agora. Tente novamente em instantes.';
 
 export const BILLING_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para continuar.';
+  'Sessão expirada. Entre novamente para continuar.';
 
 export const BILLING_CONFIRMING = 'Estamos confirmando seu pagamento…';
 

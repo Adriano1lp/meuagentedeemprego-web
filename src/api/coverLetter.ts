@@ -12,23 +12,23 @@ export const COVER_LETTER_PATH = '/users/me/cover-letter';
 export const COVER_LETTER_LOGIN_REQUIRED =
   'Entre na sua conta para gerar a carta.';
 export const COVER_LETTER_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para gerar a carta.';
+  'Sessão expirada. Entre novamente para gerar a carta.';
 export const COVER_LETTER_FAILED =
-  'Nao foi possivel gerar a carta.';
+  'Não foi possível gerar a carta.';
 export const COVER_LETTER_BAD_REQUEST =
-  'Nao foi possivel gerar a carta para esta empresa.';
+  'Não foi possível gerar a carta para esta empresa.';
 export const COVER_LETTER_COMPANY_REQUIRED =
   'Informe a empresa para gerar a carta.';
 export const COVER_LETTER_QUOTA =
-  'Limite de uso atingido. Nao e possivel gerar a carta agora.';
+  'Limite de uso atingido. Não é possível gerar a carta agora.';
 export const COVER_LETTER_DOWNLOAD_FAILED =
-  'Nao foi possivel baixar o PDF da carta.';
+  'Não foi possível baixar o PDF da carta.';
 export const COVER_LETTER_PDF_INVALID =
-  'O arquivo recebido nao e um PDF valido.';
+  'O arquivo recebido não é um PDF válido.';
 export const COVER_LETTER_COPY_SUCCESS = 'Carta copiada.';
-export const COVER_LETTER_COPY_FAILED = 'Nao foi possivel copiar a carta.';
+export const COVER_LETTER_COPY_FAILED = 'Não foi possível copiar a carta.';
 export const COVER_LETTER_MISSING_COMPANY =
-  'Esta analise nao tem empresa. A carta so pode ser gerada quando a vaga informa o nome da empresa.';
+  'Esta análise não tem empresa. A carta só pode ser gerada quando a vaga informa o nome da empresa.';
 
 /**
  * POST /users/me/cover-letter — 200 { texto_resposta, pdf_url, user_id }.

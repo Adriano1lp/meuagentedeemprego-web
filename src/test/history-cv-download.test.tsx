@@ -205,7 +205,7 @@ describe('Feature: Download do CV no historico', () => {
     );
     expect(within(card).getByTestId('history-cv-download')).toHaveAttribute(
       'aria-label',
-      'Baixar CV da analise Desenvolvedor Flutter',
+      'Baixar CV da análise Desenvolvedor Flutter',
     );
     expect(within(card).getByTestId('history-pdf-download')).toHaveTextContent(
       'Baixar PDF da vaga',
@@ -665,7 +665,7 @@ describe('Feature: Download do CV no historico', () => {
     expect(screen.queryByTestId('history-cv-download')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-pdf-download')).not.toBeInTheDocument();
     expect(screen.getByTestId('history-item-blocked')).toHaveTextContent(
-      'PDF nao gerado: aderencia baixa',
+      'PDF não gerado: aderencia baixa',
     );
     expect(harness.fileCalls).toHaveLength(0);
   });

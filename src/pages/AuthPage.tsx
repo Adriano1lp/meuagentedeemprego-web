@@ -72,7 +72,7 @@ export function AuthPage() {
   async function handleLogin(event: FormEvent) {
     event.preventDefault();
     if (!loginEmail.trim() || !loginPassword) {
-      setError('Preencha email e senha.');
+      setError('Preencha e-mail e senha.');
       return;
     }
     setSubmitting(true);
@@ -84,7 +84,7 @@ export function AuthPage() {
       setError(
         cause instanceof ApiError
           ? cause.message
-          : 'Falha ao autenticar com a API',
+          : 'Não foi possível entrar agora.',
       );
     } finally {
       setSubmitting(false);
@@ -113,7 +113,7 @@ export function AuthPage() {
       setError(
         cause instanceof ApiError
           ? cause.message
-          : 'Falha ao autenticar com a API',
+          : 'Não foi possível entrar agora.',
       );
     } finally {
       setSubmitting(false);
@@ -141,7 +141,7 @@ export function AuthPage() {
 
       <div
         role="tablist"
-        aria-label="Autenticacao"
+        aria-label="Autenticação"
         className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
       >
         <button
@@ -219,14 +219,13 @@ export function AuthPage() {
           <Card className="mb-5">
             <CardHeader className="pb-5 md:pb-6">
               <p className="text-xs font-medium tracking-wide text-muted-foreground">
-                Recuperacao entre dispositivos
+                Recuperação entre dispositivos
               </p>
               <h1 className="font-display text-[1.75rem] font-semibold leading-tight tracking-tight">
                 Entre para recuperar sua conta
               </h1>
               <CardDescription className="text-foreground">
-                Ao entrar, o app consulta seu status na API e restaura o acesso ao
-                curriculo, embeddings e PDFs do usuario autenticado.
+                Ao entrar, você recupera o currículo e os PDFs da sua conta.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -237,7 +236,7 @@ export function AuthPage() {
                 Acessar conta existente
               </h2>
               <Label className="mt-4 block" htmlFor="login-email">
-                Email
+                E-mail
               </Label>
               <Input
                 id="login-email"
@@ -245,7 +244,7 @@ export function AuthPage() {
                 type="email"
                 autoComplete="email"
                 className="mt-1.5"
-                placeholder="Email"
+                placeholder="E-mail"
                 value={loginEmail}
                 onChange={(event) => setLoginEmail(event.target.value)}
               />
@@ -295,7 +294,7 @@ export function AuthPage() {
                 onChange={(event) => setDisplayName(event.target.value)}
               />
               <Label className="mt-3 block" htmlFor="signup-email">
-                Email
+                E-mail
               </Label>
               <Input
                 id="signup-email"
@@ -303,7 +302,7 @@ export function AuthPage() {
                 type="email"
                 autoComplete="email"
                 className="mt-1.5"
-                placeholder="Email"
+                placeholder="E-mail"
                 value={signupEmail}
                 onChange={(event) => setSignupEmail(event.target.value)}
               />

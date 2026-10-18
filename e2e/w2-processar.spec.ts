@@ -202,8 +202,10 @@ test('5. 400 mostra erro e nao UI de sucesso', async ({ page }) => {
   await page.getByTestId('processar-texto').fill(vagaTexto);
   await page.getByTestId('processar-submit').click();
   await expect(page.getByTestId('processar-error')).toContainText(
-    'Embeddings do usuario nao encontrados',
+    'Não foi possível analisar a vaga.',
   );
+  await expect(page.getByTestId('processar-error')).not.toContainText('/users/');
+  await expect(page.getByTestId('processar-error')).not.toContainText('POST ');
   await expect(page.getByTestId('processar-success')).toHaveCount(0);
   await expect(page.getByTestId('download-pdf')).toHaveCount(0);
 });

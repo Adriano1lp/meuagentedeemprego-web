@@ -26,7 +26,7 @@ import {
 /** Motivo de logout apos DELETE /users/me com sucesso. Clique em Sair nao usa isto. */
 export const LOGOUT_ACCOUNT_DELETED = 'account-deleted';
 
-export const ACCOUNT_DELETED_NOTICE = 'Sua conta foi excluida.';
+export const ACCOUNT_DELETED_NOTICE = 'Sua conta foi excluída.';
 
 type AuthContextValue = {
   token: string | null;

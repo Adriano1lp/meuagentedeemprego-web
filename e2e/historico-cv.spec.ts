@@ -134,7 +134,7 @@ test('erro ao baixar o CV fica generico e a carta continua disponivel', async ({
 
   const error = page.getByTestId('history-cv-download-error');
   await expect(error).toHaveText(
-    'Nao foi possivel baixar o CV desta analise. Tente novamente.',
+    'Não foi possível baixar o CV desta análise. Tente novamente.',
   );
   await expect(error).not.toContainText('/users/me');
   await expect(error).not.toContainText('jwt-login');

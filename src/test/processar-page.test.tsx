@@ -347,7 +347,10 @@ describe('HomePage processar + cotas', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('processar-error')).toHaveTextContent(
-        'Embeddings do usuario nao encontrados',
+        'Não foi possível analisar a vaga.',
+      );
+      expect(screen.getByTestId('processar-error').textContent).not.toMatch(
+        /\/users\/|POST |has_cv|Bearer/,
       );
     });
     expect(screen.queryByTestId('processar-success')).not.toBeInTheDocument();

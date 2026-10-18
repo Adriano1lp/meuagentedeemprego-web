@@ -24,16 +24,16 @@ const subscribePath = `${ENTER_PATH}?next=${encodeURIComponent(APP_PROFILE)}`;
 
 const steps = [
   {
-    title: 'Currículo e embeddings',
-    text: 'Envie o currículo em .pdf ou .txt. O app reconstrói os embeddings. Analisar vaga só habilita quando o status traz os embeddings prontos.',
+    title: 'Currículo',
+    text: 'Envie o currículo em PDF ou TXT. A análise da vaga só fica disponível quando o currículo está pronto.',
   },
   {
     title: 'Análise da vaga',
-    text: 'Cole o texto da vaga. A análise mostra a resposta, o match quando a API envia o número, e o PDF autenticado quando ele é gerado.',
+    text: 'Cole o texto da vaga. A análise mostra a resposta, o match quando ele existe, e o PDF quando ele é gerado.',
   },
   {
     title: 'Histórico, CV e carta',
-    text: 'O histórico lista as análises da conta. Em cada uma dá para baixar o CV, quando a API envia o arquivo, e gerar a carta de apresentação.',
+    text: 'O histórico lista as análises da conta. Em cada uma dá para baixar o CV, quando o arquivo existe, e gerar a carta de apresentação.',
   },
 ] as const;
 
@@ -99,9 +99,8 @@ export function LandingPage() {
             Análise de vaga com o seu currículo
           </h1>
           <p className="mt-4 max-w-2xl text-base text-muted-foreground md:text-lg">
-            Envie o currículo, aguarde os embeddings e analise o texto de uma
-            vaga. O histórico guarda as análises. Dá para baixar o CV gerado e
-            a carta de apresentação.
+            Envie o currículo e analise o texto de uma vaga. O histórico guarda
+            as análises. Dá para baixar o CV gerado e a carta de apresentação.
           </p>
           <div className="mt-6 flex w-full max-w-md flex-col gap-3 sm:max-w-none sm:flex-row">
             <Button asChild size="lg" className="w-full sm:w-auto">

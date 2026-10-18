@@ -72,7 +72,7 @@ describe('parseCurrentUser', () => {
     expect(subscriptionStatusLabel('none')).toBe('Sem assinatura');
     expect(subscriptionStatusLabel('past_due')).toBe('Pagamento pendente');
     expect(subscriptionStatusLabel('canceled')).toBe('Cancelada');
-    expect(subscriptionStatusLabel('trialing')).toBe('trialing');
+    expect(subscriptionStatusLabel('trialing')).toBe('Período de teste');
     expect(subscriptionStatusLabel(undefined)).toBeNull();
   });
 });

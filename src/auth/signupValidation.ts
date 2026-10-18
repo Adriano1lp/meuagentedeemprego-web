@@ -20,7 +20,7 @@ export function canSubmitSignup(state: SignupFormState): boolean {
 
 export function validateSignup(state: SignupFormState): string | null {
   if (!state.displayName.trim() || !state.email.trim() || !state.password) {
-    return 'Preencha nome, email e senha.';
+    return 'Preencha nome, e-mail e senha.';
   }
   if (
     !state.termsAccepted ||
@@ -28,7 +28,7 @@ export function validateSignup(state: SignupFormState): string | null {
     !state.termsLoaded ||
     !state.privacyLoaded
   ) {
-    return 'Aceite os Termos de uso e a Politica de privacidade para criar a conta.';
+    return 'Aceite os Termos de uso e a Política de privacidade para criar a conta.';
   }
   return null;
 }

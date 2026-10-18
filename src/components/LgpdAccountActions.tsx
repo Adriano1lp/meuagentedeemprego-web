@@ -149,7 +149,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
           Seus dados
         </CardTitle>
         <CardDescription className="text-foreground">
-          Baixe uma copia dos dados da conta ou exclua a conta de forma
+          Baixe uma cópia dos dados da conta ou exclua a conta de forma
           permanente.
         </CardDescription>
       </CardHeader>
@@ -215,7 +215,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
           variant="destructive"
           className="w-full"
         >
-          Solicitar exclusao de conta
+          Solicitar exclusão de conta
         </Button>
       </CardContent>
 
@@ -233,7 +233,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
               Excluir conta
             </h3>
             <p id={descriptionId} className="mt-3 text-sm leading-relaxed">
-              Essa acao apaga a conta e encerra a sessao. Nao da para desfazer.
+              Essa ação apaga a conta e encerra a sessão. Não dá para desfazer.
               Digite DELETE para confirmar.
             </p>
 
@@ -245,7 +245,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
               }}
             >
               <Label htmlFor={confirmInputId} className="block">
-                Confirmacao
+                Confirmação
               </Label>
               <Input
                 ref={confirmInputRef}

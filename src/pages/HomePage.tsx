@@ -26,7 +26,7 @@ const STATUS_LOAD_ERROR = 'Não foi possível carregar agora.';
 
 export function HomePage() {
   const { user, api, isAuthenticated, blocksApp, logout } = useAuth();
-  const greeting = user?.display_name?.trim() || user?.email || 'usuario';
+  const greeting = user?.display_name?.trim() || user?.email || 'usuário';
   const canUseProduct = isAuthenticated && !blocksApp;
   const [status, setStatus] = useState<UserStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(canUseProduct);
@@ -126,7 +126,7 @@ export function HomePage() {
           <Badge variant="secondary">logado</Badge>
           <CardTitle>Olá, {greeting}</CardTitle>
           <CardDescription>
-            Voce esta logado. Análise de vaga, carta, histórico e perfil a partir daqui.
+            Você está logado. Análise de vaga, carta, histórico e perfil a partir daqui.
           </CardDescription>
         </CardHeader>
       </Card>

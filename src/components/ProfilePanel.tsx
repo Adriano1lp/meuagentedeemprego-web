@@ -99,8 +99,8 @@ export function ProfilePanel() {
           <Badge variant="outline">Sua conta</Badge>
           <CardTitle id="profile-title">Perfil</CardTitle>
           <CardDescription className="text-foreground">
-            Nome, email e plano que a conta autenticada devolve. Sem edicao de
-            curriculo nesta tela.
+            Nome, e-mail e plano da sua conta. Sem edição de currículo nesta
+            tela.
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-4">
@@ -117,7 +117,7 @@ export function ProfilePanel() {
 
           {view.kind === 'error' ? (
             <Alert data-testid="profile-error" variant="destructive">
-              <AlertTitle>Nao foi possivel carregar o perfil.</AlertTitle>
+              <AlertTitle>Não foi possível carregar o perfil.</AlertTitle>
               <AlertDescription className="mt-2">
                 {view.message || PROFILE_LOAD_FAILED}
               </AlertDescription>
@@ -140,7 +140,7 @@ export function ProfilePanel() {
               role="status"
               className="text-sm text-muted-foreground"
             >
-              A conta nao trouxe nome, email ou plano.
+              A conta não trouxe nome, e-mail ou plano.
             </p>
           ) : null}
 
@@ -156,7 +156,7 @@ export function ProfilePanel() {
               ) : null}
               {user.email ? (
                 <div className="rounded-lg bg-muted px-3 py-2">
-                  <dt className="text-xs font-medium text-muted-foreground">Email</dt>
+                  <dt className="text-xs font-medium text-muted-foreground">E-mail</dt>
                   <dd data-testid="profile-email" className="mt-0.5 break-all font-medium">
                     {user.email}
                   </dd>

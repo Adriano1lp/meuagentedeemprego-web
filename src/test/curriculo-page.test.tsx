@@ -154,6 +154,7 @@ describe('troca de curriculo', () => {
     await openCurriculo(user);
 
     expect(screen.getByTestId('cv-sent')).toHaveTextContent('Currículo enviado');
+    expect(screen.queryByText(/nesta sessão/)).not.toBeInTheDocument();
     expect(screen.queryByTestId('cv-saved-filename')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('cv-replace'));
     chooseFile(new File(['%PDF-1.4'], 'cv.pdf', { type: 'application/pdf' }));
@@ -176,7 +177,9 @@ describe('troca de curriculo', () => {
       }),
     );
     await waitFor(() => {
-      expect(screen.getByTestId('cv-saved-filename')).toHaveTextContent('cv.pdf');
+      expect(screen.getByTestId('cv-saved-filename')).toHaveTextContent(
+        'Currículo atualizado. Nome do arquivo: cv.pdf',
+      );
     });
     expect(screen.getByTestId('cv-saved-updated-at')).toHaveTextContent(
       '2026-11-02T15:04:00Z',
@@ -228,7 +231,9 @@ describe('troca de curriculo', () => {
       expect(rebuilt).toBe(true);
     });
     await waitFor(() => {
-      expect(screen.getByTestId('cv-saved-filename')).toHaveTextContent('cv.pdf');
+      expect(screen.getByTestId('cv-saved-filename')).toHaveTextContent(
+        'Currículo atualizado. Nome do arquivo: cv.pdf',
+      );
     });
     expect(harness.uploadCalls).toBe(1);
     expect(harness.rebuildCalls).toBe(1);

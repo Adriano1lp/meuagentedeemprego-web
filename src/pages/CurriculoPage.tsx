@@ -75,7 +75,7 @@ export function CurriculoPage() {
       <Card data-testid="curriculo-page">
         <CardHeader>
           <CardTitle>Meu currículo</CardTitle>
-          <CardDescription>PDF ou TXT. O arquivo trocado fica só nesta sessão.</CardDescription>
+          <CardDescription>PDF ou TXT.</CardDescription>
         </CardHeader>
         <CardContent className="pt-2">
           {loading && !status ? (
@@ -109,7 +109,7 @@ export function CurriculoPage() {
               </p>
               {sessionFile?.filename ? (
                 <p data-testid="cv-saved-filename" className="break-all text-sm">
-                  {sessionFile.filename}
+                  Currículo atualizado. Nome do arquivo: {sessionFile.filename}
                 </p>
               ) : null}
               {sessionFile?.updatedAt ? (

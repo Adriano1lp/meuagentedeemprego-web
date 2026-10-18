@@ -86,9 +86,8 @@ function ConsentReacceptOverlay() {
               Documentos legais atualizados
             </CardTitle>
             <CardDescription className="text-foreground">
-              Suas versoes aceitas nao sao as vigentes. Leia o texto carregado da
-              API, marque os checkboxes e confirme. O app fica bloqueado ate o
-              reaceite via POST /consent.
+              Suas versões aceitas não são as vigentes. Leia o texto, marque as
+              caixas e confirme. O app fica bloqueado até o novo aceite.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -96,7 +95,7 @@ function ConsentReacceptOverlay() {
         <Card className="mt-5">
           <form onSubmit={handleSubmit} className="px-5 py-5 md:px-6">
             <h3 className="font-display text-lg font-semibold">
-              Versoes vigentes
+              Versões vigentes
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
               Termos 1.0 e privacidade 1.0.

@@ -49,7 +49,7 @@ export function PrivacyShortcut() {
           Privacidade e LGPD
         </CardTitle>
         <CardDescription className="text-foreground">
-          A politica de privacidade vigente e a mesma do cadastro.
+          A política de privacidade vigente é a mesma do cadastro.
         </CardDescription>
       </CardHeader>
       <CardContent className="pt-2">
@@ -73,7 +73,7 @@ export function PrivacyShortcut() {
                 aria-live="polite"
                 className="text-sm text-muted-foreground"
               >
-                Carregando politica de privacidade...
+                Carregando política de privacidade...
               </p>
             ) : null}
             {error ? (

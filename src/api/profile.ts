@@ -11,11 +11,11 @@ export const CURRENT_USER_PATH = '/users/me';
 export const PROFILE_LOGIN_REQUIRED =
   'Entre na sua conta para ver o perfil.';
 export const PROFILE_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para ver o perfil.';
+  'Sessão expirada. Entre novamente para ver o perfil.';
 export const PROFILE_LOAD_FAILED =
-  'Nao foi possivel carregar o perfil. Tente novamente.';
+  'Não foi possível carregar o perfil. Tente novamente.';
 export const PRIVACY_LOAD_FAILED =
-  'Nao foi possivel carregar a politica de privacidade. Tente novamente.';
+  'Não foi possível carregar a política de privacidade. Tente novamente.';
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -64,6 +64,9 @@ export function subscriptionStatusLabel(
   }
   if (normalized === 'canceled') {
     return 'Cancelada';
+  }
+  if (normalized === 'trialing') {
+    return 'Período de teste';
   }
   return status.trim();
 }
