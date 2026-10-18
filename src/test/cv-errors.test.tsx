@@ -12,6 +12,7 @@ import {
   CV_TOO_LARGE,
   CV_UNAVAILABLE,
   CV_UPLOAD_BAD_REQUEST,
+  cvFailureMessage,
   MAX_CV_UPLOAD_BYTES,
 } from '../api/cv';
 import { AuthProvider } from '../auth/AuthContext';
@@ -149,6 +150,34 @@ function expectFixed(expected: string) {
   }
 }
 
+function expectChooseAnotherFile() {
+  expect(screen.getByTestId('cv-choose-another')).toHaveTextContent('Escolher outro arquivo');
+  expect(screen.queryByTestId('cv-retry')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Tentar de novo' })).not.toBeInTheDocument();
+}
+
+describe('cvFailureMessage e o limite de tamanho', () => {
+  it('não confunde embeddings com arquivo grande e reconhece o limite de 10 MB', () => {
+    expect(
+      cvFailureMessage(
+        'rebuild',
+        400,
+        'Curriculo do usuario nao encontrado. Envie o curriculo antes de gerar embeddings',
+      ),
+    ).toBe(CV_REBUILD_BAD_REQUEST);
+    expect(
+      cvFailureMessage(
+        'upload',
+        400,
+        'Nao foi possivel gerar os embeddings do curriculo',
+      ),
+    ).toBe(CV_UPLOAD_BAD_REQUEST);
+    expect(
+      cvFailureMessage('upload', 400, 'Arquivo excede o limite de 10 MB'),
+    ).toBe(CV_TOO_LARGE);
+  });
+});
+
 describe('erros fixos de upload e rebuild', () => {
   afterEach(() => {
     cleanup();
@@ -248,6 +277,11 @@ describe('erros fixos de upload e rebuild', () => {
     });
     expect(uploadHits(harness.fetchImpl)).toBe(0);
     expect(screen.getByTestId('cv-error').textContent).not.toMatch(/\b413\b/);
+    expectChooseAnotherFile();
+    const input = screen.getByTestId('cv-file');
+    const open = vi.spyOn(input, 'click');
+    await user.click(screen.getByTestId('cv-choose-another'));
+    expect(open).toHaveBeenCalled();
   });
 
   it('413 mostra o texto fixo', async () => {
@@ -262,6 +296,7 @@ describe('erros fixos de upload e rebuild', () => {
     await waitFor(() => {
       expectFixed(CV_TOO_LARGE);
     });
+    expectChooseAnotherFile();
   });
 
   it('500 text/plain com traceback mostra o texto fixo', async () => {
@@ -314,10 +349,7 @@ describe('erros fixos de upload e rebuild', () => {
   it('400 de limite usa o texto de tamanho e esconde o detail', async () => {
     const harness = createHarness({
       upload: () =>
-        jsonResponse(
-          { detail: `o arquivo excede o teto-interno ${LEAK}` },
-          400,
-        ),
+        jsonResponse({ detail: 'Arquivo excede o limite de 10 MB' }, 400),
     });
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
@@ -327,8 +359,118 @@ describe('erros fixos de upload e rebuild', () => {
     await waitFor(() => {
       expectFixed(CV_TOO_LARGE);
     });
-    expect(screen.getByTestId('cv-error').textContent).not.toContain('teto-interno');
     expect(screen.getByTestId('cv-error').textContent).not.toContain('excede');
+    expectChooseAnotherFile();
+  });
+
+  it('400 de rebuild com embeddings não vira arquivo grande', async () => {
+    const detail =
+      'Curriculo do usuario nao encontrado. Envie o curriculo antes de gerar embeddings';
+    const harness = createHarness({
+      upload: () =>
+        jsonResponse({
+          filename: 'cv.pdf',
+          has_embeddings: false,
+          ready_for_analysis: false,
+        }),
+      rebuild: () => jsonResponse({ detail }, 400),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('cv-retry')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('cv-retry'));
+    await waitFor(() => {
+      expectFixed(CV_REBUILD_BAD_REQUEST);
+    });
+    expect(screen.getByTestId('cv-error')).not.toHaveTextContent(CV_TOO_LARGE);
+    expect(screen.getByTestId('cv-error').textContent).not.toContain(detail);
+  });
+
+  it('400 de upload com embeddings não vira arquivo grande', async () => {
+    const detail = 'Nao foi possivel gerar os embeddings do curriculo';
+    const harness = createHarness({
+      upload: () => jsonResponse({ detail }, 400),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expectFixed(CV_UPLOAD_BAD_REQUEST);
+    });
+    expect(screen.getByTestId('cv-error')).not.toHaveTextContent(CV_TOO_LARGE);
+    expect(screen.getByTestId('cv-error').textContent).not.toContain(detail);
+  });
+
+  async function openRebuildRetry(rebuild: () => Response | Promise<Response>) {
+    const harness = createHarness({
+      upload: () =>
+        jsonResponse({
+          filename: 'cv.pdf',
+          has_embeddings: false,
+          ready_for_analysis: false,
+        }),
+      rebuild,
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('cv-retry')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('cv-retry'));
+    return harness;
+  }
+
+  it('rebuild 200 com JSON inválido mostra o erro genérico', async () => {
+    await openRebuildRetry(
+      () =>
+        new Response('nao-e-json { embeddings', {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        }),
+    );
+    await waitFor(() => {
+      expectFixed(CV_UNAVAILABLE);
+    });
+    expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cv-saved-filename')).not.toBeInTheDocument();
+  });
+
+  it('rebuild 200 sem has_embeddings true mostra o erro genérico', async () => {
+    await openRebuildRetry(() =>
+      jsonResponse({
+        chunks: 2,
+        has_embeddings: false,
+        ready_for_analysis: true,
+      }),
+    );
+    await waitFor(() => {
+      expectFixed(CV_UNAVAILABLE);
+    });
+    expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
+  });
+
+  it('rebuild 200 sem ready_for_analysis true mostra o erro genérico', async () => {
+    await openRebuildRetry(() =>
+      jsonResponse({
+        chunks: 2,
+        has_embeddings: true,
+        ready_for_analysis: false,
+      }),
+    );
+    await waitFor(() => {
+      expectFixed(CV_UNAVAILABLE);
+    });
+    expect(screen.queryByTestId('cv-success')).not.toBeInTheDocument();
   });
 
   it('422 mostra o texto de dado inválido', async () => {

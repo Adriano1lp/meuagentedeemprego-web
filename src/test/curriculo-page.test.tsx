@@ -208,7 +208,11 @@ describe('troca de curriculo', () => {
         }),
       rebuild: () => {
         rebuilt = true;
-        return jsonResponse({ chunks: 3 });
+        return jsonResponse({
+          chunks: 3,
+          has_embeddings: true,
+          ready_for_analysis: true,
+        });
       },
     });
     const user = userEvent.setup();

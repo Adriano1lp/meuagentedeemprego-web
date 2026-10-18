@@ -84,6 +84,8 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
           vector_store: 'mongodb',
           processed_at: '2026-09-14T12:01:00+00:00',
           embedding_model: 'text-embedding-3-small',
+          has_embeddings: true,
+          ready_for_analysis: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );

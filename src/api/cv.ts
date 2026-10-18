@@ -62,7 +62,7 @@ export const CV_SESSION = 'Sessão expirada. Entre novamente para continuar.';
 export const CV_UNAVAILABLE =
   'Serviço indisponível no momento. Tente de novo em instantes.';
 
-const CV_LIMIT_DETAIL = /limite|MB|excede/i;
+const CV_LIMIT_DETAIL = /excede o limite|\b\d+\s?MB\b/;
 
 export type CvOperation = 'upload' | 'rebuild';
 

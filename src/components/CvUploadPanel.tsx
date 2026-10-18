@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import {
   CV_INVALID,
@@ -60,6 +60,7 @@ export function CvUploadPanel({
   onReady,
 }: CvUploadPanelProps) {
   const { api, logout } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<CvPhase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -189,6 +190,7 @@ export function CvUploadPanel({
         </Label>
         <div className="mt-1.5 min-w-0 max-w-full overflow-hidden">
           <Input
+            ref={fileInputRef}
             id="cv-file"
             data-testid="cv-file"
             type="file"
@@ -245,17 +247,31 @@ export function CvUploadPanel({
         <Alert data-testid="cv-error" variant="destructive" className="mt-4">
           <AlertTitle>Erro</AlertTitle>
           <AlertDescription className="mt-2">{error}</AlertDescription>
-          <Button
-            type="button"
-            data-testid="cv-retry"
-            onClick={() => void handleRetry()}
-            disabled={!enabled || busy}
-            variant="outline"
-            size="sm"
-            className="mt-3"
-          >
-            Tentar de novo
-          </Button>
+          {error === CV_TOO_LARGE ? (
+            <Button
+              type="button"
+              data-testid="cv-choose-another"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!enabled || busy}
+              variant="outline"
+              size="sm"
+              className="mt-3"
+            >
+              Escolher outro arquivo
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              data-testid="cv-retry"
+              onClick={() => void handleRetry()}
+              disabled={!enabled || busy}
+              variant="outline"
+              size="sm"
+              className="mt-3"
+            >
+              Tentar de novo
+            </Button>
+          )}
         </Alert>
       ) : null}
     </div>
