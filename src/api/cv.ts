@@ -54,23 +54,47 @@ export const CV_UPLOAD_BAD_REQUEST =
   'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.';
 export const CV_REBUILD_BAD_REQUEST =
   'Não conseguimos processar seu currículo. Envie o arquivo de novo.';
-export const CV_TOO_LARGE = 'Arquivo muito grande. Envie um arquivo menor.';
+export const CV_TOO_LARGE = 'Arquivo muito grande. O limite é 10 MB.';
+export const CV_INVALID =
+  'Não conseguimos processar esse envio. Confira o arquivo e tente de novo.';
+export const CV_OFFLINE = 'Sem conexão. Verifique sua internet.';
 export const CV_SESSION = 'Sessão expirada. Entre novamente para continuar.';
 export const CV_UNAVAILABLE =
   'Serviço indisponível no momento. Tente de novo em instantes.';
 
+const CV_LIMIT_DETAIL = /limite|MB|excede/i;
+
 export type CvOperation = 'upload' | 'rebuild';
 
-/** Texto fixo por status. Nunca devolve detail, reason, statusText nem o corpo. */
-export function cvFailureMessage(operation: CvOperation, status: number): string {
+export function isCvFileTooLarge(file: File): boolean {
+  return file.size > MAX_CV_UPLOAD_BYTES;
+}
+
+/**
+ * Texto fixo por status. `internalDetail` só classifica 400 de limite
+ * e nunca é devolvido.
+ */
+export function cvFailureMessage(
+  operation: CvOperation,
+  status: number,
+  internalDetail?: string | null,
+): string {
+  const limit =
+    typeof internalDetail === 'string' && CV_LIMIT_DETAIL.test(internalDetail);
+  if (status === 413 || (status === 400 && limit)) {
+    return CV_TOO_LARGE;
+  }
   if (status === 400) {
     return operation === 'upload' ? CV_UPLOAD_BAD_REQUEST : CV_REBUILD_BAD_REQUEST;
   }
-  if (status === 413) {
-    return CV_TOO_LARGE;
+  if (status === 422) {
+    return CV_INVALID;
   }
   if (status === 401 || status === 403) {
     return CV_SESSION;
+  }
+  if (status === 0) {
+    return CV_OFFLINE;
   }
   return CV_UNAVAILABLE;
 }

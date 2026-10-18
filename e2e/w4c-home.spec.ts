@@ -236,7 +236,7 @@ test('nav mobile tem 4 itens e /app/curriculo exige sessao', async ({ page }, te
 });
 
 test('nome longo do currículo em 360 não gera scroll horizontal', async ({ page }, testInfo) => {
-  const longName = `${'curriculo-profissional-sem-espaco'.repeat(12)}.pdf`;
+  const longName = 'Currículo (versão final) cv-novo.pdf '.repeat(8).trim();
   await page.setViewportSize({ width: 360, height: 800 });
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
@@ -265,14 +265,30 @@ test('nome longo do currículo em 360 não gera scroll horizontal', async ({ pag
     mimeType: 'application/pdf',
     buffer: Buffer.from('%PDF-1.4'),
   });
-  await expect(page.getByTestId('cv-filename')).toContainText(longName);
+  await expect(page.getByTestId('cv-filename')).toContainText('Currículo (versão final)');
+  await expect(page.getByTestId('cv-filename')).not.toHaveClass(/break-all/);
+  expect(await page.getByTestId('cv-filename').evaluate((el) => el.outerHTML)).not.toContain(
+    'break-all',
+  );
+  expect(
+    await page.getByTestId('cv-filename').evaluate((el) => getComputedStyle(el).wordBreak),
+  ).not.toBe('break-all');
   await expectNoHorizontalScroll(page);
 
   await page.getByTestId('cv-submit').click();
   await expect(page.getByTestId('cv-saved-filename')).toContainText(
     `Currículo atualizado. Nome do arquivo: ${longName}`,
   );
-  await expect(page.getByTestId('cv-saved-updated-at')).toHaveText('18/10/2026 às 15h40');
+  await expect(page.getByTestId('cv-saved-filename')).toContainText('(versão');
+  expect(
+    await page.getByTestId('cv-saved-filename').evaluate((el) => el.outerHTML),
+  ).not.toContain('break-all');
+  expect(
+    await page.getByTestId('cv-saved-filename').evaluate((el) => getComputedStyle(el).wordBreak),
+  ).not.toBe('break-all');
+  await expect(page.getByTestId('cv-saved-updated-at')).toHaveText(
+    'Atualizado em 18/10/2026 às 15h40',
+  );
   await expect(page.getByTestId('cv-error')).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   await page.screenshot({

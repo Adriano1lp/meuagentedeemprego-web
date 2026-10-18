@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
 import {
+  CV_INVALID,
   CV_NOT_READY,
+  CV_OFFLINE,
   CV_REBUILD_BAD_REQUEST,
   CV_TOO_LARGE,
   CV_UNAVAILABLE,
   CV_UPLOAD_BAD_REQUEST,
+  MAX_CV_UPLOAD_BYTES,
 } from '../api/cv';
 import { AuthProvider } from '../auth/AuthContext';
 
@@ -131,6 +134,12 @@ function choosePdf() {
   });
 }
 
+function uploadHits(fetchImpl: ReturnType<typeof vi.fn>) {
+  return fetchImpl.mock.calls.filter(([input]) =>
+    String(input).includes('/users/me/upload-cv'),
+  ).length;
+}
+
 function expectFixed(expected: string) {
   const error = screen.getByTestId('cv-error');
   expect(error).toHaveTextContent(expected);
@@ -218,6 +227,29 @@ describe('erros fixos de upload e rebuild', () => {
     expect(harness.rebuildCalls).toBe(1);
   });
 
+  it('arquivo maior que 10 MB não chama o fetch', async () => {
+    const harness = createHarness({});
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    fireEvent.change(screen.getByTestId('cv-file'), {
+      target: {
+        files: [
+          new File([new Uint8Array(MAX_CV_UPLOAD_BYTES + 1)], 'grande.pdf', {
+            type: 'application/pdf',
+          }),
+        ],
+      },
+    });
+    expect(uploadHits(harness.fetchImpl)).toBe(0);
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expectFixed(CV_TOO_LARGE);
+    });
+    expect(uploadHits(harness.fetchImpl)).toBe(0);
+    expect(screen.getByTestId('cv-error').textContent).not.toMatch(/\b413\b/);
+  });
+
   it('413 mostra o texto fixo', async () => {
     const harness = createHarness({
       upload: () => jsonResponse({ detail: `413 ${LEAK}` }, 413),
@@ -279,7 +311,42 @@ describe('erros fixos de upload e rebuild', () => {
     expect(screen.getByTestId('cv-error').textContent).not.toMatch(/\b503\b/);
   });
 
-  it('erro de rede mostra o texto fixo', async () => {
+  it('400 de limite usa o texto de tamanho e esconde o detail', async () => {
+    const harness = createHarness({
+      upload: () =>
+        jsonResponse(
+          { detail: `o arquivo excede o teto-interno ${LEAK}` },
+          400,
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expectFixed(CV_TOO_LARGE);
+    });
+    expect(screen.getByTestId('cv-error').textContent).not.toContain('teto-interno');
+    expect(screen.getByTestId('cv-error').textContent).not.toContain('excede');
+  });
+
+  it('422 mostra o texto de dado inválido', async () => {
+    const harness = createHarness({
+      upload: () => jsonResponse({ detail: `422 ${LEAK}` }, 422),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expectFixed(CV_INVALID);
+    });
+    expect(screen.getByTestId('cv-error')).not.toHaveTextContent(CV_UNAVAILABLE);
+  });
+
+  it('erro de rede mostra falta de conexão', async () => {
     const harness = createHarness({
       upload: () => {
         throw new TypeError(`Failed to fetch ${LEAK}`);
@@ -291,8 +358,29 @@ describe('erros fixos de upload e rebuild', () => {
     choosePdf();
     await user.click(screen.getByTestId('cv-submit'));
     await waitFor(() => {
-      expectFixed(CV_UNAVAILABLE);
+      expectFixed(CV_OFFLINE);
     });
+    expect(screen.getByTestId('cv-error')).not.toHaveTextContent(CV_UNAVAILABLE);
+  });
+
+  it('401 não mostra retry e volta ao login', async () => {
+    const harness = createHarness({
+      upload: () => jsonResponse({ detail: `token expirado ${LEAK}` }, 401),
+    });
+    const user = userEvent.setup();
+    renderApp(harness.fetchImpl);
+    await openUpload(user);
+    choosePdf();
+    await user.click(screen.getByTestId('cv-submit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('login-email')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('cv-retry')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Tentar de novo' })).not.toBeInTheDocument();
+    const shown = document.body.textContent ?? '';
+    for (const leak of FORBIDDEN) {
+      expect(shown).not.toContain(leak);
+    }
   });
 
   it("detail com POST ou json não aparece na tela", async () => {

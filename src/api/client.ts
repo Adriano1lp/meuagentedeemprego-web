@@ -26,6 +26,7 @@ import {
   safeCoverLetterErrorMessage,
 } from './coverLetter';
 import {
+  CV_OFFLINE,
   CV_UNAVAILABLE,
   cvFailureMessage,
   mentionsRawUnavailable,
@@ -165,15 +166,39 @@ function errorMessage(status: number, body: unknown): string {
   return 'Não foi possível concluir agora.';
 }
 
+function internalErrorDetail(body: unknown): string | null {
+  if (typeof body === 'string' && body.trim()) {
+    return body;
+  }
+  if (!body || typeof body !== 'object') {
+    return null;
+  }
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
+    }
+  }
+  return null;
+}
+
 function rethrowCvFailure(operation: CvOperation, error: unknown): never {
   if (error instanceof ApiError) {
-    const message = cvFailureMessage(operation, error.status);
+    const message = cvFailureMessage(
+      operation,
+      error.status,
+      internalErrorDetail(error.body),
+    );
     if (error.outdated) {
       throw new ApiError(error.status, error.body, message);
     }
     throw new ApiError(error.status, null, message);
   }
-  throw new ApiError(0, null, CV_UNAVAILABLE);
+  throw new ApiError(0, null, CV_OFFLINE);
 }
 
 export type RegisterInput = {

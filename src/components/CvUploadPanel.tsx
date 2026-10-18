@@ -1,9 +1,17 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 
 import {
+  CV_INVALID,
   CV_NOT_READY,
+  CV_OFFLINE,
+  CV_REBUILD_BAD_REQUEST,
+  CV_SESSION,
+  CV_TOO_LARGE,
+  CV_UNAVAILABLE,
+  CV_UPLOAD_BAD_REQUEST,
   cvFailureMessage,
   formatCvUpdatedAt,
+  isCvFileTooLarge,
   type CvOperation,
 } from '../api/cv';
 import { ApiError } from '../api/client';
@@ -27,12 +35,31 @@ type CvUploadPanelProps = {
   onReady?: (file: CvSessionFile) => void;
 };
 
+const FIXED_CV_MESSAGES = new Set([
+  CV_NOT_READY,
+  CV_UPLOAD_BAD_REQUEST,
+  CV_REBUILD_BAD_REQUEST,
+  CV_TOO_LARGE,
+  CV_INVALID,
+  CV_OFFLINE,
+  CV_SESSION,
+  CV_UNAVAILABLE,
+]);
+
+function CvFileName({ name }: { name: string }) {
+  return (
+    <span title={name} className="min-w-0 break-words">
+      {name}
+    </span>
+  );
+}
+
 export function CvUploadPanel({
   enabled,
   onStatusRefresh,
   onReady,
 }: CvUploadPanelProps) {
-  const { api } = useAuth();
+  const { api, logout } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<CvPhase>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -75,10 +102,18 @@ export function CvUploadPanel({
     if (cause instanceof ApiError && cause.outdated) {
       return;
     }
+    if (cause instanceof ApiError && cause.status === 401) {
+      logout();
+      return;
+    }
     const status = cause instanceof ApiError ? cause.status : 0;
+    const known =
+      cause instanceof ApiError && FIXED_CV_MESSAGES.has(cause.message)
+        ? cause.message
+        : null;
     setRetryMode(operation === 'rebuild' && status === 400 ? 'upload' : operation);
     setPhase('erro');
-    setError(cvFailureMessage(operation, status));
+    setError(known ?? cvFailureMessage(operation, status));
   }
 
   async function runRebuild(meta: CvSessionFile | null) {
@@ -94,6 +129,13 @@ export function CvUploadPanel({
   }
 
   async function runUpload(selected: File) {
+    if (isCvFileTooLarge(selected)) {
+      setHeld(null);
+      setRetryMode('upload');
+      setPhase('erro');
+      setError(CV_TOO_LARGE);
+      return;
+    }
     setPhase('processando');
     setError(null);
     setRetryMode(null);
@@ -156,12 +198,8 @@ export function CvUploadPanel({
             className="h-auto max-w-full overflow-hidden py-2"
           />
         </div>
-        <p
-          data-testid="cv-filename"
-          title={file?.name}
-          className="mt-2 min-w-0 break-all text-sm text-muted-foreground"
-        >
-          {file ? file.name : 'Nenhum arquivo selecionado ainda.'}
+        <p data-testid="cv-filename" className="mt-2 min-w-0 text-sm text-muted-foreground">
+          {file ? <CvFileName name={file.name} /> : 'Nenhum arquivo selecionado ainda.'}
         </p>
         <Button
           type="submit"
@@ -190,17 +228,13 @@ export function CvUploadPanel({
         <Alert data-testid="cv-success" role="status" variant="success" className="mt-4 min-w-0">
           <AlertDescription>
             {held?.filename ? (
-              <p
-                data-testid="cv-saved-filename"
-                title={held.filename}
-                className="min-w-0 break-all font-medium"
-              >
-                Currículo atualizado. Nome do arquivo: {held.filename}
+              <p data-testid="cv-saved-filename" className="min-w-0 font-medium">
+                Currículo atualizado. Nome do arquivo: <CvFileName name={held.filename} />
               </p>
             ) : null}
             {formatCvUpdatedAt(held?.updatedAt) ? (
-              <p data-testid="cv-saved-updated-at" className="mt-1 min-w-0 break-all">
-                {formatCvUpdatedAt(held?.updatedAt)}
+              <p data-testid="cv-saved-updated-at" className="mt-1 min-w-0">
+                Atualizado em {formatCvUpdatedAt(held?.updatedAt)}
               </p>
             ) : null}
           </AlertDescription>

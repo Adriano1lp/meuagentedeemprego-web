@@ -182,7 +182,7 @@ describe('troca de curriculo', () => {
       );
     });
     expect(screen.getByTestId('cv-saved-updated-at')).toHaveTextContent(
-      '02/11/2026 às 12h04',
+      'Atualizado em 02/11/2026 às 12h04',
     );
     expect(screen.getByTestId('cv-sent')).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/object_key|original_file|\/segredo\//);

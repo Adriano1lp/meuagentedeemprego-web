@@ -109,20 +109,19 @@ export function CurriculoPage() {
                 Currículo enviado
               </p>
               {sessionFile?.filename ? (
-                <p
-                  data-testid="cv-saved-filename"
-                  title={sessionFile.filename}
-                  className="min-w-0 break-all text-sm"
-                >
-                  Currículo atualizado. Nome do arquivo: {sessionFile.filename}
+                <p data-testid="cv-saved-filename" className="min-w-0 text-sm">
+                  Currículo atualizado. Nome do arquivo:{' '}
+                  <span title={sessionFile.filename} className="min-w-0 break-words">
+                    {sessionFile.filename}
+                  </span>
                 </p>
               ) : null}
               {formatCvUpdatedAt(sessionFile?.updatedAt) ? (
                 <p
                   data-testid="cv-saved-updated-at"
-                  className="min-w-0 break-all text-sm text-muted-foreground"
+                  className="min-w-0 text-sm text-muted-foreground"
                 >
-                  {formatCvUpdatedAt(sessionFile?.updatedAt)}
+                  Atualizado em {formatCvUpdatedAt(sessionFile?.updatedAt)}
                 </p>
               ) : null}
               <Button
