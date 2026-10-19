@@ -12,9 +12,17 @@ import {
 } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
 import {
+  clearLoggedOutFlag,
+  LOGGED_OUT_KEY,
+  markLoggedOut,
+  retryLoggedOut,
+} from '../auth/loggedOut';
+import {
   createSessionCoordinator,
   FOLLOWER_GRANT_WAIT_MS,
+  getSessionCoordinator,
   REFRESH_LOCK_NAME,
+  setRefreshImplementation,
   type SessionCoordinator,
 } from '../auth/sessionRefresh';
 import {
@@ -399,6 +407,8 @@ describe('retry único no 401', () => {
       '%5Cevil.com',
       '/@evil.com',
       'http:evil',
+      '/app%0A//evil',
+      '\t//evil',
     ];
     for (const next of rejected) {
       const decoded = new URLSearchParams(`next=${next}`).get('next');
@@ -411,6 +421,12 @@ describe('retry único no 401', () => {
       expect(destination).not.toContain('javascript');
     }
     expect(isSafeAppPath('/app/perfil')).toBe(true);
+    expect(isSafeAppPath('/app\t/perfil')).toBe(false);
+    expect(isSafeAppPath('/app\n//evil')).toBe(false);
+    expect(new URLSearchParams('next=/app%0A//evil').get('next')).toBe('/app\n//evil');
+    expect(isSafeAppPath(new URLSearchParams('next=/app%0A//evil').get('next') ?? '')).toBe(
+      false,
+    );
     expect(new URLSearchParams('next=/app/perfil').get('next')).toBe('/app/perfil');
   });
 });
@@ -558,3 +574,143 @@ describe('timeout do logout', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('flag de logout', () => {
+  it('pula o refresh e o 401-retry sem gravar token', async () => {
+    markLoggedOut();
+    let posts = 0;
+    setRefreshImplementation(async () => {
+      posts += 1;
+      return { accessToken: 'jwt-nao-gravar', expiresIn: 60 };
+    });
+    await expect(getSessionCoordinator().refresh()).rejects.toBeInstanceOf(SessionExpiredError);
+    expect(posts).toBe(0);
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).not.toMatch(/jwt|eyJ|token/i);
+
+    const store = createMemoryTokenStore('jwt-velho');
+    let refreshHits = 0;
+    let expired = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/auth/refresh')) {
+        refreshHits += 1;
+        return grantResponse('jwt-nao-gravar');
+      }
+      if (url.endsWith('/users/me/status')) {
+        return new Response(JSON.stringify({ detail: 'expirado' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 404 });
+    });
+    const api = createApiClient({
+      baseUrl: 'https://api.example.test',
+      fetchImpl,
+      getToken: () => store.get(),
+      refreshSession: async () => {
+        await getSessionCoordinator().refresh();
+        return true;
+      },
+      onSessionExpired: () => {
+        expired += 1;
+      },
+    });
+    await expect(api.getStatus()).rejects.toMatchObject({ status: 401 });
+    expect(refreshHits).toBe(0);
+    expect(expired).toBe(1);
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+  });
+
+  it('reenvio concorrente faz um POST e 204, 401 ou 500 não apagam a flag', async () => {
+    markLoggedOut();
+    let posts = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      posts += 1;
+      expect(init?.credentials).toBe('include');
+      expect(new Headers(init?.headers).get(CSRF_HEADER)).toBe('1');
+      await gate;
+      return new Response(null, { status: 204 });
+    });
+    const pending = Promise.all([
+      retryLoggedOut('https://api.example.test', fetchImpl),
+      retryLoggedOut('https://api.example.test', fetchImpl),
+    ]);
+    await vi.waitFor(() => {
+      expect(posts).toBe(1);
+    });
+    release();
+    await pending;
+    expect(posts).toBe(1);
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+
+    for (const status of [401, 500]) {
+      const again = vi.fn(async () => new Response(null, { status }));
+      await retryLoggedOut('https://api.example.test', again);
+      expect(again).toHaveBeenCalledTimes(1);
+      expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+    }
+  });
+
+  it('login enquanto o reenvio espera não chama /auth/logout, com lock e sem', async () => {
+    async function race(locks: LockManager | null) {
+      const restore = installLocks(locks);
+      try {
+        markLoggedOut();
+        const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+          expect(String(input)).toContain('/auth/logout');
+          return new Response(null, { status: 204 });
+        });
+        const pending = retryLoggedOut('https://api.example.test', fetchImpl);
+        expect(fetchImpl).not.toHaveBeenCalled();
+        clearLoggedOutFlag();
+        if (locks && 'release' in locks) {
+          (locks as LockManager & { release: () => void }).release();
+        }
+        await pending;
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBeNull();
+      } finally {
+        restore();
+      }
+    }
+
+    const locks = gatingLocks();
+    await race(locks as unknown as LockManager);
+    await race(null);
+  });
+});
+
+function installLocks(locks: LockManager | null): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    get: () => locks ?? undefined,
+  });
+  return () => {
+    if (descriptor) {
+      Object.defineProperty(navigator, 'locks', descriptor);
+      return;
+    }
+    Reflect.deleteProperty(navigator, 'locks');
+  };
+}
+
+function gatingLocks() {
+  const queue: Array<() => void> = [];
+  return {
+    request(_name: string, callback: () => Promise<unknown> | unknown) {
+      return new Promise<void>((resolve) => {
+        queue.push(resolve);
+      }).then(() => callback());
+    },
+    release() {
+      queue.shift()?.();
+    },
+  };
+}

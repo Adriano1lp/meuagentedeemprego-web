@@ -18,11 +18,12 @@ export const SESSION_NOTICE_VALUE = 'sessao';
  */
 let memoryReturn: string | null = null;
 
-/** Só aceita caminhos internos do app. Recusa protocolo, host e `//`. */
-export function isSafeAppPath(value: string): boolean {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
-    return false;
-  }
+/** Controle ASCII, DEL e qualquer espaço (inclusive tab e quebra de linha). */
+function hasControlOrWhitespace(value: string): boolean {
+  return /[\u0000-\u001F\u007F]/.test(value) || /\s/.test(value);
+}
+
+function structurallySafe(value: string): boolean {
   if (!value.startsWith('/app')) {
     return false;
   }
@@ -43,6 +44,39 @@ export function isSafeAppPath(value: string): boolean {
     return false;
   }
   if (path.includes('//')) {
+    return false;
+  }
+  if (hasControlOrWhitespace(path)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Só aceita caminhos internos do app. Recusa protocolo, host, `//`,
+ * caractere de controle e espaço em branco — também depois de um
+ * `decodeURIComponent`, antes de o parser de URL normalizar o texto.
+ */
+export function isSafeAppPath(value: string): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
+    return false;
+  }
+  if (hasControlOrWhitespace(value)) {
+    return false;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return false;
+  }
+  if (hasControlOrWhitespace(decoded)) {
+    return false;
+  }
+  if (!structurallySafe(value)) {
+    return false;
+  }
+  if (decoded !== value && !structurallySafe(decoded)) {
     return false;
   }
   return true;

@@ -13,6 +13,7 @@ import {
   SessionExpiredError,
   type AccessGrant,
 } from '../api/sessionHttp';
+import { isLoggedOutFlag } from './loggedOut';
 
 export const REFRESH_LOCK_NAME = 'mae-web-session-refresh';
 export const SESSION_CHANNEL_NAME = 'mae-web-session';
@@ -271,6 +272,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   async function postAndAnnounce(): Promise<AccessGrant> {
+    if (isLoggedOutFlag()) {
+      throw new SessionExpiredError();
+    }
     try {
       const grant = await postRefresh();
       publish({
@@ -324,6 +328,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (!leader) {
       // Não renova por conta própria: um segundo POST reusa o refresh token.
       const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
+      if (isLoggedOutFlag()) {
+        throw new SessionExpiredError();
+      }
       if (outcome === 'grant') {
         const grant = takePeerGrant();
         if (grant) {
@@ -342,6 +349,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
 
   return {
     refresh() {
+      if (isLoggedOutFlag()) {
+        return Promise.reject(new SessionExpiredError());
+      }
       if (inflight) {
         return inflight;
       }
