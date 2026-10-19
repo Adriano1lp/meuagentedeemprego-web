@@ -112,6 +112,7 @@ async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<vo
       if (peerFresh()) {
         return;
       }
+      if (!isLoggedOutFlag()) return;
       await requestLogout(apiBaseUrl, fetchImpl);
       publishRetry(Date.now());
     });
@@ -121,6 +122,8 @@ async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<vo
   if (peerFresh()) {
     return;
   }
+  await Promise.resolve();
+  if (!isLoggedOutFlag()) return;
   await requestLogout(apiBaseUrl, fetchImpl);
   publishRetry(Date.now());
 }

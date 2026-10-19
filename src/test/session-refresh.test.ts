@@ -11,7 +11,12 @@ import {
   SessionExpiredError,
 } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
-import { LOGGED_OUT_KEY, markLoggedOut, retryLoggedOut } from '../auth/loggedOut';
+import {
+  clearLoggedOutFlag,
+  LOGGED_OUT_KEY,
+  markLoggedOut,
+  retryLoggedOut,
+} from '../auth/loggedOut';
 import {
   createSessionCoordinator,
   FOLLOWER_GRANT_WAIT_MS,
@@ -651,4 +656,61 @@ describe('flag de logout', () => {
       expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
     }
   });
+
+  it('login enquanto o reenvio espera não chama /auth/logout, com lock e sem', async () => {
+    async function race(locks: LockManager | null) {
+      const restore = installLocks(locks);
+      try {
+        markLoggedOut();
+        const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+          expect(String(input)).toContain('/auth/logout');
+          return new Response(null, { status: 204 });
+        });
+        const pending = retryLoggedOut('https://api.example.test', fetchImpl);
+        expect(fetchImpl).not.toHaveBeenCalled();
+        clearLoggedOutFlag();
+        if (locks && 'release' in locks) {
+          (locks as LockManager & { release: () => void }).release();
+        }
+        await pending;
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBeNull();
+      } finally {
+        restore();
+      }
+    }
+
+    const locks = gatingLocks();
+    await race(locks as unknown as LockManager);
+    await race(null);
+  });
 });
+
+function installLocks(locks: LockManager | null): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    get: () => locks ?? undefined,
+  });
+  return () => {
+    if (descriptor) {
+      Object.defineProperty(navigator, 'locks', descriptor);
+      return;
+    }
+    Reflect.deleteProperty(navigator, 'locks');
+  };
+}
+
+function gatingLocks() {
+  const queue: Array<() => void> = [];
+  return {
+    request(_name: string, callback: () => Promise<unknown> | unknown) {
+      return new Promise<void>((resolve) => {
+        queue.push(resolve);
+      }).then(() => callback());
+    },
+    release() {
+      queue.shift()?.();
+    },
+  };
+}
