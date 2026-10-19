@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 import { mockAuthSuccess, mockLegalRoutes, mockOutdatedMe } from './helpers';
 
@@ -69,6 +69,9 @@ test('signup envia 4 campos vigentes e login com consent vigente', async ({
 
   await expect(page.getByTestId('home-shell')).toContainText('logado');
   await page.getByTestId('logout-button').click();
+  await expect(page.getByTestId('landing-page')).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+  await page.getByRole('link', { name: 'Entrar', exact: true }).click();
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
 
   await page.getByTestId('login-email').fill('ada@example.com');

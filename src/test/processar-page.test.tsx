@@ -132,7 +132,7 @@ function createHarness(options: {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
   await waitFor(() => {
@@ -360,10 +360,10 @@ describe('HomePage processar + cotas', () => {
     );
   });
 
-  it('6a. sem JWT nao acessa status/processar', () => {
+  it('6a. sem JWT nao acessa status/processar', async () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl);
-    expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+    expect(await screen.findByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('status-card')).not.toBeInTheDocument();
     expect(screen.queryByTestId('processar-submit')).not.toBeInTheDocument();
     expect(
@@ -388,7 +388,7 @@ describe('HomePage processar + cotas', () => {
     });
     const user = userEvent.setup();
     renderApp(outdated.fetchImpl);
-    await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+    await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
     await user.type(screen.getByTestId('login-password'), 'senha-segura');
     await user.click(screen.getByTestId('login-submit'));
 

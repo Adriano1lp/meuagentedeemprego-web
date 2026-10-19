@@ -17,13 +17,27 @@ O site público e o app autenticado não dividem mais a mesma URL.
 | `/app/perfil` | com JWT | Perfil, LGPD e o CTA de checkout. |
 | `/historico`, `/perfil` | qualquer um | `replace` para `/app/historico` e `/app/perfil`. |
 
-Sem JWT, qualquer `/app/*` vai para `/entrar` e, depois do login ou do cadastro, volta à rota de origem. A origem fica em memória (ou em `?next=`, no CTA **Assinar Essencial**). O JWT não entra em `localStorage`, `sessionStorage` nem na query.
+Sem sessão restaurada, qualquer `/app/*` vai para `/entrar` e, depois do login ou do cadastro, volta à rota de origem. A origem fica em memória (ou em `?next=`, no CTA **Assinar Essencial** e quando o refresh responde 401). O access token não entra em `localStorage`, `sessionStorage`, cookie legível nem na query.
 
-**Começar grátis** abre `/entrar?tab=signup`. **Assinar Essencial** abre `/entrar?next=/app/perfil` e não chama `POST /billing/checkout`. O checkout continua só no Perfil e no 402 da análise, com sessão aberta.
+**Começar grátis** abre `/entrar?tab=signup`. **Assinar Essencial** abre `/entrar?next=/app/perfil` (sem o aviso de sessão expirada) e não chama `POST /billing/checkout`. O checkout continua só no Perfil e no 402 da análise, com sessão aberta.
 
 A cota dos planos é **mensal** (a UI autenticada diz “Cota do mês” / “Cota mensal”): Free tem limite de 5 análises por mês e Essencial, de 30. O preço do Essencial no botão é R$19,90/mês.
 
-401 que já deslogava continua deslogando, agora em `/entrar`.
+## Sessão persistente
+
+O access token fica só em memória. Login e cadastro enviam `session: "cookie"` no body. O header `X-MAE-Client` não é enviado. O refresh token fica no cookie HttpOnly da API.
+
+`credentials: 'include'` e `X-MAE-CSRF: 1` saem só nas requisições para a origem da API em `/auth/login`, `/auth/register`, `/auth/refresh` e `/auth/logout`. As outras chamadas usam `Authorization: Bearer` e `credentials: 'omit'`.
+
+1. Recarregar `/app/*` faz um refresh e permanece na mesma rota, sem passar por `/entrar`.
+2. Refresh 401 (expirado, revogado ou reuso) leva a `/entrar?next=<caminho interno /app/*>&aviso=sessao`, com o texto "Sua sessão expirou. Entre de novo." O `next` recusa protocolo, host e `//`. Depois do login, a volta é esse `next`.
+3. Access expirado durante o uso: o cliente renova e repete a chamada uma vez. Se falhar de novo, vai para `/entrar`.
+4. Um refresh por vez, na aba e entre abas (`navigator.locks`, nome `mae-web-session-refresh`). As outras abas reaproveitam o resultado e não disparam um segundo POST.
+5. **Sair** chama `POST /auth/logout`, limpa a memória e vai para `/` (a landing). Sair numa aba encerra as outras. Excluir a conta continua em `/entrar`, com "Sua conta foi excluída."
+6. O access não vai para `localStorage`, `sessionStorage` nem para o console.
+7. Enquanto o refresh do boot roda, a tela é um skeleton. A landing e `/entrar` não piscam.
+
+A volta do Stripe (`?billing=success` ou `cancel`) continua em `/entrar` sem `aviso=sessao`.
 
 Volta do Stripe recomendada: `/app?billing=success&session_id={CHECKOUT_SESSION_ID}` e `/app?billing=cancel`. Se `/` ainda receber `?billing=...`, o web faz `replace` para `/app` com a mesma query. O fluxo de confirmação (3s/60s, textos neutros, limpeza do `session_id`) funciona a partir de `/app` e de `/entrar`.
 
@@ -92,7 +106,7 @@ Swagger: `https://meu-agente-de-emprego.onrender.com/docs`
   - `privacy_accepted: true`
   - `privacy_version: "1.0"`
 - `POST /auth/login` e `GET /auth/me` com `Authorization: Bearer <access_token>`
-- Token **so em memoria** (context React). Logout limpa a sessao. Recarregar a pagina desloga (W1).
+- Access token **só em memória** (context React). O reload restaura a sessão com `POST /auth/refresh` quando o cookie HttpOnly ainda vale. **Sair** chama `POST /auth/logout` e volta à landing (`/`).
 - Gate de consentimento se a API autenticada responder `403` com `detail.code` `TERMS_OUTDATED` ou `PRIVACY_OUTDATED`
 - Reaceite via `POST /consent` (`doc` + `version: "1.0"`), depois `GET /auth/me`
 - Shell autenticado + Sair
@@ -173,7 +187,7 @@ Tela autenticada **Perfil** (`/app/perfil`, link na nav) mostra a conta do JWT v
 
 Campos exibidos somente se o JSON trouxer: `display_name`, `email`, `plan`, `subscription_status`. Sem cota calculada no browser (used/limit/remaining nao fazem parte deste endpoint).
 
-**Sair** zera o JWT em memoria e volta ao login (`/entrar`). Sem token em `localStorage` ou `sessionStorage`.
+**Sair** chama `POST /auth/logout`, zera o JWT em memória e volta à landing (`/`). Sem token em `localStorage` ou `sessionStorage`.
 
 Atalho **Politica de privacidade** reutiliza `GET /legal/privacy?version=1.0` (o mesmo documento do cadastro), sem API nova.
 
@@ -287,9 +301,7 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
 **POST `/users/me/rebuild-embeddings`**
 
 - Sem request body
-- 200 JSON (campos reais de `rebuild_vectorstore_for_user`):
-  - `user_id`, `embedding_run_id`, `chunks`, `processed_at`, `embedding_model`
-  - `chroma_dir`, `vector_store` (`mongodb` | `chroma`), `cv_file`
+- 200 JSON público: `user_id`, `embedding_run_id`, `chunks`, `processed_at`, `embedding_model`. A resposta não traz `chroma_dir`, `vector_store` nem `cv_file`.
 - 400 se nao houver curriculo ou se nao der para gerar chunks
 
 **GET `/users/me/status`** (gate de Analisar vaga)

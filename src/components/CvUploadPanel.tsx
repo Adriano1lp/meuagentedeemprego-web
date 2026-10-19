@@ -59,7 +59,7 @@ export function CvUploadPanel({
   onStatusRefresh,
   onReady,
 }: CvUploadPanelProps) {
-  const { api, logout } = useAuth();
+  const { api, expireSession } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<CvPhase>('idle');
@@ -104,7 +104,7 @@ export function CvUploadPanel({
       return;
     }
     if (cause instanceof ApiError && cause.status === 401) {
-      logout();
+      expireSession();
       return;
     }
     const status = cause instanceof ApiError ? cause.status : 0;

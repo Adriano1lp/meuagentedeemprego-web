@@ -131,7 +131,7 @@ function createHarness(options: {
 }
 
 async function loginHome(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
   await waitFor(() => {
@@ -320,7 +320,7 @@ describe('BDD W-CV', () => {
     });
     const user = userEvent.setup();
     renderApp(harness.fetchImpl);
-    await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+    await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
     await user.type(screen.getByTestId('login-password'), 'senha-segura');
     await user.click(screen.getByTestId('login-submit'));
     await waitFor(() => {

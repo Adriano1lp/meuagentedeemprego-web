@@ -2,10 +2,13 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
   ApiError,
@@ -14,6 +17,7 @@ import {
   type FetchLike,
 } from '../api/client';
 import { fromOutdatedCode, type OutdatedDetail } from '../api/outdated';
+import { requestLogout, requestRefresh, type AccessGrant } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
 import type { User } from '../api/types';
 import { API_BASE_URL } from '../config';
@@ -22,11 +26,25 @@ import {
   isCurrentTermsVersion,
   type LegalDocId,
 } from '../legal/versions';
+import {
+  buildExpiredLoginPath,
+  ENTER_PATH,
+  isSafeAppPath,
+  returnPathFromLocation,
+} from './returnTo';
+import {
+  getSessionCoordinator,
+  restoreSessionOnce,
+  setRefreshImplementation,
+  type SessionEvent,
+} from './sessionRefresh';
 
 /** Motivo de logout apos DELETE /users/me com sucesso. Clique em Sair nao usa isto. */
 export const LOGOUT_ACCOUNT_DELETED = 'account-deleted';
 
 export const ACCOUNT_DELETED_NOTICE = 'Sua conta foi excluída.';
+
+export type SessionPhase = 'restoring' | 'ready';
 
 type AuthContextValue = {
   token: string | null;
@@ -35,6 +53,11 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   blocksApp: boolean;
   accountDeleted: boolean;
+  sessionPhase: SessionPhase;
+  /** Refresh do boot ou de um 401 respondeu falha. A rota protegida usa ?next. */
+  sessionExpired: boolean;
+  /** Logout explícito: a rota protegida não manda para /entrar no meio do caminho. */
+  redirectHeld: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (input: {
     displayName: string;
@@ -44,6 +67,8 @@ type AuthContextValue = {
     privacyAccepted: boolean;
   }) => Promise<void>;
   logout: (reason?: unknown) => void;
+  /** Limpa a memória e vai para /entrar?next= da rota /app atual. */
+  expireSession: () => void;
   acceptOutdatedConsent: (docs: LegalDocId[]) => Promise<void>;
   api: ApiClient;
 };
@@ -88,6 +113,17 @@ export function AuthProvider({
   const [user, setUser] = useState<User | null>(null);
   const [outdated, setOutdated] = useState<OutdatedDetail[]>([]);
   const [accountDeleted, setAccountDeleted] = useState(false);
+  const [sessionPhase, setSessionPhase] = useState<SessionPhase>('restoring');
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [redirectHeld, setRedirectHeld] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loggingOut = useRef(false);
+  const fetchRef = useRef(fetchImpl);
+  fetchRef.current = fetchImpl;
 
   const rememberOutdated = useCallback((detail: OutdatedDetail) => {
     setOutdated((prev) => {
@@ -98,6 +134,73 @@ export function AuthProvider({
     });
   }, []);
 
+  const clearRefreshTimer = useCallback(() => {
+    if (refreshTimer.current != null) {
+      clearTimeout(refreshTimer.current);
+      refreshTimer.current = null;
+    }
+  }, []);
+
+  const rememberGrant = useCallback(
+    (grant: AccessGrant) => {
+      tokenStore.set(grant.accessToken);
+      setToken(grant.accessToken);
+      setSessionExpired(false);
+      clearRefreshTimer();
+      if (grant.expiresIn == null || grant.expiresIn < 30) {
+        return;
+      }
+      const skewSeconds = Math.min(60, Math.floor(grant.expiresIn / 2));
+      const delayMs = Math.max((grant.expiresIn - skewSeconds) * 1000, 30_000);
+      refreshTimer.current = setTimeout(() => {
+        void getSessionCoordinator()
+          .refresh()
+          .then((next) => {
+            rememberGrant(next);
+          })
+          .catch(() => {
+            expireRef.current();
+          });
+      }, delayMs);
+    },
+    [clearRefreshTimer, tokenStore],
+  );
+
+  const clearMemory = useCallback(() => {
+    clearRefreshTimer();
+    tokenStore.clear();
+    setToken(null);
+    setUser(null);
+    setOutdated([]);
+  }, [clearRefreshTimer, tokenStore]);
+
+  const expireRef = useRef<() => void>(() => {});
+  const expireSession = useCallback(() => {
+    clearMemory();
+    setAccountDeleted(false);
+    setSessionExpired(true);
+    getSessionCoordinator().reset();
+    getSessionCoordinator().notifySessionExpired();
+    const current = locationRef.current;
+    const next = returnPathFromLocation(current.pathname, current.search);
+    if (isSafeAppPath(next)) {
+      navigate(buildExpiredLoginPath(next), { replace: true });
+      return;
+    }
+    navigate(buildExpiredLoginPath('/app'), { replace: true });
+  }, [clearMemory, navigate]);
+  expireRef.current = expireSession;
+
+  setRefreshImplementation(() =>
+    requestRefresh(apiBaseUrl, fetchRef.current ?? fetch),
+  );
+
+  const refreshSession = useCallback(async () => {
+    const grant = await getSessionCoordinator().refresh();
+    rememberGrant(grant);
+    return true;
+  }, [rememberGrant]);
+
   const api = useMemo(
     () =>
       createApiClient({
@@ -105,14 +208,15 @@ export function AuthProvider({
         fetchImpl,
         getToken: () => tokenStore.get(),
         onOutdated: rememberOutdated,
+        refreshSession,
+        onSessionExpired: () => expireRef.current(),
       }),
-    [apiBaseUrl, fetchImpl, rememberOutdated, tokenStore],
+    [apiBaseUrl, fetchImpl, rememberOutdated, refreshSession, tokenStore],
   );
 
   const applySession = useCallback(
-    async (accessToken: string, nextUser?: User) => {
-      tokenStore.set(accessToken);
-      setToken(accessToken);
+    async (accessToken: string, nextUser?: User, expiresIn?: number) => {
+      rememberGrant({ accessToken, expiresIn: expiresIn ?? null });
       if (nextUser) {
         setUser(nextUser);
         const fromUser = outdatedFromUser(nextUser);
@@ -129,22 +233,21 @@ export function AuthProvider({
           return;
         }
         if (error instanceof ApiError && error.status === 401) {
-          tokenStore.clear();
-          setToken(null);
-          setUser(null);
-          setOutdated([]);
+          clearMemory();
+          setSessionExpired(true);
         }
         throw error;
       }
     },
-    [api, tokenStore],
+    [api, clearMemory, rememberGrant],
   );
 
   const login = useCallback(
     async (email: string, password: string) => {
       setAccountDeleted(false);
+      getSessionCoordinator().reset();
       const response = await api.login({ email, password });
-      await applySession(response.access_token, response.user);
+      await applySession(response.access_token, response.user, response.expires_in);
     },
     [api, applySession],
   );
@@ -158,19 +261,33 @@ export function AuthProvider({
       privacyAccepted: boolean;
     }) => {
       setAccountDeleted(false);
+      getSessionCoordinator().reset();
       const response = await api.register(input);
-      await applySession(response.access_token, response.user);
+      await applySession(response.access_token, response.user, response.expires_in);
     },
     [api, applySession],
   );
 
-  const logout = useCallback((reason?: unknown) => {
-    tokenStore.clear();
-    setToken(null);
-    setUser(null);
-    setOutdated([]);
-    setAccountDeleted(reason === LOGOUT_ACCOUNT_DELETED);
-  }, [tokenStore]);
+  const logout = useCallback(
+    (reason?: unknown) => {
+      if (loggingOut.current) {
+        return;
+      }
+      loggingOut.current = true;
+      const deleted = reason === LOGOUT_ACCOUNT_DELETED;
+      setRedirectHeld(true);
+      void requestLogout(apiBaseUrl, fetchRef.current ?? fetch).finally(() => {
+        clearMemory();
+        setSessionExpired(false);
+        setAccountDeleted(deleted);
+        getSessionCoordinator().reset();
+        getSessionCoordinator().notifyLogout();
+        navigate(deleted ? ENTER_PATH : '/', { replace: true });
+        loggingOut.current = false;
+      });
+    },
+    [apiBaseUrl, clearMemory, navigate],
+  );
 
   const acceptOutdatedConsent = useCallback(
     async (docs: LegalDocId[]) => {
@@ -185,6 +302,77 @@ export function AuthProvider({
     [api],
   );
 
+  useEffect(() => {
+    let active = true;
+    void restoreSessionOnce().then(async (grant) => {
+      if (!active) {
+        return;
+      }
+      if (!grant) {
+        const path = locationRef.current.pathname;
+        const protectedEntry =
+          path === '/app' ||
+          path.startsWith('/app/') ||
+          path === '/historico' ||
+          path === '/perfil';
+        if (protectedEntry) {
+          setSessionExpired(true);
+          getSessionCoordinator().notifySessionExpired();
+        }
+        setSessionPhase('ready');
+        return;
+      }
+      rememberGrant(grant);
+      try {
+        const me = await api.me();
+        if (!active) {
+          return;
+        }
+        setUser(me);
+        setOutdated(outdatedFromUser(me));
+      } catch {
+        // 401 já passou pelo refresh do client. Sem token, a rota protegida sai.
+      }
+      if (active) {
+        setSessionPhase('ready');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, rememberGrant]);
+
+  useEffect(() => {
+    return getSessionCoordinator().subscribe((event: SessionEvent) => {
+      if (event.type === 'logout') {
+        setRedirectHeld(true);
+        clearMemory();
+        setSessionExpired(false);
+        setAccountDeleted(false);
+        getSessionCoordinator().reset();
+        navigate('/', { replace: true });
+        return;
+      }
+      clearMemory();
+      setAccountDeleted(false);
+      setSessionExpired(true);
+      getSessionCoordinator().reset();
+      const current = locationRef.current;
+      const next = returnPathFromLocation(current.pathname, current.search);
+      if (isSafeAppPath(next)) {
+        navigate(buildExpiredLoginPath(next), { replace: true });
+      }
+    });
+  }, [clearMemory, navigate]);
+
+  useEffect(() => () => clearRefreshTimer(), [clearRefreshTimer]);
+
+  useEffect(() => {
+    if (location.pathname === '/' || location.pathname === ENTER_PATH) {
+      setRedirectHeld(false);
+    }
+  }, [location.pathname]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       token,
@@ -193,9 +381,13 @@ export function AuthProvider({
       isAuthenticated: Boolean(token),
       blocksApp: Boolean(token) && outdated.length > 0,
       accountDeleted,
+      sessionPhase,
+      sessionExpired,
+      redirectHeld,
       login,
       register,
       logout,
+      expireSession,
       acceptOutdatedConsent,
       api,
     }),
@@ -203,10 +395,14 @@ export function AuthProvider({
       acceptOutdatedConsent,
       accountDeleted,
       api,
+      expireSession,
       login,
       logout,
       outdated,
+      redirectHeld,
       register,
+      sessionExpired,
+      sessionPhase,
       token,
       user,
     ],

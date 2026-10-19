@@ -7,6 +7,11 @@ export const APP_CURRICULUM = '/app/curriculo';
 export const APP_PROFILE = '/app/perfil';
 export const ENTER_PATH = '/entrar';
 
+/** Aviso neutro quando o refresh responde 401. Não carrega token nem URL da API. */
+export const SESSION_EXPIRED_NOTICE = 'Sua sessão expirou. Entre de novo.';
+export const SESSION_NOTICE_PARAM = 'aviso';
+export const SESSION_NOTICE_VALUE = 'sessao';
+
 /**
  * Rota de retorno depois do login. Só memória de módulo: some no reload,
  * junto com o JWT. Nunca guarda token nem session_id.
@@ -69,4 +74,22 @@ export function returnPathFromLocation(pathname: string, search: string): string
   const cleaned = searchWithoutBillingReturn(search);
   const candidate = `${pathname}${cleaned}`;
   return isSafeAppPath(candidate) ? candidate : APP_HOME;
+}
+
+/**
+ * Login depois de um refresh 401. `next` só entra se for caminho interno
+ * `/app` ou `/app/*` (a mesma validação anti open-redirect).
+ */
+export function buildExpiredLoginPath(path: string): string {
+  const params = new URLSearchParams();
+  if (isSafeAppPath(path)) {
+    params.set('next', path);
+  }
+  params.set(SESSION_NOTICE_PARAM, SESSION_NOTICE_VALUE);
+  return `${ENTER_PATH}?${params.toString()}`;
+}
+
+export function isSessionExpiredNotice(search: string): boolean {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  return params.get(SESSION_NOTICE_PARAM) === SESSION_NOTICE_VALUE;
 }

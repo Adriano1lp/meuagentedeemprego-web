@@ -66,6 +66,12 @@ import {
 } from './profile';
 import { parseQuotaResponse } from './quota';
 import { parseUserStatus } from './status';
+import {
+  COOKIE_SESSION,
+  CSRF_HEADER,
+  cookieSessionInit,
+  isCookieSessionPath,
+} from './sessionHttp';
 import { bearerHeaders, extractAccessToken } from './token';
 import type {
   AuthResponse,
@@ -110,6 +116,10 @@ export type ApiClientOptions = {
   fetchImpl?: FetchLike;
   getToken: () => string | null;
   onOutdated?: (detail: OutdatedDetail) => void;
+  /** Um refresh single-flight. true quando há access novo na memória. */
+  refreshSession?: () => Promise<boolean>;
+  /** Refresh falhou ou a chamada autenticada repetiu 401. */
+  onSessionExpired?: () => void;
 };
 
 function joinUrl(baseUrl: string, path: string): string {
@@ -228,11 +238,21 @@ export function createApiClient(options: ApiClientOptions) {
 
   async function request(
     path: string,
-    init: RequestInit & { parse?: 'json' | 'text' | 'bytes' } = {},
+    init: RequestInit & {
+      parse?: 'json' | 'text' | 'bytes';
+      cookieSession?: boolean;
+      authRetried?: boolean;
+    } = {},
   ): Promise<unknown> {
-    const { parse = 'json', headers: initHeaders, ...rest } = init;
+    const {
+      parse = 'json',
+      headers: initHeaders,
+      cookieSession = false,
+      authRetried = false,
+      ...rest
+    } = init;
     const headers = new Headers(initHeaders);
-    const token = options.getToken();
+    const token = cookieSession ? null : options.getToken();
     const auth = bearerHeaders(token);
     if (auth.Authorization) {
       headers.set('Authorization', auth.Authorization);
@@ -248,10 +268,26 @@ export function createApiClient(options: ApiClientOptions) {
       );
     }
 
+    const targetUrl = joinUrl(options.baseUrl, path);
+    const session =
+      cookieSession && isCookieSessionPath(path)
+        ? cookieSessionInit(targetUrl, options.baseUrl)
+        : null;
+    if (cookieSession && !session) {
+      throw new ApiError(0, null, 'Não foi possível concluir agora.');
+    }
+    if (session) {
+      headers.set(CSRF_HEADER, session.csrf);
+    }
+    if (headers.has('X-MAE-Client')) {
+      headers.delete('X-MAE-Client');
+    }
+
     let response: Response;
     try {
-      response = await fetchImpl(joinUrl(options.baseUrl, path), {
+      response = await fetchImpl(targetUrl, {
         ...rest,
+        credentials: session ? 'include' : 'omit',
         headers,
       });
     } catch (cause) {
@@ -265,6 +301,27 @@ export function createApiClient(options: ApiClientOptions) {
         null,
         'Não foi possível concluir agora.',
       );
+    }
+
+    if (
+      response.status === 401 &&
+      !authRetried &&
+      !cookieSession &&
+      !isCookieSessionPath(path) &&
+      options.refreshSession
+    ) {
+      let refreshed = false;
+      try {
+        refreshed = await options.refreshSession();
+      } catch {
+        refreshed = false;
+      }
+      if (refreshed) {
+        return request(path, { ...init, authRetried: true });
+      }
+      options.onSessionExpired?.();
+    } else if (response.status === 401 && authRetried) {
+      options.onSessionExpired?.();
     }
 
     if (parse === 'text') {
@@ -319,8 +376,9 @@ export function createApiClient(options: ApiClientOptions) {
       const payload = buildRegisterPayload(input);
       const body = await request('/auth/register', {
         method: 'POST',
+        cookieSession: true,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, session: COOKIE_SESSION }),
       });
       return assertAuthResponse(body);
     },
@@ -328,10 +386,12 @@ export function createApiClient(options: ApiClientOptions) {
     async login(input: { email: string; password: string }): Promise<AuthResponse> {
       const body = await request('/auth/login', {
         method: 'POST',
+        cookieSession: true,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: input.email,
           password: input.password,
+          session: COOKIE_SESSION,
         }),
       });
       return assertAuthResponse(body);
@@ -634,10 +694,15 @@ function assertAuthResponse(body: unknown): AuthResponse {
     throw new ApiError(200, body, 'Não foi possível concluir a entrada.');
   }
   const record = body as Record<string, unknown>;
+  const expiresIn = record.expires_in;
   return {
     access_token: token,
     token_type:
       typeof record.token_type === 'string' ? record.token_type : 'bearer',
+    expires_in:
+      typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn >= 0
+        ? expiresIn
+        : undefined,
     user:
       record.user && typeof record.user === 'object'
         ? (record.user as User)

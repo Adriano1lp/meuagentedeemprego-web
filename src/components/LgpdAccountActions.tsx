@@ -28,7 +28,7 @@ type LgpdAccountActionsProps = {
 };
 
 export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
-  const { api, logout } = useAuth();
+  const { api, logout, expireSession } = useAuth();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportSuccess, setExportSuccess] = useState(false);
@@ -79,7 +79,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       setExportError(cause instanceof ApiError ? cause.message : EXPORT_FAILED);
@@ -130,7 +130,7 @@ export function LgpdAccountActions({ enabled }: LgpdAccountActionsProps) {
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       setDeleteError(cause instanceof ApiError ? cause.message : DELETE_FAILED);

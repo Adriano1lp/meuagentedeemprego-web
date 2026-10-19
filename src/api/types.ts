@@ -24,7 +24,19 @@ export type CurrentUser = {
 export type AuthResponse = {
   access_token: string;
   token_type: string;
+  /**
+   * Segundos de vida do access, no modo cookie (login, register e refresh).
+   * O refresh de `POST /auth/refresh` não devolve `user`.
+   */
+  expires_in?: number;
   user?: User;
+};
+
+/** POST /auth/login. `session: "cookie"` opta pela sessão HttpOnly. */
+export type LoginPayload = {
+  email: string;
+  password: string;
+  session?: 'cookie';
 };
 
 export type RegisterPayload = {
@@ -35,6 +47,8 @@ export type RegisterPayload = {
   terms_version: string;
   privacy_accepted: boolean;
   privacy_version: string;
+  /** Opt-in da web. Ausente, o cadastro segue só com Bearer. */
+  session?: 'cookie';
 };
 
 /**
@@ -59,8 +73,9 @@ export type UserStatus = {
 /**
  * POST /users/me/upload-cv — multipart field `file`, síncrono.
  * filename, content_type, bytes_received, updated_at, has_cv, has_embeddings,
- * ready_for_analysis e talvez reason. cv_file, original_file e object_key
- * não entram neste tipo: a UI não exibe, não loga e não guarda esses campos.
+ * ready_for_analysis e talvez reason.
+ * A resposta pública não traz cv_file, original_file, object_key nem
+ * extracted_text_object_key — o servidor tira esses campos antes de responder.
  */
 export type UploadCvResponse = {
   user_id?: string;
@@ -77,7 +92,7 @@ export type UploadCvResponse = {
 
 /**
  * POST /users/me/rebuild-embeddings — sem body.
- * A API também envia chroma_dir, vector_store e cv_file; o client não guarda esses campos.
+ * A resposta pública não traz chroma_dir, vector_store nem cv_file.
  */
 export type RebuildEmbeddingsResponse = {
   user_id?: string;

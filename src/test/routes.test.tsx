@@ -145,7 +145,7 @@ describe('rotas publicas e app', () => {
     const user = userEvent.setup();
     renderAt('/', fetchImpl);
 
-    expect(screen.getByTestId('landing-page')).toBeInTheDocument();
+    expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
     expect(screen.queryByTestId('app-sidebar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('app-bottom-nav')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
@@ -181,7 +181,8 @@ describe('rotas publicas e app', () => {
     const fetchImpl = createFetch();
     const user = userEvent.setup();
     renderAt('/app/curriculo', fetchImpl);
-    expect(screen.getByTestId('location-full')).toHaveTextContent('/entrar');
+    expect(await screen.findByTestId('login-email')).toBeInTheDocument();
+    expect(screen.getByTestId('location-full').textContent).toContain('/entrar');
     expect(screen.queryByTestId('curriculo-page')).not.toBeInTheDocument();
     expect(
       fetchImpl.mock.calls.some(([input]) => String(input).includes('/users/me/status')),
@@ -198,7 +199,8 @@ describe('rotas publicas e app', () => {
     const fetchImpl = createFetch();
     const user = userEvent.setup();
     renderAt('/app/historico', fetchImpl);
-    expect(screen.getByTestId('location-full')).toHaveTextContent('/entrar');
+    expect(await screen.findByTestId('login-email')).toBeInTheDocument();
+    expect(screen.getByTestId('location-full').textContent).toContain('/entrar');
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(
       fetchImpl.mock.calls.some(([input]) => String(input).includes('/gap-history')),
@@ -214,7 +216,8 @@ describe('rotas publicas e app', () => {
   it('rotas antigas redirecionam para /app e voltam depois do login', async () => {
     const user = userEvent.setup();
     renderAt('/historico');
-    expect(screen.getByTestId('location-full')).toHaveTextContent('/entrar');
+    expect(await screen.findByTestId('login-email')).toBeInTheDocument();
+    expect(screen.getByTestId('location-full').textContent).toContain('/entrar');
     await login(user);
     await waitFor(() => {
       expect(screen.getByTestId('location-full').textContent).toContain('/app/historico');
@@ -224,7 +227,8 @@ describe('rotas publicas e app', () => {
     resetReturnToMemory();
     const userPerfil = userEvent.setup();
     renderAt('/perfil');
-    expect(screen.getByTestId('location-full')).toHaveTextContent('/entrar');
+    expect(await screen.findByTestId('login-email')).toBeInTheDocument();
+    expect(screen.getByTestId('location-full').textContent).toContain('/entrar');
     await login(userPerfil);
     await waitFor(() => {
       expect(screen.getByTestId('profile-panel')).toBeInTheDocument();

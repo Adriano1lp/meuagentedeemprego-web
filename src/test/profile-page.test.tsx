@@ -11,7 +11,6 @@ import {
 import {
   profileErrorLeaksInternals,
   PROFILE_LOAD_FAILED,
-  PROFILE_SESSION_EXPIRED,
 } from '../api/profile';
 import { AuthProvider } from '../auth/AuthContext';
 
@@ -171,7 +170,7 @@ function createHarness(options: {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
 }
@@ -299,9 +298,9 @@ describe('Feature: Perfil leve na web', () => {
     await user.click(screen.getByTestId('profile-logout'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+      expect(screen.getByTestId('landing-page')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
+    expect(screen.getByTestId('location-pathname').textContent).toBe('/');
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('profile-name')).not.toBeInTheDocument();
     expectTokenOnlyInMemory();
@@ -312,11 +311,14 @@ describe('Feature: Perfil leve na web', () => {
     ).toBe(false);
   });
 
-  it('C5 sem JWT redireciona ao login e nao chama export nem delete', () => {
+  it('C5 sem JWT redireciona ao login e nao chama export nem delete', async () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/perfil');
+    expect(await screen.findByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
-    expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
+    expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
+      'Sua sessão expirou. Entre de novo.',
+    );
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('lgpd-account-section')).not.toBeInTheDocument();
     expect(screen.queryByTestId('export-data')).not.toBeInTheDocument();
@@ -325,7 +327,9 @@ describe('Feature: Perfil leve na web', () => {
     expect(guest.privacyCalls).toEqual([]);
     expect(guest.exportCalls).toEqual([]);
     expect(guest.deleteCalls).toEqual([]);
-    expect(guest.fetchImpl).not.toHaveBeenCalled();
+    const urls = guest.fetchImpl.mock.calls.map(([input]) => String(input));
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((url) => url.includes('/auth/refresh'))).toBe(true);
   });
 
   it('atalho de privacidade carrega GET /legal/privacy so depois do clique', async () => {
@@ -405,10 +409,11 @@ describe('Feature: Perfil leve na web', () => {
     await login(user);
     await user.click(await screen.findByTestId('nav-perfil'));
     await waitFor(() => {
-      expect(screen.getByTestId('profile-error')).toHaveTextContent(
-        PROFILE_SESSION_EXPIRED,
-      );
+      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     });
+    expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
+      'Sua sessão expirou. Entre de novo.',
+    );
     expect(screen.queryByText('Outra Pessoa')).not.toBeInTheDocument();
     expect(screen.queryByText('outra@example.com')).not.toBeInTheDocument();
   });

@@ -31,7 +31,7 @@ type CoverLetterSectionProps = {
 };
 
 export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
-  const { api, logout } = useAuth();
+  const { api, expireSession } = useAuth();
   const company = companyName?.trim() ?? '';
   const [phase, setPhase] = useState<CoverLetterPhase>({ kind: 'idle' });
   const [focusTick, setFocusTick] = useState(0);
@@ -89,7 +89,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       if (
@@ -152,7 +152,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       if (

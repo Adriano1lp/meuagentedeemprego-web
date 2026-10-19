@@ -1,6 +1,7 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 import {
+  expectExpiredLogin,
   mockAuthSuccess,
   mockGapHistory,
   mockLegalRoutes,
@@ -92,14 +93,17 @@ test('nao autorizado — 401/403 → erro legivel, zero dados de outro user', as
   await login(page);
   await page.getByTestId('nav-historico').click();
 
-  await expect(page.getByTestId('history-error')).toContainText(
-    'Sessão expirada. Entre novamente para ver o histórico.',
+  await expect(page.getByTestId('session-expired-notice')).toHaveText(
+    'Sua sessão expirou. Entre de novo.',
   );
+  expectExpiredLogin(page, '/app/historico');
   await expect(page.getByText('Vaga de outra pessoa')).toHaveCount(0);
   await expect(page.getByTestId('history-list')).toHaveCount(0);
 
   status = 403;
-  await page.getByTestId('history-retry').click();
+  await page.getByTestId('login-email').fill('ada@example.com');
+  await page.getByTestId('login-password').fill('senha-segura');
+  await page.getByTestId('login-submit').click();
   await expect(page.getByTestId('history-error')).toContainText(
     'Não foi possível carregar o histórico.',
   );
@@ -171,8 +175,9 @@ test('sessao ausente — sem JWT → redirect login e API NAO chamada com token 
 
   await mockLegalRoutes(page);
   await page.goto('/historico');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
-  await expect(page).not.toHaveURL(/historico/);
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
+  expectExpiredLogin(page, '/app/historico');
+  expect(new URL(page.url()).pathname).toBe('/entrar');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('history-panel')).toHaveCount(0);
   expect(historyHits).toEqual([]);

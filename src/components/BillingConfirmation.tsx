@@ -26,7 +26,7 @@ export function BillingConfirmation({
   enabled,
   onConfirmed,
 }: BillingConfirmationProps) {
-  const { api, logout } = useAuth();
+  const { api, expireSession } = useAuth();
   const { intent, clearIntent } = useBillingReturn();
   const [phase, setPhase] = useState<Phase>('idle');
   const onConfirmedRef = useRef(onConfirmed);
@@ -74,7 +74,7 @@ export function BillingConfirmation({
           return;
         }
         if (error instanceof ApiError && error.status === 401) {
-          logout();
+          expireSession();
         }
       });
 
@@ -82,7 +82,7 @@ export function BillingConfirmation({
       active = false;
       controller.abort();
     };
-  }, [api, clearIntent, enabled, logout, phase]);
+  }, [api, clearIntent, enabled, expireSession, phase]);
 
   if (phase === 'confirming') {
     return (

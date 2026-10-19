@@ -7,12 +7,14 @@ import {
   APP_HISTORY,
   APP_HOME,
   APP_PROFILE,
+  buildExpiredLoginPath,
   ENTER_PATH,
   rememberReturnTo,
   returnPathFromLocation,
 } from './auth/returnTo';
-import { BillingReturnProvider } from './billing/BillingReturn';
+import { BillingReturnProvider, useBillingReturn } from './billing/BillingReturn';
 import { ConsentGate } from './components/ConsentGate';
+import { SessionBoot } from './components/SessionBoot';
 import { AuthPage } from './pages/AuthPage';
 import { CurriculoPage } from './pages/CurriculoPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -47,14 +49,28 @@ function EntrarRoute() {
 }
 
 function RequireAuth() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, sessionExpired, redirectHeld } = useAuth();
   const location = useLocation();
+  const { intent: billingIntent } = useBillingReturn();
   if (!isAuthenticated && readBillingReturnIntent(location.search)) {
     return null;
   }
-  if (!isAuthenticated) {
+  if (!isAuthenticated && redirectHeld && !sessionExpired) {
+    return null;
+  }
+  if (!isAuthenticated && billingIntent) {
     rememberReturnTo(returnPathFromLocation(location.pathname, location.search));
     return <Navigate to={ENTER_PATH} replace />;
+  }
+  if (!isAuthenticated) {
+    const next = returnPathFromLocation(location.pathname, location.search);
+    rememberReturnTo(next);
+    return (
+      <Navigate
+        to={sessionExpired ? buildExpiredLoginPath(next) : ENTER_PATH}
+        replace
+      />
+    );
   }
   return <Outlet />;
 }
@@ -70,6 +86,10 @@ function LegacyRedirect({ to }: { to: string }) {
 }
 
 export function App() {
+  const { sessionPhase } = useAuth();
+  if (sessionPhase === 'restoring') {
+    return <SessionBoot />;
+  }
   return (
     <BillingReturnProvider>
       <ConsentGate>
