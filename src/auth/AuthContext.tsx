@@ -122,6 +122,8 @@ export function AuthProvider({
   locationRef.current = location;
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loggingOut = useRef(false);
+  /** Logout desta aba ou de outra: um refresh que ainda resolve não manda para /entrar. */
+  const suppressExpire = useRef(false);
   const fetchRef = useRef(fetchImpl);
   fetchRef.current = fetchImpl;
 
@@ -176,6 +178,9 @@ export function AuthProvider({
 
   const expireRef = useRef<() => void>(() => {});
   const expireSession = useCallback(() => {
+    if (suppressExpire.current) {
+      return;
+    }
     clearMemory();
     setAccountDeleted(false);
     setSessionExpired(true);
@@ -245,6 +250,7 @@ export function AuthProvider({
   const login = useCallback(
     async (email: string, password: string) => {
       setAccountDeleted(false);
+      suppressExpire.current = false;
       getSessionCoordinator().reset();
       const response = await api.login({ email, password });
       await applySession(response.access_token, response.user, response.expires_in);
@@ -261,6 +267,7 @@ export function AuthProvider({
       privacyAccepted: boolean;
     }) => {
       setAccountDeleted(false);
+      suppressExpire.current = false;
       getSessionCoordinator().reset();
       const response = await api.register(input);
       await applySession(response.access_token, response.user, response.expires_in);
@@ -274,6 +281,7 @@ export function AuthProvider({
         return;
       }
       loggingOut.current = true;
+      suppressExpire.current = true;
       const deleted = reason === LOGOUT_ACCOUNT_DELETED;
       setRedirectHeld(true);
       void requestLogout(apiBaseUrl, fetchRef.current ?? fetch).finally(() => {
@@ -315,7 +323,7 @@ export function AuthProvider({
           path.startsWith('/app/') ||
           path === '/historico' ||
           path === '/perfil';
-        if (protectedEntry) {
+        if (protectedEntry && !suppressExpire.current) {
           setSessionExpired(true);
           getSessionCoordinator().notifySessionExpired();
         }
@@ -345,6 +353,7 @@ export function AuthProvider({
   useEffect(() => {
     return getSessionCoordinator().subscribe((event: SessionEvent) => {
       if (event.type === 'logout') {
+        suppressExpire.current = true;
         setRedirectHeld(true);
         clearMemory();
         setSessionExpired(false);
