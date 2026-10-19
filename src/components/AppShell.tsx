@@ -1,9 +1,18 @@
-import { FileText, History, House, LogOut, UserRound, type LucideIcon } from 'lucide-react';
+import {
+  CircleHelp,
+  FileText,
+  History,
+  House,
+  LogOut,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
 
 import { APP_CURRICULUM, APP_HISTORY, APP_HOME, APP_PROFILE } from '../auth/returnTo';
 import { useAuth } from '../auth/AuthContext';
+import { SupportLink } from './SupportLink';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
 
@@ -117,6 +126,13 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
         ))}
       </nav>
       <div className="border-t border-sidebar-border p-3">
+        <SupportLink
+          data-testid="support-link-sidebar"
+          className="mb-1 w-full justify-start rounded-lg px-3 py-2.5 text-sidebar-foreground/80 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground hover:no-underline focus-visible:ring-sidebar-ring focus-visible:ring-offset-sidebar"
+        >
+          <CircleHelp aria-hidden="true" className="size-4 shrink-0" />
+          <span className="truncate">Ajuda e suporte</span>
+        </SupportLink>
         <Button
           type="button"
           variant="ghost"
