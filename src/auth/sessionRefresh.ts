@@ -1,7 +1,9 @@
 /**
  * Um refresh por vez na aba (promise compartilhada) e entre abas
  * (navigator.locks, nome fixo). Sem Web Locks, o BroadcastChannel elege
- * um líder. O token só atravessa o canal efêmero para a aba que esperou
+ * um líder. A aba que não liderou espera o grant ou a falha por até
+ * FOLLOWER_GRANT_WAIT_MS e, se nada chegar, falha fechado — sem outro POST.
+ * O token só atravessa o canal efêmero para a aba que esperou
  * o mesmo refresh — não vai para localStorage, sessionStorage, cookie
  * legível nem console.
  */
@@ -17,9 +19,20 @@ export const SESSION_CHANNEL_NAME = 'mae-web-session';
 
 const PEER_TTL_MS = 5_000;
 
+/**
+ * Sem `navigator.locks`, a aba que não liderou espera o grant ou a falha
+ * neste prazo. Não dispara outro POST /auth/refresh.
+ */
+export const FOLLOWER_GRANT_WAIT_MS = 5_000;
+
 export type SessionEvent = { type: 'logout' } | { type: 'session-expired' };
 
 type Listener = (event: SessionEvent) => void;
+
+type PeerWaiter = {
+  settle: (outcome: 'grant' | 'failed' | 'timeout') => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 type WireMessage =
   | { v: 1; type: 'grant'; accessToken: string; expiresIn: number | null; at: number }
@@ -124,6 +137,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let peerGrant: { grant: AccessGrant; at: number } | null = null;
   let peerFailureAt: number | null = null;
   const claims = new Set<string>();
+  const peerWaiters = new Set<PeerWaiter>();
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -137,6 +151,63 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
     peerGrant = { grant: { accessToken, expiresIn }, at };
     peerFailureAt = null;
+    notifyPeerWaiters();
+  }
+
+  function rememberFailure(at: number): void {
+    peerFailureAt = at;
+    peerGrant = null;
+    notifyPeerWaiters();
+  }
+
+  function peekPeerOutcome(): 'grant' | 'failed' | null {
+    if (peerGrant && now() - peerGrant.at <= PEER_TTL_MS) {
+      return 'grant';
+    }
+    if (peerFailureAt != null && now() - peerFailureAt <= PEER_TTL_MS) {
+      return 'failed';
+    }
+    return null;
+  }
+
+  function finishPeerWaiter(
+    waiter: PeerWaiter,
+    outcome: 'grant' | 'failed' | 'timeout',
+  ): void {
+    if (!peerWaiters.has(waiter)) {
+      return;
+    }
+    clearTimeout(waiter.timer);
+    peerWaiters.delete(waiter);
+    waiter.settle(outcome);
+  }
+
+  function notifyPeerWaiters(): void {
+    const outcome = peekPeerOutcome();
+    if (!outcome) {
+      return;
+    }
+    for (const waiter of [...peerWaiters]) {
+      finishPeerWaiter(waiter, outcome);
+    }
+  }
+
+  function waitForPeerOutcome(
+    timeoutMs: number,
+  ): Promise<'grant' | 'failed' | 'timeout'> {
+    const immediate = peekPeerOutcome();
+    if (immediate) {
+      return Promise.resolve(immediate);
+    }
+    return new Promise((resolve) => {
+      const waiter: PeerWaiter = {
+        settle: resolve,
+        timer: setTimeout(() => {
+          finishPeerWaiter(waiter, peekPeerOutcome() ?? 'timeout');
+        }, timeoutMs),
+      };
+      peerWaiters.add(waiter);
+    });
   }
 
   function takePeerGrant(): AccessGrant | null {
@@ -176,8 +247,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return;
       }
       if (data.type === 'refresh-failed') {
-        peerFailureAt = data.at || now();
-        peerGrant = null;
+        rememberFailure(data.at || now());
         return;
       }
       if (data.type === 'claim' && typeof data.id === 'string') {
@@ -248,15 +318,19 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (shared) {
       return shared;
     }
+    if (takePeerFailure()) {
+      throw new SessionExpiredError();
+    }
     if (!leader) {
-      await drain();
-      const afterWait = takePeerGrant();
-      if (afterWait) {
-        return afterWait;
+      // Não renova por conta própria: um segundo POST reusa o refresh token.
+      const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
+      if (outcome === 'grant') {
+        const grant = takePeerGrant();
+        if (grant) {
+          return grant;
+        }
       }
-      if (takePeerFailure()) {
-        throw new SessionExpiredError();
-      }
+      throw new SessionExpiredError();
     }
     return postAndAnnounce();
   }
@@ -294,6 +368,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       peerGrant = null;
       peerFailureAt = null;
       claims.clear();
+      for (const waiter of [...peerWaiters]) {
+        finishPeerWaiter(waiter, 'timeout');
+      }
     },
   };
 }
@@ -331,6 +408,7 @@ export function restoreSessionOnce(): Promise<AccessGrant | null> {
 export function resetSessionRuntimeForTests(): void {
   restoreFlight = null;
   singleton?.reset();
+  singleton = null;
   refreshImpl = async () => {
     throw new SessionExpiredError();
   };

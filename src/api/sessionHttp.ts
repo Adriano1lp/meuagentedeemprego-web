@@ -15,6 +15,9 @@ export const AUTH_REGISTER_PATH = '/auth/register';
 export const AUTH_REFRESH_PATH = '/auth/refresh';
 export const AUTH_LOGOUT_PATH = '/auth/logout';
 
+/** A aba não espera o logout além disto. Timeout ou erro ainda descartam a sessão. */
+export const LOGOUT_TIMEOUT_MS = 5_000;
+
 const COOKIE_PATHS = new Set([
   AUTH_LOGIN_PATH,
   AUTH_REGISTER_PATH,
@@ -141,7 +144,7 @@ export async function requestRefresh(
   return { accessToken, expiresIn: readExpiresIn(body) };
 }
 
-/** 204 idempotente. Falha de rede não vaza detalhe; o chamador limpa a memória. */
+/** 204 idempotente. Timeout ou falha de rede não vazam detalhe; o chamador limpa a memória. */
 export async function requestLogout(
   apiBaseUrl: string,
   fetchImpl: typeof fetch,
@@ -151,16 +154,31 @@ export async function requestLogout(
   if (!session) {
     return;
   }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await fetchImpl(url, {
-      method: 'POST',
-      credentials: session.credentials,
-      headers: {
-        Accept: 'application/json',
-        [CSRF_HEADER]: session.csrf,
-      },
-    });
+    await Promise.race([
+      fetchImpl(url, {
+        method: 'POST',
+        credentials: session.credentials,
+        headers: {
+          Accept: 'application/json',
+          [CSRF_HEADER]: session.csrf,
+        },
+        signal: controller.signal,
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }, LOGOUT_TIMEOUT_MS);
+      }),
+    ]);
   } catch {
-    // Sem rede: a sessão local ainda é descartada.
+    // Timeout ou sem rede: a sessão local ainda é descartada.
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
   }
 }

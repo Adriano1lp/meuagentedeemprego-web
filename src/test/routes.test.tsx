@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
+import { resetSessionRuntimeForTests } from '../auth/sessionRefresh';
 import { isSafeAppPath, resetReturnToMemory } from '../auth/returnTo';
 import { resetBillingReturnMemory } from '../billing/BillingReturn';
 
@@ -139,6 +140,33 @@ describe('rotas publicas e app', () => {
     expect(isSafeAppPath('/app/../../entrar')).toBe(false);
     expect(isSafeAppPath('https://evil.example/app')).toBe(false);
   });
+
+  it('?next aberto cai em /app e /app/perfil entra', async () => {
+    const cases = [
+      { next: '//evil.com', path: '/app' },
+      { next: '/\\evil.com', path: '/app' },
+      { next: 'https://evil.com', path: '/app' },
+      { next: 'javascript:alert(1)', path: '/app' },
+      { next: '%2F%2Fevil.com', path: '/app' },
+      { next: '%5Cevil.com', path: '/app' },
+      { next: '/@evil.com', path: '/app' },
+      { next: 'http:evil', path: '/app' },
+      { next: '/app/perfil', path: '/app/perfil' },
+    ];
+    for (const item of cases) {
+      cleanup();
+      resetReturnToMemory();
+      resetBillingReturnMemory();
+      resetSessionRuntimeForTests();
+      navLog.length = 0;
+      const user = userEvent.setup();
+      renderAt(`/entrar?next=${item.next}`);
+      await login(user);
+      expect(screen.getByTestId('location-full').textContent, item.next).toBe(item.path);
+      expect(screen.getByTestId('location-full').textContent).not.toContain('evil');
+      expect(screen.getByTestId('location-full').textContent).not.toContain('javascript');
+    }
+  }, 60_000);
 
   it('a landing nao usa o shell e os CTAs preservam a intencao', async () => {
     const fetchImpl = createFetch();

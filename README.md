@@ -32,8 +32,8 @@ O access token fica só em memória. Login e cadastro enviam `session: "cookie"`
 1. Recarregar `/app/*` faz um refresh e permanece na mesma rota, sem passar por `/entrar`.
 2. Refresh 401 (expirado, revogado ou reuso) leva a `/entrar?next=<caminho interno /app/*>&aviso=sessao`, com o texto "Sua sessão expirou. Entre de novo." O `next` recusa protocolo, host e `//`. Depois do login, a volta é esse `next`.
 3. Access expirado durante o uso: o cliente renova e repete a chamada uma vez. Se falhar de novo, vai para `/entrar`.
-4. Um refresh por vez, na aba e entre abas (`navigator.locks`, nome `mae-web-session-refresh`). As outras abas reaproveitam o resultado e não disparam um segundo POST.
-5. **Sair** chama `POST /auth/logout`, limpa a memória e vai para `/` (a landing). Sair numa aba encerra as outras. Excluir a conta continua em `/entrar`, com "Sua conta foi excluída."
+4. Um refresh por vez, na aba e entre abas (`navigator.locks`, nome `mae-web-session-refresh`). As outras abas reaproveitam o resultado e não disparam um segundo POST. Sem Web Locks, a aba que não liderou espera o grant ou a falha no canal por até 5s. Se nada chegar, ela não faz outro refresh: limpa a sessão e vai para `/entrar?next=` com o aviso neutro.
+5. **Sair** chama `POST /auth/logout` e desiste em cerca de 5s se a API não responder. Com sucesso, timeout ou erro, limpa a memória, avisa as outras abas e vai para `/` (a landing). Excluir a conta continua em `/entrar`, com "Sua conta foi excluída."
 6. O access não vai para `localStorage`, `sessionStorage` nem para o console.
 7. Enquanto o refresh do boot roda, a tela é um skeleton. A landing e `/entrar` não piscam.
 

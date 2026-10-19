@@ -1,11 +1,16 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { LOGOUT_TIMEOUT_MS } from '../api/sessionHttp';
 import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
-import { resetSessionRuntimeForTests } from '../auth/sessionRefresh';
+import {
+  FOLLOWER_GRANT_WAIT_MS,
+  resetSessionRuntimeForTests,
+  SESSION_CHANNEL_NAME,
+} from '../auth/sessionRefresh';
 import { resetReturnToMemory } from '../auth/returnTo';
 
 const userBody = {
@@ -45,7 +50,100 @@ afterEach(() => {
   cleanup();
   resetReturnToMemory();
   resetSessionRuntimeForTests();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
+
+let forceFollower = false;
+
+class FollowerChannel {
+  static all = new Set<FollowerChannel>();
+
+  listeners = new Set<(event: MessageEvent) => void>();
+
+  name: string;
+
+  constructor(name: string) {
+    this.name = name;
+    FollowerChannel.all.add(this);
+  }
+
+  postMessage(data: unknown) {
+    const message = data as { type?: string };
+    if (forceFollower && message?.type === 'claim') {
+      for (const listener of this.listeners) {
+        listener({ data: { v: 1, type: 'claim', id: '' } } as MessageEvent);
+      }
+    }
+    for (const other of FollowerChannel.all) {
+      if (other === this || other.name !== this.name) {
+        continue;
+      }
+      for (const listener of other.listeners) {
+        listener({ data } as MessageEvent);
+      }
+    }
+  }
+
+  addEventListener(_type: string, listener: (event: MessageEvent) => void) {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener() {}
+
+  close() {
+    FollowerChannel.all.delete(this);
+  }
+}
+
+function hideNavigatorLocks(): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    get: () => undefined,
+  });
+  return () => {
+    if (descriptor) {
+      Object.defineProperty(navigator, 'locks', descriptor);
+      return;
+    }
+    Reflect.deleteProperty(navigator, 'locks');
+  };
+}
+
+function installSessionChannel(options?: { grantAfterMs?: number; forceFollower?: boolean }) {
+  forceFollower = options?.forceFollower === true;
+  FollowerChannel.all.clear();
+  let scheduled = false;
+  const Original = FollowerChannel;
+  class SchedulingChannel extends Original {
+    postMessage(data: unknown) {
+      const message = data as { type?: string };
+      if (message?.type === 'claim' && options?.grantAfterMs != null && !scheduled) {
+        scheduled = true;
+        const delay = options.grantAfterMs;
+        setTimeout(() => {
+          const peer = new Original(SESSION_CHANNEL_NAME);
+          peer.postMessage({
+            v: 1,
+            type: 'grant',
+            accessToken: 'jwt-seguidora',
+            expiresIn: null,
+            at: Date.now(),
+          });
+        }, delay);
+      }
+      super.postMessage(data);
+    }
+  }
+  vi.stubGlobal(
+    'BroadcastChannel',
+    options?.grantAfterMs == null ? FollowerChannel : SchedulingChannel,
+  );
+  const restoreLocks = hideNavigatorLocks();
+  resetSessionRuntimeForTests();
+  return restoreLocks;
+}
 
 describe('boot da sessão', () => {
   it('mostra skeleton e não pisca a landing nem o entrar', async () => {
@@ -248,5 +346,217 @@ describe('boot da sessão', () => {
     );
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument();
+  });
+
+  it('sem locks, o grant em 3s é reaproveitado e não há outro POST', async () => {
+    vi.useFakeTimers();
+    const restoreLocks = installSessionChannel({ grantAfterMs: 3_000, forceFollower: true });
+    const localSet = vi.spyOn(window.localStorage, 'setItem');
+    const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
+    let refreshPosts = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) {
+        refreshPosts += 1;
+        return json({ access_token: 'jwt-nao-usar', token_type: 'bearer', expires_in: 600 });
+      }
+      if (url.includes('/auth/me') || /\/users\/me($|\?)/.test(url)) {
+        return json(userBody);
+      }
+      if (url.includes('/users/me/status') || url.includes('/billing/me')) {
+        return json({
+          user_id: 'user-1',
+          has_cv: true,
+          has_embeddings: true,
+          plan: 'free',
+          subscription_status: 'none',
+          used: 0,
+          limit: 5,
+          remaining: 5,
+          period: '2026-10',
+        });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+
+    renderAt('/app/perfil', fetchImpl);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('session-boot')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_999);
+    });
+    expect(screen.getByTestId('session-boot')).toBeInTheDocument();
+    expect(refreshPosts).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('login-submit')).not.toBeInTheDocument();
+    expect(refreshPosts).toBe(0);
+    expect(localSet).not.toHaveBeenCalled();
+    expect(sessionSet).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('access_token')).toBeNull();
+    expect(window.sessionStorage.getItem('access_token')).toBeNull();
+    localSet.mockRestore();
+    sessionSet.mockRestore();
+    restoreLocks();
+  });
+
+  it('sem locks, sem grant em 5s vai para /entrar?next e não faz POST', async () => {
+    vi.useFakeTimers();
+    const restoreLocks = installSessionChannel({ forceFollower: true });
+    let refreshPosts = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) {
+        refreshPosts += 1;
+        return json({ access_token: 'jwt-nao-usar', token_type: 'bearer', expires_in: 600 });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+
+    renderAt('/app/perfil', fetchImpl);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('session-boot')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS - 1);
+    });
+    expect(screen.getByTestId('session-boot')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-expired-notice')).not.toBeInTheDocument();
+    expect(refreshPosts).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
+      'Sua sessão expirou. Entre de novo.',
+    );
+    expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
+    expect(decodeURIComponent(screen.getByTestId('session-location').textContent ?? '')).toContain(
+      'next=/app/perfil',
+    );
+    expect(screen.getByTestId('session-location').textContent).toContain('aviso=sessao');
+    expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
+    expect(refreshPosts).toBe(0);
+    restoreLocks();
+  });
+});
+
+describe('logout com timeout ou erro', () => {
+  function authFetch(logout: 'hang' | 'error') {
+    const signals: Array<AbortSignal | null> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) {
+        return json({ detail: 'sem sessao' }, 401);
+      }
+      if (url.includes('/auth/login')) {
+        return json({
+          access_token: 'jwt-logout',
+          token_type: 'bearer',
+          user: userBody,
+        });
+      }
+      if (url.includes('/auth/logout')) {
+        signals.push(init?.signal ?? null);
+        if (logout === 'error') {
+          throw new TypeError('Failed to fetch');
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          const fail = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+          if (init?.signal?.aborted) {
+            fail();
+            return;
+          }
+          init?.signal?.addEventListener('abort', fail, { once: true });
+        });
+      }
+      if (url.includes('/auth/me') || /\/users\/me($|\?)/.test(url)) {
+        return json(userBody);
+      }
+      if (url.includes('/users/me/status') || url.includes('/billing/me')) {
+        return json({
+          user_id: 'user-1',
+          has_cv: true,
+          has_embeddings: true,
+          plan: 'free',
+          subscription_status: 'none',
+          used: 0,
+          limit: 5,
+          remaining: 5,
+          period: '2026-10',
+        });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+    return { fetchImpl, signals };
+  }
+
+  async function loginToApp(fetchImpl: typeof fetch) {
+    const user = userEvent.setup();
+    renderAt('/entrar', fetchImpl);
+    await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
+    await user.type(screen.getByTestId('login-password'), 'senha-segura');
+    await user.click(screen.getByTestId('login-submit'));
+    expect(await screen.findByTestId('logout-button')).toBeInTheDocument();
+  }
+
+  it('timeout do logout limpa a memória, avisa a outra aba e vai para /', async () => {
+    const restoreLocks = installSessionChannel();
+    const seen: Array<{ type?: string; accessToken?: string }> = [];
+    const peer = new FollowerChannel(SESSION_CHANNEL_NAME);
+    peer.addEventListener('message', (event) => {
+      seen.push(event.data as { type?: string; accessToken?: string });
+    });
+    const localSet = vi.spyOn(window.localStorage, 'setItem');
+    const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
+    const { fetchImpl, signals } = authFetch('hang');
+    await loginToApp(fetchImpl);
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId('logout-button'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LOGOUT_TIMEOUT_MS);
+    });
+    expect(screen.getByTestId('landing-page')).toBeInTheDocument();
+    expect(screen.getByTestId('session-location').textContent).toBe('/');
+    expect(screen.queryByTestId('home-shell')).not.toBeInTheDocument();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(seen.some((message) => message.type === 'logout')).toBe(true);
+    expect(seen.some((message) => message.accessToken)).toBe(false);
+    expect(localSet).not.toHaveBeenCalled();
+    expect(sessionSet).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('access_token')).toBeNull();
+    localSet.mockRestore();
+    sessionSet.mockRestore();
+    restoreLocks();
+  });
+
+  it('erro no logout limpa a memória, avisa a outra aba e vai para /', async () => {
+    const restoreLocks = installSessionChannel();
+    const seen: Array<{ type?: string; accessToken?: string }> = [];
+    const peer = new FollowerChannel(SESSION_CHANNEL_NAME);
+    peer.addEventListener('message', (event) => {
+      seen.push(event.data as { type?: string; accessToken?: string });
+    });
+    const localSet = vi.spyOn(window.localStorage, 'setItem');
+    const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
+    const { fetchImpl } = authFetch('error');
+    await loginToApp(fetchImpl);
+
+    fireEvent.click(screen.getByTestId('logout-button'));
+    expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
+    expect(screen.getByTestId('session-location').textContent).toBe('/');
+    expect(screen.queryByTestId('home-shell')).not.toBeInTheDocument();
+    expect(seen.some((message) => message.type === 'logout')).toBe(true);
+    expect(seen.some((message) => 'accessToken' in message && message.accessToken)).toBe(false);
+    expect(localSet).not.toHaveBeenCalled();
+    expect(sessionSet).not.toHaveBeenCalled();
+    localSet.mockRestore();
+    sessionSet.mockRestore();
+    restoreLocks();
   });
 });

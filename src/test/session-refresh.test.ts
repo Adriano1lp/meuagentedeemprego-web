@@ -5,16 +5,20 @@ import {
   cookieSessionInit,
   CSRF_HEADER,
   isApiOriginRequest,
+  LOGOUT_TIMEOUT_MS,
   requestLogout,
   requestRefresh,
+  SessionExpiredError,
 } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
 import {
   createSessionCoordinator,
+  FOLLOWER_GRANT_WAIT_MS,
   REFRESH_LOCK_NAME,
   type SessionCoordinator,
 } from '../auth/sessionRefresh';
 import {
+  APP_HOME,
   buildExpiredLoginPath,
   isSafeAppPath,
   SESSION_EXPIRED_NOTICE,
@@ -382,5 +386,175 @@ describe('retry único no 401', () => {
     expect(external).not.toContain('next=');
     expect(buildExpiredLoginPath('//evil.example/app')).not.toContain('evil');
     expect(SESSION_EXPIRED_NOTICE).toBe('Sua sessão expirou. Entre de novo.');
+  });
+
+  it('rejeita open redirect no ?next e aceita /app/perfil', () => {
+    const rejected = [
+      '//evil.com',
+      '/\\evil.com',
+      '/\\\\evil.com',
+      'https://evil.com',
+      'javascript:alert(1)',
+      '%2F%2Fevil.com',
+      '%5Cevil.com',
+      '/@evil.com',
+      'http:evil',
+    ];
+    for (const next of rejected) {
+      const decoded = new URLSearchParams(`next=${next}`).get('next');
+      expect(decoded, next).toBeTruthy();
+      expect(isSafeAppPath(decoded ?? ''), next).toBe(false);
+      expect(isSafeAppPath(next), next).toBe(false);
+      const destination = decoded && isSafeAppPath(decoded) ? decoded : APP_HOME;
+      expect(destination, next).toBe(APP_HOME);
+      expect(destination).not.toContain('evil');
+      expect(destination).not.toContain('javascript');
+    }
+    expect(isSafeAppPath('/app/perfil')).toBe(true);
+    expect(new URLSearchParams('next=/app/perfil').get('next')).toBe('/app/perfil');
+  });
+});
+
+describe('seguidora sem navigator.locks', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function makePair(postRefresh: () => Promise<{ accessToken: string; expiresIn: number | null }>) {
+    const bus = createBus();
+    let posts = 0;
+    const coordinators = [0, 1].map(() =>
+      createSessionCoordinator({
+        locks: null,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          return postRefresh();
+        },
+      }),
+    );
+    for (const tab of coordinators) {
+      tab.subscribe(() => {});
+    }
+    return {
+      coordinators,
+      posts: () => posts,
+    };
+  }
+
+  it('reaproveita o grant que chega em 3s e faz um único POST', async () => {
+    vi.useFakeTimers();
+    expect(FOLLOWER_GRANT_WAIT_MS).toBe(5_000);
+    const pair = makePair(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      return { accessToken: 'jwt-3s', expiresIn: 90 };
+    });
+    const pending = Promise.all(pair.coordinators.map((tab) => tab.refresh()));
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(pair.posts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const grants = await pending;
+    expect(pair.posts()).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-3s', 'jwt-3s']);
+  });
+
+  it('sem grant nem falha em 5s a seguidora falha fechado e não faz outro POST', async () => {
+    vi.useFakeTimers();
+    let releaseLeader: () => void = () => {};
+    const pair = makePair(
+      () =>
+        new Promise((resolve) => {
+          releaseLeader = () => resolve({ accessToken: 'jwt-lider', expiresIn: 30 });
+        }),
+    );
+    const states: Array<'pending' | 'ok' | 'fail'> = ['pending', 'pending'];
+    const errors: unknown[] = [];
+    const tasks = pair.coordinators.map((tab, index) =>
+      tab.refresh().then(
+        () => {
+          states[index] = 'ok';
+        },
+        (error: unknown) => {
+          states[index] = 'fail';
+          errors.push(error);
+        },
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS - 1);
+    expect(states).toEqual(['pending', 'pending']);
+    expect(pair.posts()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(states.filter((state) => state === 'fail')).toHaveLength(1);
+    expect(states.filter((state) => state === 'pending')).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(SessionExpiredError);
+    expect(pair.posts()).toBe(1);
+
+    releaseLeader();
+    await Promise.all(tasks);
+    expect(pair.posts()).toBe(1);
+    expect(states.filter((state) => state === 'ok')).toHaveLength(1);
+  });
+
+  it('a falha do líder chega pelo canal e a seguidora não repete o POST', async () => {
+    vi.useFakeTimers();
+    const pair = makePair(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      throw new SessionExpiredError();
+    });
+    const tasks = pair.coordinators.map((tab) =>
+      tab.refresh().then(
+        () => 'ok' as const,
+        (error: unknown) => error,
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    const results = await Promise.all(tasks);
+    expect(pair.posts()).toBe(1);
+    expect(results.every((result) => result instanceof SessionExpiredError)).toBe(true);
+  });
+});
+
+describe('timeout do logout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('aborta o POST em 5s e mesmo assim resolve', async () => {
+    vi.useFakeTimers();
+    expect(LOGOUT_TIMEOUT_MS).toBe(5_000);
+    let signal: AbortSignal | undefined;
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+      });
+    });
+
+    const pending = requestLogout('https://api.example.test', fetchImpl);
+    await vi.advanceTimersByTimeAsync(LOGOUT_TIMEOUT_MS - 1);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(settled).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('erro de rede resolve para o chamador limpar a sessão', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await expect(requestLogout('https://api.example.test', fetchImpl)).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
