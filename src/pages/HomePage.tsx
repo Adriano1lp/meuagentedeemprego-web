@@ -8,6 +8,7 @@ import { useAuth } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
 import { BillingConfirmation } from '../components/BillingConfirmation';
 import { CvUploadPanel } from '../components/CvUploadPanel';
+import { GenericError } from '../components/GenericError';
 import { HomeShortcuts } from '../components/HomeShortcuts';
 import { ProcessarPanel } from '../components/ProcessarPanel';
 import { QUOTA_LOAD_ERROR, QuotaStatusCard } from '../components/QuotaStatusCard';
@@ -153,17 +154,11 @@ export function HomePage() {
       {statusError ? (
         <Card data-testid="home-status-error" className="mt-6">
           <CardContent className="pt-5">
-            <p className="text-sm">{statusError}</p>
-            <Button
-              type="button"
-              data-testid="home-status-retry"
-              onClick={() => void loadStatus()}
-              variant="outline"
-              size="sm"
-              className="mt-3"
-            >
-              Tentar de novo
-            </Button>
+            <GenericError
+              message={statusError}
+              onRetry={() => void loadStatus()}
+              retryTestId="home-status-retry"
+            />
           </CardContent>
         </Card>
       ) : null}

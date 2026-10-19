@@ -14,6 +14,7 @@ import {
 import { useBillingReturn } from '../billing/BillingReturn';
 import { canSubmitSignup, validateSignup } from '../auth/signupValidation';
 import { LegalDocument } from '../components/LegalDocument';
+import { SupportLink } from '../components/SupportLink';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Button } from '../components/ui/button';
 import { Card, CardDescription, CardHeader } from '../components/ui/card';
@@ -351,6 +352,12 @@ export function AuthPage() {
           </Card>
         </div>
       )}
+
+      <p className="mt-6 min-w-0 text-center">
+        <SupportLink data-testid="support-link-entrar" className="max-w-full justify-center">
+          Problemas para entrar? Fale com o suporte
+        </SupportLink>
+      </p>
     </div>
   );
 }

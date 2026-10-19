@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import { SUBSCRIBE_ESSENCIAL_LABEL } from '../api/billing';
 import { useAuth } from '../auth/AuthContext';
 import { APP_HOME, APP_PROFILE, ENTER_PATH } from '../auth/returnTo';
+import { SupportLink } from '../components/SupportLink';
+import { SUPPORT_EMAIL } from '../config/support';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import {
@@ -215,6 +217,15 @@ export function LandingPage() {
           </div>
         </section>
       </main>
+
+      <footer
+        data-testid="landing-footer"
+        className="mx-auto w-full min-w-0 max-w-5xl px-4 pb-10"
+      >
+        <SupportLink data-testid="support-link-landing" className="max-w-full">
+          Suporte: {SUPPORT_EMAIL}
+        </SupportLink>
+      </footer>
     </div>
   );
 }

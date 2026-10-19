@@ -6,6 +6,7 @@ import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
 import { CvUploadPanel, type CvSessionFile } from '../components/CvUploadPanel';
+import { GenericError } from '../components/GenericError';
 import { Button } from '../components/ui/button';
 import {
   Card,
@@ -88,19 +89,12 @@ export function CurriculoPage() {
           ) : null}
 
           {error ? (
-            <div data-testid="curriculo-error" role="status">
-              <p className="text-sm">{error}</p>
-              <Button
-                type="button"
-                data-testid="curriculo-retry"
-                onClick={() => void loadStatus()}
-                variant="outline"
-                size="sm"
-                className="mt-3"
-              >
-                Tentar de novo
-              </Button>
-            </div>
+            <GenericError
+              testId="curriculo-error"
+              message={error}
+              onRetry={() => void loadStatus()}
+              retryTestId="curriculo-retry"
+            />
           ) : null}
 
           {!error && hasCv && !replacing ? (
