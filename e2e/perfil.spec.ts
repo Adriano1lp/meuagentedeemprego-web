@@ -1,6 +1,7 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 import {
+  expectExpiredLogin,
   mockAuthSuccess,
   mockCurrentUser,
   mockLegalRoutes,
@@ -50,7 +51,7 @@ test('render dos dados mockados — nome, email, plano e status', async ({ page 
   expect(storage).toEqual({ local: 0, session: 0, token: null });
 });
 
-test('logout limpa a sessao e volta ao login', async ({ page }) => {
+test('logout limpa a sessao e volta a landing', async ({ page }) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page);
@@ -60,8 +61,9 @@ test('logout limpa a sessao e volta ao login', async ({ page }) => {
   await expect(page.getByTestId('profile-logout')).toBeVisible();
 
   await page.getByTestId('profile-logout').click();
-  await expect(page.getByTestId('auth-tab-login')).toBeVisible();
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
+  await expect(page.getByTestId('landing-page')).toBeVisible();
+  await expect(page).toHaveURL('http://127.0.0.1:5173/');
+  await expect(page.getByTestId('auth-tab-login')).toHaveCount(0);
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
   await expect(page.getByTestId('profile-name')).toHaveCount(0);
 
@@ -89,8 +91,8 @@ test('sem JWT redireciona ao login e nao chama GET /users/me', async ({ page }) 
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
-  await expect(page).not.toHaveURL(/perfil/);
+  expectExpiredLogin(page, '/app/perfil');
+  expect(new URL(page.url()).pathname).toBe('/entrar');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);
   expect(profileHits).toEqual([]);

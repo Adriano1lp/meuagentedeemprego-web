@@ -34,7 +34,7 @@ Definido em `src/App.tsx`. A autenticação é “existe JWT em memória”, nã
 | `/perfil` | redirect | — | `replace` para `/app/perfil`. |
 | qualquer outro (`/login`, `/processar`, …) | — | — | `Navigate` para `/`. |
 
-Sem JWT, `/app` e qualquer filho vão para `/entrar` e não chamam a API. A rota de origem fica em memória. O CTA **Assinar Essencial** da landing usa `?next=/app/perfil` (só um path interno `/app…`). Depois do login ou do cadastro, o app volta para essa origem. O padrão, sem origem, é `/app`. O JWT não entra na query nem em storage.
+Ao abrir ou recarregar `/app` (e filhos), o boot tenta `POST /auth/refresh` antes de decidir a rota. Com cookie válido, a mesma rota permanece e a API autenticada segue com Bearer. Sem sessão restaurada, `/app` e qualquer filho vão para `/entrar?next=<caminho interno>&aviso=sessao` e não chamam a API de negócio. A mensagem é "Sua sessão expirou. Entre de novo." O CTA **Assinar Essencial** da landing usa `?next=/app/perfil` sem esse aviso. Depois do login ou do cadastro, o app volta para essa origem. O padrão, sem origem, é `/app`. O access token não entra na query, em `localStorage`, em `sessionStorage` nem no console.
 
 O **ConsentGate** não é uma rota. Com JWT e aceite desatualizado, um diálogo cobre o app inteiro (incluindo `/app`, `/app/historico` e `/app/perfil`) até o reaceite ou o logout. A landing e `/entrar` não usam o shell.
 
@@ -86,10 +86,10 @@ Os três destinos são os de antes, com ícone lucide e `aria-current="page"` no
   - **Início** → `/app`
   - **Histórico** → `/app/historico`
   - **Perfil** → `/app/perfil`
-  - **Sair** no rodapé da sidebar (`data-testid="logout-button"`) — zera o JWT em memória e o estado de consentimento, e a rota protegida manda para `/entrar`. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido).
+  - **Sair** no rodapé da sidebar (`data-testid="logout-button"`) — chama `POST /auth/logout`, zera o JWT em memória e o estado de consentimento, e vai para `/` (a landing). As outras abas também saem. Não grava aviso de conta excluída (esse aviso só existe depois do `DELETE` bem-sucedido, em `/entrar`).
 - **Celular (abaixo de `md`):** a sidebar fica oculta. A bottom nav fixa (`data-testid="app-bottom-nav"`) repete só os três destinos. **Sair** fica numa barra superior compacta e chama o mesmo `logout()`. O `<main>` reserva espaço com `padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px))` (classe `app-shell-main`) para a barra não cobrir o conteúdo. O viewport usa `viewport-fit=cover`.
 
-Não há `localStorage` nem `sessionStorage` para o token. O shell não grava storage e não chama a API. Recarregar a página desloga.
+Não há `localStorage` nem `sessionStorage` para o token. O shell não grava storage. Recarregar `/app/*` mostra um skeleton enquanto o refresh roda e permanece na mesma rota se o cookie ainda vale. `credentials: 'include'` e `X-MAE-CSRF: 1` só nas quatro rotas de sessão, e só para a origem da API. O refresh é único entre abas (`navigator.locks`).
 
 ### Início e análise de vaga (`/app`, com JWT)
 
@@ -156,7 +156,7 @@ Autenticação em todas as chamadas abaixo: header `Authorization: Bearer <acces
 6. Se `GET /auth/me` devolver `terms_version` ou `privacy_version` preenchida e diferente de `1.0`, o ConsentGate abre. Versão ausente ou em branco não abre o gate por si só.
 7. Qualquer chamada autenticada que responda **403** com `detail.code` `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` também abre o gate. O overlay lista o documento de cada code devolvido; os dois podem aparecer juntos.
 8. **Aceitar e continuar** faz um `POST /consent` por documento pendente, body `{ "doc": "terms" | "privacy", "version": "1.0" }`, e depois outro `GET /auth/me`. Se as versões voltarem vigentes, o overlay some e a tela de baixo volta a responder.
-9. **Sair**, ou recarregar a página, apaga o JWT. Não há sessão restaurada.
+9. **Sair** chama a API, apaga o JWT e volta à landing. Recarregar restaura a sessão pelo cookie de refresh; se o refresh responde 401, a rota vai para `/entrar?next=`.
 
 `/consent` e `/legal/*` são as rotas de API que o gate e os painéis legais usam; o restante autenticado fica atrás do gate.
 
@@ -185,8 +185,8 @@ Analisar:
 1. Com JWT e sem gate, abrir `/app/historico` dispara `GET /users/me/gap-history?limit=20&offset=0`. `/historico` só redireciona para essa rota.
 2. **200** `{ items, limit, offset }` com itens: lista das análises desta conta (título, empresa, score, data e o restante descrito na tela).
 3. **200** com `items: []`, ou lista nua vazia: estado vazio. Itens sem `id` (ou `insight_id`) são ignorados.
-4. Sem JWT a rota nem monta o painel: redirect para `/entrar` e, depois do login, volta a `/app/historico`. Sem Bearer vazio.
-5. **401**: “Sessao expirada. Entre novamente para ver o historico.” O painel não chama logout sozinho; **Sair** (ou F5) limpa a sessão.
+4. Sem sessão restaurada a rota nem monta o painel: redirect para `/entrar?next=/app/historico` e, depois do login, volta a `/app/historico`. Sem Bearer vazio.
+5. **401**: o cliente renova a sessão e repete o GET uma vez. Se o refresh falha, vai para `/entrar` com "Sua sessão expirou. Entre de novo." **Sair** limpa a sessão e volta à landing. F5 restaura pelo cookie.
 6. **403** de consentimento abre o ConsentGate. Outro erro (5xx, rede) mostra texto fixo, sem path, URL, token ou stack, e **Tentar novamente**.
 7. **Baixar CV** chama `GET /users/me/files/{cv_file_name}` com Bearer, cria um Blob e revoga a object URL. Sem link direto e sem token na query. Sem `cv_file_name` (null, vazio ou ausente) não há botão e a API de arquivo não é chamada.
 8. **Baixar PDF da vaga** usa `pdf_url` só para achar o nome do arquivo e faz o mesmo GET autenticado. `generation_blocked: true` ou `pdf_url` que não seja `/users/me/files/{nome}` não mostra esse botão.
@@ -204,7 +204,7 @@ Na lista do histórico, cada análise tem **Gerar carta**. O texto da carta vive
 5. **Baixar PDF** usa `pdf_url` só para achar o nome do arquivo e chama `GET /users/me/files/{nome}` com Bearer. O download é um Blob (`application/pdf`); a object URL é revogada. Sem link direto e sem token na query. O arquivo precisa começar com `%PDF`.
 6. **500** ou rede: “Nao foi possivel gerar a carta.” (ou a variante sanitizada), com **Tentar de novo**. A lista do histórico permanece.
 7. **402** ou **429**: aviso “Limite de uso” / “Limite de uso atingido. Nao e possivel gerar a carta agora.” Sem botão nem link de pagamento. A fatia registra que esta rota não consome cota hoje; a UI trata esses status por defesa.
-8. Sem JWT, `/app/historico` nem abre. **401** na carta ou no PDF desloga e volta ao login em `/entrar`. **403** de termos/privacidade abre o ConsentGate.
+8. Sem sessão restaurada, `/app/historico` nem abre. **401** na carta ou no PDF renova a sessão e repete a chamada uma vez; se falhar de novo, volta ao login em `/entrar?next=`. **403** de termos/privacidade abre o ConsentGate.
 
 Ver a nota no final sobre empresa gravada como `Nao informado`.
 
@@ -213,8 +213,8 @@ Ver a nota no final sobre empresa gravada como `Nao informado`.
 1. Abrir `/app/perfil` com JWT e sem gate chama `GET /users/me`. `/perfil` só redireciona para essa rota.
 2. A tela mostra `display_name`, `email`, `plan` e `subscription_status` quando presentes. Não mostra cota.
 3. **Política de privacidade** chama `GET /legal/privacy?version=1.0` e mostra o markdown no painel.
-4. **Sair** (shell ou o botão do perfil) limpa o JWT em memória e volta a `/entrar` no estado de login. Nada é escrito em `localStorage` ou `sessionStorage`.
-5. Sem JWT, redirect para `/entrar` antes do GET e, depois do login, volta a `/app/perfil`. **401** na carga do perfil mostra “Sessao expirada. Entre novamente para ver o perfil.” **403** de consentimento abre o gate.
+4. **Sair** (shell ou o botão do perfil) chama `POST /auth/logout`, limpa o JWT em memória e volta à landing (`/`). Nada é escrito em `localStorage` ou `sessionStorage`.
+5. Sem sessão restaurada, redirect para `/entrar?next=/app/perfil` antes do GET e, depois do login, volta a `/app/perfil`. **401** na carga do perfil renova uma vez e, se falhar, vai para `/entrar` com "Sua sessão expirou. Entre de novo." **403** de consentimento abre o gate.
 
 ### f) LGPD (na mesma tela Perfil)
 
@@ -251,7 +251,7 @@ O preço R$ 19,90 é só o texto do botão. O cliente não envia `price_id`, val
 
 O destino recomendado é `/app?billing=success&session_id={CHECKOUT_SESSION_ID}` ou `/app?billing=cancel`. Se a infra ainda apontar a raiz, `/?billing=...` faz `replace` para `/app` preservando a query. O mesmo fluxo vale se a volta cair em `/entrar?billing=...`. `billing=success` não prova que o pagamento ocorreu: o link pode ser aberto à mão e a confirmação é assíncrona. O app lê a query, guarda só a intenção `success` ou `cancel` em memória e chama `history.replaceState` para tirar `billing` e `session_id` da URL.
 
-O JWT não sobrevive a esse carregamento. Sem sessão o app manda para `/entrar` e, depois do login, volta a `/app`:
+Esse carregamento passa pelo refresh. Com cookie válido, a confirmação segue já autenticada em `/app`. Sem sessão restaurada, o app manda para `/entrar` sem `aviso=sessao` e, depois do login, volta a `/app`:
 
 - sucesso: login com "Se você concluiu o pagamento, entre para confirmar sua assinatura."
 - cancelamento: login sem aviso de erro
@@ -270,8 +270,8 @@ Depois do login a Home (`/app`) segue o fluxo. Cancelamento mostra "Pagamento ca
 
 ## Regras transversais
 
-- **Bearer only.** Header `Authorization: Bearer <access_token>`. Nunca `X-User-Id`, nunca cookie de sessão. O JWT não entra em query string, nem no `href` de download.
-- **JWT só em memória.** Logout, exclusão de conta e F5 zeram a sessão. O store não usa `localStorage` nem `sessionStorage`.
+- **Bearer no access token.** Header `Authorization: Bearer <access_token>` nas chamadas de negócio. Nunca `X-User-Id`. O refresh token é o cookie HttpOnly; `credentials: 'include'` só na origem da API, nas rotas de sessão, com `X-MAE-CSRF: 1`. O access token não entra em query string, nem no `href` de download.
+- **Access token só em memória.** Logout vai para `/` e a exclusão de conta vai para `/entrar`. F5 restaura a sessão com o cookie HttpOnly; o store não usa `localStorage` nem `sessionStorage`.
 - **Erros sem path, URL ou token** nas telas de histórico, perfil, carta e LGPD: mensagem que vazaria path (`/users/me`, `/auth/`, `/legal/`, `cover-letter`, `gap-history`), URL, `Bearer`, `access_token` ou stack é trocada por texto fixo em pt-BR. O ConsentGate continua a ver o 403 de aceite. No cliente genérico (login, processar, upload), a mensagem pode ser o `detail`/`message` da API; falha de rede inclui a base configurada.
 - **HTTPS em produção.** No build, `http://` redireciona para `https://` (exceto localhost e `127.0.0.1`) e o HTML ganha CSP `upgrade-insecure-requests`. `npm run dev` em localhost pode ficar em `http://`.
 - **PWA.** Manifest `Meu Agente de Emprego` / short name `MAE`, `lang: pt-BR`, `display: standalone`, `start_url: /app`, `scope: /`. O `navigateFallback` é `index.html`, então `/`, `/entrar` e `/app/*` abrem o SPA. O rewrite `/*` → `/index.html` do Render já cobre essas rotas; o Blueprint não muda. O service worker registra só no build de produção (`registerType: autoUpdate`). No dev o plugin de PWA fica desligado; no e2e o service worker é bloqueado.

@@ -20,7 +20,7 @@ import { Skeleton } from '../components/ui/skeleton';
 const STATUS_LOAD_ERROR = 'Não foi possível carregar agora.';
 
 export function CurriculoPage() {
-  const { api, isAuthenticated, blocksApp, logout } = useAuth();
+  const { api, isAuthenticated, blocksApp, expireSession } = useAuth();
   const canUseProduct = isAuthenticated && !blocksApp;
   const [status, setStatus] = useState<UserStatus | null>(null);
   const [loading, setLoading] = useState(canUseProduct);
@@ -51,7 +51,7 @@ export function CurriculoPage() {
           return;
         }
         if (cause instanceof ApiError && cause.status === 401) {
-          logout();
+          expireSession();
           return;
         }
         setError(STATUS_LOAD_ERROR);
@@ -61,7 +61,7 @@ export function CurriculoPage() {
         }
       }
     },
-    [api, canUseProduct, logout],
+    [api, canUseProduct, expireSession],
   );
 
   useEffect(() => {

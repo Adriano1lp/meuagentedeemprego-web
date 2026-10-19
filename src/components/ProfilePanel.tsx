@@ -31,7 +31,7 @@ type ProfileView =
   | { kind: 'error'; message: string };
 
 export function ProfilePanel() {
-  const { api, isAuthenticated, blocksApp, logout } = useAuth();
+  const { api, isAuthenticated, blocksApp, logout, expireSession } = useAuth();
   const [view, setView] = useState<ProfileView>({ kind: 'loading' });
   const [showSubscribe, setShowSubscribe] = useState(false);
   const canLoad = isAuthenticated && !blocksApp;
@@ -80,13 +80,13 @@ export function ProfilePanel() {
           return;
         }
         if (cause instanceof ApiError && cause.status === 401) {
-          logout();
+          expireSession();
           return;
         }
         setShowSubscribe(false);
       });
     return () => controller.abort();
-  }, [api, canLoad, logout]);
+  }, [api, canLoad, expireSession]);
 
   const user = view.kind === 'ready' ? view.user : null;
   const plan = planLabel(user?.plan);

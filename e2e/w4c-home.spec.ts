@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 import {
   mockAuthSuccess,
@@ -187,7 +187,8 @@ test('Free, Essencial, esgotado, CV e overflow', async ({ page }, testInfo) => {
 test('nav mobile tem 4 itens e /app/curriculo exige sessao', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto('/app/curriculo');
-  await expect(page).toHaveURL(/\/entrar$/);
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('next')).toBe('/app/curriculo');
   await expect(page.getByTestId('curriculo-page')).toHaveCount(0);
 
   await mockLegalRoutes(page);

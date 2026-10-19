@@ -7,7 +7,6 @@ import { App } from '../App';
 import {
   historyErrorLeaksInternals,
   HISTORY_LOAD_FAILED,
-  HISTORY_SESSION_EXPIRED,
 } from '../api/history';
 import { AuthProvider } from '../auth/AuthContext';
 
@@ -106,7 +105,7 @@ function createHarness(options: {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
 }
@@ -224,10 +223,11 @@ describe('Feature: Historico de analises na web', () => {
     });
     await user.click(screen.getByTestId('nav-historico'));
     await waitFor(() => {
-      expect(screen.getByTestId('history-error')).toHaveTextContent(
-        HISTORY_SESSION_EXPIRED,
-      );
+      expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     });
+    expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
+      'Sua sessão expirou. Entre de novo.',
+    );
     expect(screen.queryByText('Vaga de outra pessoa')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-list')).not.toBeInTheDocument();
 
@@ -311,11 +311,11 @@ describe('Feature: Historico de analises na web', () => {
     expect(historyErrorLeaksInternals(networkText)).toBe(false);
   });
 
-  it('sessao ausente — sem JWT → redirect login e API NAO chamada com token vazado', () => {
+  it('sessao ausente — sem JWT → redirect login e API NAO chamada com token vazado', async () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/historico');
+    expect(await screen.findByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
-    expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('history-list')).not.toBeInTheDocument();
     expect(

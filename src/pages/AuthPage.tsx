@@ -9,7 +9,9 @@ import {
   consumeReturnTo,
   forgetReturnTo,
   isSafeAppPath,
+  isSessionExpiredNotice,
   rememberReturnTo,
+  SESSION_EXPIRED_NOTICE,
 } from '../auth/returnTo';
 import { useBillingReturn } from '../billing/BillingReturn';
 import { canSubmitSignup, validateSignup } from '../auth/signupValidation';
@@ -32,6 +34,7 @@ export function AuthPage() {
   const [searchParams] = useSearchParams();
   const next = searchParams.get('next');
   const tabParam = searchParams.get('tab');
+  const sessionExpired = isSessionExpiredNotice(searchParams.toString());
   const [tab, setTab] = useState<AuthTab>(tabParam === 'signup' ? 'signup' : 'login');
 
   useEffect(() => {
@@ -195,6 +198,16 @@ export function AuthPage() {
           className="mb-4"
         >
           <AlertDescription>{BILLING_LOGIN_AFTER_PAYMENT}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {sessionExpired ? (
+        <Alert
+          data-testid="session-expired-notice"
+          role="status"
+          className="mb-4"
+        >
+          <AlertDescription>{SESSION_EXPIRED_NOTICE}</AlertDescription>
         </Alert>
       ) : null}
 

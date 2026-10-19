@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 const TERMS_MD = '# Termos de Uso\n\nTexto vigente de Termos de uso v1.0';
 const PRIVACY_MD =
@@ -30,6 +30,15 @@ export const mockedPdfUrl =
   'https://meu-agente-de-emprego.onrender.com/users/me/files/abc-123.pdf';
 
 export const mockedPdfBytes = '%PDF-1.4\n%MAE-e2e\n';
+
+/** Refresh 401 em rota protegida: /entrar?next= só com caminho interno /app. */
+export function expectExpiredLogin(page: Page, next: string): void {
+  const url = new URL(page.url());
+  expect(url.pathname).toBe('/entrar');
+  expect(url.searchParams.get('aviso')).toBe('sessao');
+  expect(url.searchParams.get('next')).toBe(next);
+  expect(next.startsWith('/app')).toBe(true);
+}
 
 export async function mockLegalRoutes(page: Page): Promise<void> {
   await page.route('**/legal/terms**', async (route) => {

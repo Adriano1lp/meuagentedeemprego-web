@@ -119,8 +119,9 @@ describe('links de suporte', () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it('o rodapé da landing usa o mailto de suporte', () => {
+  it('o rodapé da landing usa o mailto de suporte', async () => {
     renderAt('/');
+    expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
     expectSupportHref(/Suporte:/);
     expect(screen.getByTestId('support-link-landing').closest('footer')).toHaveAttribute(
       'data-testid',
@@ -132,6 +133,7 @@ describe('links de suporte', () => {
     const user = userEvent.setup();
     renderAt('/entrar');
 
+    expect(await screen.findByTestId('auth-tab-login')).toBeInTheDocument();
     expectSupportHref('Problemas para entrar? Fale com o suporte');
 
     await user.click(screen.getByTestId('auth-tab-signup'));
@@ -142,7 +144,7 @@ describe('links de suporte', () => {
     const user = userEvent.setup();
     renderAt('/entrar', createFetch(500));
 
-    await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+    await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
     await user.type(screen.getByTestId('login-password'), 'senha-segura');
     await user.click(screen.getByTestId('login-submit'));
 

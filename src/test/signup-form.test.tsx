@@ -42,7 +42,7 @@ describe('AuthPage signup', () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByTestId('auth-tab-signup'));
+    await user.click(await screen.findByTestId('auth-tab-signup'));
 
     await waitFor(() => {
       expect(screen.getByTestId('termsDocumentText')).toHaveTextContent(

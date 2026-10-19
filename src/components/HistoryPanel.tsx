@@ -302,7 +302,7 @@ function HistoryDownloadButton({
   successTestId: string;
   describedTitle: string;
 }) {
-  const { api, logout } = useAuth();
+  const { api, expireSession } = useAuth();
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -347,7 +347,7 @@ function HistoryDownloadButton({
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       const message = safeHistoryDownloadMessage(cause, failedMessage);

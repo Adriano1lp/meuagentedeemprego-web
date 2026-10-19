@@ -147,7 +147,7 @@ function hasUserIdHeader(init?: RequestInit): boolean {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
 }
@@ -512,11 +512,11 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
     }
   });
 
-  it('C7 sem auth redireciona para o login e nao chama a carta', () => {
+  it('C7 sem auth redireciona para o login e nao chama a carta', async () => {
     const guest = createHarness({});
     renderApp(guest.fetchImpl, '/historico');
+    expect(await screen.findByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
-    expect(screen.getByTestId('auth-tab-login')).toBeInTheDocument();
     expect(screen.queryByTestId('history-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('cover-letter-generate')).not.toBeInTheDocument();
     expect(

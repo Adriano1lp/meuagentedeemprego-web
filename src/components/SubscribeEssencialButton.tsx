@@ -21,7 +21,7 @@ export function SubscribeEssencialButton({
   label = SUBSCRIBE_ESSENCIAL_LABEL,
   testId = 'subscribe-essencial',
 }: SubscribeEssencialButtonProps) {
-  const { api, logout } = useAuth();
+  const { api, expireSession } = useAuth();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pendingRef = useRef(false);
@@ -45,7 +45,7 @@ export function SubscribeEssencialButton({
         return;
       }
       if (cause instanceof ApiError && cause.status === 401) {
-        logout();
+        expireSession();
         return;
       }
       setError(CHECKOUT_START_FAILED);

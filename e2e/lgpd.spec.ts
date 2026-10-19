@@ -1,7 +1,8 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { readFile } from 'node:fs/promises';
 
 import {
+  expectExpiredLogin,
   mockAuthSuccess,
   mockCurrentUser,
   mockDataExport,
@@ -203,7 +204,7 @@ test('C5 sem JWT redireciona ao login e nao chama export nem delete', async ({ p
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
+  expectExpiredLogin(page, '/app/perfil');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('lgpd-account-section')).toHaveCount(0);
   await expect(page.getByTestId('export-data')).toHaveCount(0);
@@ -222,7 +223,7 @@ test('401 na exportacao volta ao login', async ({ page }) => {
   await page.getByTestId('export-data').click();
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('account-deleted-notice')).toHaveCount(0);
-  await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
+  expectExpiredLogin(page, '/app/perfil');
 });
 
 test('403 OUTDATED na exportacao abre o reaceite', async ({ page }) => {

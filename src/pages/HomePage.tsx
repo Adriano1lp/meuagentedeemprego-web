@@ -26,7 +26,7 @@ import { Skeleton } from '../components/ui/skeleton';
 const STATUS_LOAD_ERROR = 'Não foi possível carregar agora.';
 
 export function HomePage() {
-  const { user, api, isAuthenticated, blocksApp, logout } = useAuth();
+  const { user, api, isAuthenticated, blocksApp, expireSession } = useAuth();
   const greeting = user?.display_name?.trim() || user?.email || 'usuário';
   const canUseProduct = isAuthenticated && !blocksApp;
   const [status, setStatus] = useState<UserStatus | null>(null);
@@ -61,7 +61,7 @@ export function HomePage() {
           return;
         }
         if (cause instanceof ApiError && cause.status === 401) {
-          logout();
+          expireSession();
           return;
         }
         setStatusError(STATUS_LOAD_ERROR);
@@ -71,7 +71,7 @@ export function HomePage() {
         }
       }
     },
-    [api, canUseProduct, logout],
+    [api, canUseProduct, expireSession],
   );
 
   const loadBilling = useCallback(
@@ -95,7 +95,7 @@ export function HomePage() {
           return;
         }
         if (cause instanceof ApiError && cause.status === 401) {
-          logout();
+          expireSession();
           return;
         }
         setBilling(null);
@@ -106,7 +106,7 @@ export function HomePage() {
         }
       }
     },
-    [api, canUseProduct, logout],
+    [api, canUseProduct, expireSession],
   );
 
   const refresh = useCallback(async () => {

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 import {
   mockAuthSuccess,
@@ -141,7 +141,7 @@ test('rotas antigas e /app sem JWT voltam a origem depois do login', async ({
   await mockCurrentUser(page);
 
   await page.goto('/app/historico');
-  await expect(page).toHaveURL(/\/entrar$/);
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   expect(historyHits).toEqual([]);
   await login(page);
@@ -149,12 +149,12 @@ test('rotas antigas e /app sem JWT voltam a origem depois do login', async ({
   await expect(page.getByTestId('history-panel')).toBeVisible();
 
   await page.goto('/historico');
-  await expect(page).toHaveURL(/\/entrar$/);
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   await login(page);
   await expect(page).toHaveURL(/\/app\/historico$/);
 
   await page.goto('/perfil');
-  await expect(page).toHaveURL(/\/entrar$/);
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   await login(page);
   await expect(page).toHaveURL(/\/app\/perfil$/);
   await expect(page.getByTestId('profile-name')).toBeVisible();

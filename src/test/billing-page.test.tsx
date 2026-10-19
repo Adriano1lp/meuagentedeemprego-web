@@ -222,8 +222,7 @@ function renderApp(fetchImpl: Harness['fetchImpl'], initialPath = '/entrar') {
 }
 
 async function login(user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByTestId('login-email');
-  await user.type(screen.getByTestId('login-email'), 'ada@example.com');
+  await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
   await user.type(screen.getByTestId('login-password'), 'senha-segura');
   await user.click(screen.getByTestId('login-submit'));
   await waitFor(() => {
