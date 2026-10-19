@@ -91,6 +91,7 @@ test('sem JWT redireciona ao login e nao chama GET /users/me', async ({ page }) 
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   expectExpiredLogin(page, '/app/perfil');
   expect(new URL(page.url()).pathname).toBe('/entrar');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();

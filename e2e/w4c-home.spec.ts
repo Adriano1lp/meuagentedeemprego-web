@@ -3,6 +3,8 @@ import { expect, test, type Page } from './fixtures';
 import {
   mockAuthSuccess,
   mockBillingMe,
+  mockCurrentUser,
+  mockGapHistory,
   mockLegalRoutes,
   mockedStatus,
   mockUploadCv,
@@ -44,6 +46,10 @@ async function revisitHome(page: Page) {
 test('Free, Essencial, esgotado, CV e overflow', async ({ page }, testInfo) => {
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
+  await mockCurrentUser(page);
+  await mockGapHistory(page, () => ({
+    body: { items: [], limit: 20, offset: 0 },
+  }));
 
   await mockUserStatus(page, {
     ...mockedStatus,

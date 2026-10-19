@@ -204,6 +204,7 @@ test('C5 sem JWT redireciona ao login e nao chama export nem delete', async ({ p
 
   await mockLegalRoutes(page);
   await page.goto('/perfil');
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   expectExpiredLogin(page, '/app/perfil');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('lgpd-account-section')).toHaveCount(0);

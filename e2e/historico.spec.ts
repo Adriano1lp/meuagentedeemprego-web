@@ -175,6 +175,7 @@ test('sessao ausente — sem JWT → redirect login e API NAO chamada com token 
 
   await mockLegalRoutes(page);
   await page.goto('/historico');
+  await expect(page.getByTestId('session-expired-notice')).toBeVisible();
   expectExpiredLogin(page, '/app/historico');
   expect(new URL(page.url()).pathname).toBe('/entrar');
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
