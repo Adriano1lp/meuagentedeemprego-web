@@ -304,7 +304,7 @@ export function AuthProvider({
       markLoggedOut();
       const deleted = reason === LOGOUT_ACCOUNT_DELETED;
       setRedirectHeld(true);
-      void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch).finally(() => {
+      void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch, true).finally(() => {
         clearMemory();
         setSessionExpired(false);
         setAccountDeleted(deleted);

@@ -275,3 +275,73 @@ test('duas abas com a flag reenviam um único logout e não dão refresh', async
   expect(dump).toBe('1');
   expect(dump).not.toMatch(/jwt|eyJ|token/i);
 });
+
+test('storage bloqueado ainda envia o logout e o F5 em /app cai em /entrar', async ({ page }) => {
+  await page.addInitScript(() => {
+    const deny = () => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    };
+    for (const name of ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const) {
+      Object.defineProperty(window.localStorage, name, {
+        configurable: true,
+        value: deny,
+      });
+    }
+  });
+
+  let loggedOut = false;
+  let logoutPosts = 0;
+  let refreshAfterLogout = 0;
+  await page.route('**/auth/refresh', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    if (loggedOut) {
+      refreshAfterLogout += 1;
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Sessao invalida' }),
+      });
+      return;
+    }
+    await fulfillRefresh(route);
+  });
+  await page.route('**/auth/logout', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    logoutPosts += 1;
+    loggedOut = true;
+    expect(route.request().headers()['x-mae-csrf']).toBe('1');
+    await route.fulfill({ status: 204, body: '' });
+  });
+
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockCurrentUser(page);
+  await page.goto('/app');
+  await expect(page.getByTestId('logout-button')).toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      try {
+        localStorage.setItem('mae.loggedOut', '1');
+        return 'open';
+      } catch (error) {
+        return error instanceof DOMException ? error.name : 'other';
+      }
+    }),
+  ).toBe('SecurityError');
+
+  await page.getByTestId('logout-button').click();
+  await expect(page.getByTestId('landing-page')).toBeVisible();
+  expect(logoutPosts).toBe(1);
+
+  await page.goto('/app');
+  await expect(page).toHaveURL(/\/entrar/);
+  expect(new URL(page.url()).pathname).toBe('/entrar');
+  await expect(page.getByTestId('home-shell')).toHaveCount(0);
+  expect(refreshAfterLogout).toBeGreaterThan(0);
+});

@@ -759,4 +759,90 @@ describe('flag mae.loggedOut', () => {
     expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
     expect(screen.queryByTestId('logout-button')).not.toBeInTheDocument();
   });
+
+  it('com localStorage bloqueado o Sair envia o logout e o F5 cai em /entrar', async () => {
+    const storage = window.localStorage;
+    const proto = Storage.prototype;
+    const names = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+    const saved = names.map((name) => ({
+      name,
+      desc: Object.getOwnPropertyDescriptor(proto, name),
+    }));
+    const deny = () => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    };
+    for (const item of saved) {
+      const original = item.desc?.value as ((this: Storage, ...args: unknown[]) => unknown) | undefined;
+      Object.defineProperty(proto, item.name, {
+        configurable: true,
+        writable: true,
+        value(this: Storage, ...args: unknown[]) {
+          if (this === storage) {
+            deny();
+          }
+          return original?.apply(this, args);
+        },
+      });
+    }
+    let logoutPosts = 0;
+    let refreshPosts = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) {
+        refreshPosts += 1;
+        if (logoutPosts > 0) {
+          return json({ detail: 'sem sessao' }, 401);
+        }
+        return json({ access_token: 'jwt-boot', token_type: 'bearer', expires_in: 600 });
+      }
+      if (url.includes('/auth/logout')) {
+        logoutPosts += 1;
+        expect(init?.credentials).toBe('include');
+        expect(new Headers(init?.headers).get('X-MAE-CSRF')).toBe('1');
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes('/auth/me') || /\/users\/me($|\?)/.test(url)) {
+        return json(userBody);
+      }
+      if (url.includes('/users/me/status') || url.includes('/billing/me')) {
+        return json({
+          user_id: 'user-1',
+          has_cv: false,
+          has_embeddings: false,
+          plan: 'free',
+          subscription_status: 'none',
+          used: 0,
+          limit: 5,
+          remaining: 5,
+          period: '2026-10',
+        });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+
+    try {
+      renderAt('/app', fetchImpl);
+      expect(await screen.findByTestId('logout-button')).toBeInTheDocument();
+      const refreshBeforeLogout = refreshPosts;
+      fireEvent.click(screen.getByTestId('logout-button'));
+      expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
+      expect(logoutPosts).toBe(1);
+
+      cleanup();
+      resetReturnToMemory();
+      resetSessionRuntimeForTests();
+      renderAt('/app', fetchImpl);
+      expect(await screen.findByTestId('login-submit')).toBeInTheDocument();
+      expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
+      expect(screen.queryByTestId('home-shell')).not.toBeInTheDocument();
+      expect(refreshPosts).toBeGreaterThan(refreshBeforeLogout);
+      expect(logoutPosts).toBe(1);
+    } finally {
+      for (const item of saved) {
+        if (item.desc) {
+          Object.defineProperty(proto, item.name, item.desc);
+        }
+      }
+    }
+  });
 });

@@ -102,7 +102,11 @@ function publishRetry(at: number): void {
   }
 }
 
-async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<void> {
+async function sendOnce(
+  apiBaseUrl: string,
+  fetchImpl: typeof fetch,
+  force: boolean,
+): Promise<void> {
   const locks =
     typeof navigator !== 'undefined' && navigator.locks != null ? navigator.locks : null;
   if (locks) {
@@ -112,7 +116,7 @@ async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<vo
       if (peerFresh()) {
         return;
       }
-      if (!isLoggedOutFlag()) return;
+      if (!force && !isLoggedOutFlag()) return;
       await requestLogout(apiBaseUrl, fetchImpl);
       publishRetry(Date.now());
     });
@@ -123,7 +127,7 @@ async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<vo
     return;
   }
   await Promise.resolve();
-  if (!isLoggedOutFlag()) return;
+  if (!force && !isLoggedOutFlag()) return;
   await requestLogout(apiBaseUrl, fetchImpl);
   publishRetry(Date.now());
 }
@@ -131,15 +135,20 @@ async function sendOnce(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<vo
 /**
  * Reenvia `POST /auth/logout` (credentials + X-MAE-CSRF) uma vez por aba
  * enquanto a chamada está em curso. O status da resposta não remove a flag.
+ * `force` é o clique em Sair: o POST sai mesmo sem a flag (storage bloqueado).
  */
-export function retryLoggedOut(apiBaseUrl: string, fetchImpl: typeof fetch): Promise<void> {
-  if (!isLoggedOutFlag()) {
+export function retryLoggedOut(
+  apiBaseUrl: string,
+  fetchImpl: typeof fetch,
+  force = false,
+): Promise<void> {
+  if (!force && !isLoggedOutFlag()) {
     return Promise.resolve();
   }
   if (inflight) {
     return inflight;
   }
-  inflight = sendOnce(apiBaseUrl, fetchImpl).finally(() => {
+  inflight = sendOnce(apiBaseUrl, fetchImpl, force).finally(() => {
     inflight = null;
   });
   return inflight;
