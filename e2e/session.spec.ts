@@ -235,7 +235,8 @@ test('logout offline, reload sem refresh e online reenvia o logout', async ({
   await page.getByTestId('login-email').fill('ada@example.com');
   await page.getByTestId('login-password').fill('senha-segura');
   await page.getByTestId('login-submit').click();
-  await expect(page.getByTestId('home-shell')).toBeVisible();
+  await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+  await expect(page).toHaveURL(/\/app\/perfil$/);
   expect(await page.evaluate(() => localStorage.getItem('mae.loggedOut'))).toBeNull();
 });
 

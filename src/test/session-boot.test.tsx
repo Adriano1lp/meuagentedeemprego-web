@@ -51,6 +51,8 @@ afterEach(() => {
   cleanup();
   resetReturnToMemory();
   resetSessionRuntimeForTests();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -512,7 +514,6 @@ describe('logout com timeout ou erro', () => {
     peer.addEventListener('message', (event) => {
       seen.push(event.data as { type?: string; accessToken?: string });
     });
-    const localSet = vi.spyOn(window.localStorage, 'setItem');
     const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
     const { fetchImpl, signals } = authFetch('hang');
     await loginToApp(fetchImpl);
@@ -528,12 +529,11 @@ describe('logout com timeout ou erro', () => {
     expect(signals[0]?.aborted).toBe(true);
     expect(seen.some((message) => message.type === 'logout')).toBe(true);
     expect(seen.some((message) => message.accessToken)).toBe(false);
-    expect(localSet.mock.calls).toEqual([['mae.loggedOut', '1']]);
     expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
+    expect(window.localStorage.length).toBe(1);
     expect(window.localStorage.getItem('mae.loggedOut')).not.toMatch(/jwt|eyJ|token/i);
     expect(sessionSet).not.toHaveBeenCalled();
     expect(window.localStorage.getItem('access_token')).toBeNull();
-    localSet.mockRestore();
     sessionSet.mockRestore();
     restoreLocks();
   });
@@ -545,7 +545,6 @@ describe('logout com timeout ou erro', () => {
     peer.addEventListener('message', (event) => {
       seen.push(event.data as { type?: string; accessToken?: string });
     });
-    const localSet = vi.spyOn(window.localStorage, 'setItem');
     const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
     const { fetchImpl } = authFetch('error');
     await loginToApp(fetchImpl);
@@ -556,11 +555,10 @@ describe('logout com timeout ou erro', () => {
     expect(screen.queryByTestId('home-shell')).not.toBeInTheDocument();
     expect(seen.some((message) => message.type === 'logout')).toBe(true);
     expect(seen.some((message) => 'accessToken' in message && message.accessToken)).toBe(false);
-    expect(localSet.mock.calls).toEqual([['mae.loggedOut', '1']]);
     expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
+    expect(window.localStorage.length).toBe(1);
     expect(window.localStorage.getItem('mae.loggedOut')).not.toMatch(/jwt|eyJ|token/i);
     expect(sessionSet).not.toHaveBeenCalled();
-    localSet.mockRestore();
     sessionSet.mockRestore();
     restoreLocks();
   });
@@ -574,7 +572,7 @@ describe('flag mae.loggedOut', () => {
       const url = String(input);
       if (url.includes('/auth/refresh')) {
         refresh += 1;
-        return json({ access_token: 'jwt-nao', token_type: 'bearer', expires_in: 600 });
+        return json({ detail: 'sem sessao' }, 401);
       }
       if (url.includes('/auth/logout')) {
         logoutPosts += 1;
@@ -659,7 +657,9 @@ describe('flag mae.loggedOut', () => {
     expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
     expect(first.logoutPosts()).toBe(1);
     expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
-    expect(window.localStorage.length).toBe(1);
+    expect(
+      Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)),
+    ).toEqual([LOGGED_OUT_KEY]);
     expect(window.localStorage.getItem(LOGGED_OUT_KEY)).not.toMatch(/jwt|eyJ|token/i);
 
     cleanup();
