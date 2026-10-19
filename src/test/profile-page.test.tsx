@@ -303,7 +303,10 @@ describe('Feature: Perfil leve na web', () => {
     expect(screen.getByTestId('location-pathname').textContent).toBe('/');
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('profile-name')).not.toBeInTheDocument();
-    expectTokenOnlyInMemory();
+    expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
+    expect(window.localStorage.length).toBe(1);
+    expect(window.sessionStorage.length).toBe(0);
+    expect(window.localStorage.getItem('access_token')).toBeNull();
     expect(
       harness.fetchImpl.mock.calls.slice(callsBeforeLogout).some(([input]) =>
         isCurrentUserUrl(String(input)),
@@ -632,7 +635,10 @@ describe('Feature: Perfil leve na web', () => {
     );
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();
-    expectTokenOnlyInMemory();
+    expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
+    expect(window.localStorage.length).toBe(1);
+    expect(window.sessionStorage.length).toBe(0);
+    expect(window.localStorage.getItem('access_token')).toBeNull();
   });
 
   it('exclusao sem deleted true mantem a sessao e mostra erro generico', async () => {

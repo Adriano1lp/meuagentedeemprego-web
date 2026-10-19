@@ -17,7 +17,7 @@ import {
   type FetchLike,
 } from '../api/client';
 import { fromOutdatedCode, type OutdatedDetail } from '../api/outdated';
-import { requestLogout, requestRefresh, type AccessGrant } from '../api/sessionHttp';
+import { requestRefresh, type AccessGrant } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
 import type { User } from '../api/types';
 import { API_BASE_URL } from '../config';
@@ -26,6 +26,14 @@ import {
   isCurrentTermsVersion,
   type LegalDocId,
 } from '../legal/versions';
+import {
+  clearLoggedOutFlag,
+  isLoggedOutFlag,
+  LOGGED_OUT_KEY,
+  LOGGED_OUT_VALUE,
+  markLoggedOut,
+  retryLoggedOut,
+} from './loggedOut';
 import {
   buildExpiredLoginPath,
   ENTER_PATH,
@@ -145,6 +153,9 @@ export function AuthProvider({
 
   const rememberGrant = useCallback(
     (grant: AccessGrant) => {
+      if (isLoggedOutFlag()) {
+        return;
+      }
       tokenStore.set(grant.accessToken);
       setToken(grant.accessToken);
       setSessionExpired(false);
@@ -201,7 +212,13 @@ export function AuthProvider({
   );
 
   const refreshSession = useCallback(async () => {
+    if (isLoggedOutFlag()) {
+      return false;
+    }
     const grant = await getSessionCoordinator().refresh();
+    if (isLoggedOutFlag()) {
+      return false;
+    }
     rememberGrant(grant);
     return true;
   }, [rememberGrant]);
@@ -253,6 +270,7 @@ export function AuthProvider({
       suppressExpire.current = false;
       getSessionCoordinator().reset();
       const response = await api.login({ email, password });
+      clearLoggedOutFlag();
       await applySession(response.access_token, response.user, response.expires_in);
     },
     [api, applySession],
@@ -270,6 +288,7 @@ export function AuthProvider({
       suppressExpire.current = false;
       getSessionCoordinator().reset();
       const response = await api.register(input);
+      clearLoggedOutFlag();
       await applySession(response.access_token, response.user, response.expires_in);
     },
     [api, applySession],
@@ -282,9 +301,10 @@ export function AuthProvider({
       }
       loggingOut.current = true;
       suppressExpire.current = true;
+      markLoggedOut();
       const deleted = reason === LOGOUT_ACCOUNT_DELETED;
       setRedirectHeld(true);
-      void requestLogout(apiBaseUrl, fetchRef.current ?? fetch).finally(() => {
+      void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch).finally(() => {
         clearMemory();
         setSessionExpired(false);
         setAccountDeleted(deleted);
@@ -312,6 +332,9 @@ export function AuthProvider({
 
   useEffect(() => {
     let active = true;
+    if (isLoggedOutFlag()) {
+      void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch);
+    }
     void restoreSessionOnce().then(async (grant) => {
       if (!active) {
         return;
@@ -348,7 +371,7 @@ export function AuthProvider({
     return () => {
       active = false;
     };
-  }, [api, rememberGrant]);
+  }, [api, apiBaseUrl, rememberGrant]);
 
   useEffect(() => {
     return getSessionCoordinator().subscribe((event: SessionEvent) => {
@@ -375,6 +398,34 @@ export function AuthProvider({
   }, [clearMemory, navigate]);
 
   useEffect(() => () => clearRefreshTimer(), [clearRefreshTimer]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      if (!isLoggedOutFlag()) {
+        return;
+      }
+      void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LOGGED_OUT_KEY || event.newValue !== LOGGED_OUT_VALUE) {
+        return;
+      }
+      suppressExpire.current = true;
+      setRedirectHeld(true);
+      clearMemory();
+      setSessionExpired(false);
+      setAccountDeleted(false);
+      getSessionCoordinator().reset();
+      navigate('/', { replace: true });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [clearMemory, navigate]);
 
   useEffect(() => {
     if (location.pathname === '/' || location.pathname === ENTER_PATH) {

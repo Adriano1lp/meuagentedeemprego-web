@@ -139,6 +139,9 @@ describe('rotas publicas e app', () => {
     expect(isSafeAppPath('//evil.example')).toBe(false);
     expect(isSafeAppPath('/app/../../entrar')).toBe(false);
     expect(isSafeAppPath('https://evil.example/app')).toBe(false);
+    expect(isSafeAppPath('/app\n//evil')).toBe(false);
+    expect(isSafeAppPath('/app\t/perfil')).toBe(false);
+    expect(isSafeAppPath('\t//evil')).toBe(false);
   });
 
   it('?next aberto cai em /app e /app/perfil entra', async () => {
@@ -151,6 +154,9 @@ describe('rotas publicas e app', () => {
       { next: '%5Cevil.com', path: '/app' },
       { next: '/@evil.com', path: '/app' },
       { next: 'http:evil', path: '/app' },
+      { next: '/app%0A//evil', path: '/app' },
+      { next: '\t//evil', path: '/app' },
+      { next: encodeURIComponent('/app\n//evil'), path: '/app' },
       { next: '/app/perfil', path: '/app/perfil' },
     ];
     for (const item of cases) {
@@ -166,7 +172,7 @@ describe('rotas publicas e app', () => {
       expect(screen.getByTestId('location-full').textContent).not.toContain('evil');
       expect(screen.getByTestId('location-full').textContent).not.toContain('javascript');
     }
-  }, 60_000);
+  }, 90_000);
 
   it('a landing nao usa o shell e os CTAs preservam a intencao', async () => {
     const fetchImpl = createFetch();

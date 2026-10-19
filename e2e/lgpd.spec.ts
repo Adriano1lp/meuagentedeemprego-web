@@ -189,8 +189,10 @@ test('C4 confirmar DELETE encerra a sessao', async ({ page }) => {
   const storage = await page.evaluate(() => ({
     local: localStorage.length,
     session: sessionStorage.length,
+    flag: localStorage.getItem('mae.loggedOut'),
+    token: localStorage.getItem('access_token'),
   }));
-  expect(storage).toEqual({ local: 0, session: 0 });
+  expect(storage).toEqual({ local: 1, session: 0, flag: '1', token: null });
 });
 
 test('C5 sem JWT redireciona ao login e nao chama export nem delete', async ({ page }) => {
