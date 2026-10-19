@@ -173,7 +173,7 @@ test('C4 confirmar DELETE encerra a sessao', async ({ page }) => {
 
   await expect(page.getByTestId('auth-tab-login')).toBeVisible();
   await expect(page.getByTestId('account-deleted-notice')).toHaveText(
-    'Sua conta foi excluida.',
+    'Sua conta foi excluída.',
   );
   await expect(page).toHaveURL(/http:\/\/127\.0\.0\.1:5173\/entrar$/);
   await expect(page.getByTestId('profile-panel')).toHaveCount(0);

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { CV_UNAVAILABLE, mentionsRawUnavailable } from '../api/cv';
 import { SUBSCRIPTION_REQUIRED } from '../api/quota';
 import { ApiError } from '../api/client';
 import {
@@ -12,7 +13,6 @@ import type { ProcessarResponse, QuotaCode } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { SubscribeEssencialButton } from './SubscribeEssencialButton';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import {
   Card,
@@ -30,6 +30,37 @@ type ProcessarOutcome =
   | { kind: 'blocked'; result: ProcessarResponse }
   | { kind: 'quota'; message: string; code: QuotaCode }
   | { kind: 'error'; message: string };
+
+const PROCESSAR_FAILED = 'Não foi possível analisar a vaga.';
+
+function publicProcessarMessage(message: string, fallback = PROCESSAR_FAILED): string {
+  if (mentionsRawUnavailable(message)) {
+    return CV_UNAVAILABLE;
+  }
+  const lower = message.toLowerCase();
+  if (
+    /https?:\/\//i.test(message) ||
+    /[/\\]/.test(message) ||
+    /\b(post|get|put|patch|delete)\b/i.test(message) ||
+    lower.includes('bearer') ||
+    lower.includes('has_cv') ||
+    lower.includes('endpoint') ||
+    lower.includes('json')
+  ) {
+    return fallback;
+  }
+  const trimmed = message.trim();
+  return trimmed || fallback;
+}
+
+function publicBlockedReason(reason: string | null | undefined): string {
+  const trimmed = reason?.trim() ?? '';
+  const safe = publicProcessarMessage(trimmed);
+  if (!trimmed || safe === PROCESSAR_FAILED) {
+    return '';
+  }
+  return ` (${safe})`;
+}
 
 type ProcessarPanelProps = {
   enabled: boolean;
@@ -99,8 +130,8 @@ export function ProcessarPanel({
         kind: 'error',
         message:
           cause instanceof ApiError
-            ? cause.message
-            : 'Nao foi possivel processar a vaga.',
+            ? publicProcessarMessage(cause.message)
+            : PROCESSAR_FAILED,
       });
     } finally {
       setSubmitting(false);
@@ -114,7 +145,7 @@ export function ProcessarPanel({
     const fileName = fileNameFromPdfUrl(outcome.result.pdf_url);
     if (!fileName) {
       setDownloadState('error');
-      setDownloadError('PDF indisponivel para este resultado.');
+      setDownloadError('PDF indisponível para este resultado.');
       return;
     }
     setDownloading(true);
@@ -124,7 +155,7 @@ export function ProcessarPanel({
       if (!isPdfMagic(bytes)) {
         setDownloadState('error');
         setDownloadError(
-          'O arquivo baixado nao e um PDF valido. O link nao foi oferecido como sucesso.',
+          'O arquivo baixado não é um PDF válido.',
         );
         return;
       }
@@ -134,8 +165,8 @@ export function ProcessarPanel({
       setDownloadState('error');
       setDownloadError(
         cause instanceof ApiError
-          ? cause.message
-          : 'Nao foi possivel baixar o PDF autenticado.',
+          ? publicProcessarMessage(cause.message, 'Não foi possível baixar o PDF.')
+          : 'Não foi possível baixar o PDF.',
       );
     } finally {
       setDownloading(false);
@@ -146,12 +177,11 @@ export function ProcessarPanel({
     outcome.kind === 'success' && canOfferPdfDownload(outcome.result);
 
   return (
-    <Card data-testid="processar-panel" className="mt-6">
+    <Card id="analise" data-testid="processar-panel" className="mt-6 scroll-mt-24">
       <CardHeader>
-        <Badge variant="outline">POST /processar</Badge>
-        <CardTitle>Analise de vaga</CardTitle>
+        <CardTitle>Análise de vaga</CardTitle>
         <CardDescription className="text-foreground">
-          Cole a descricao completa da vaga. A API devolve aderencia, lacunas e,
+          Cole a descrição completa da vaga. Você vê a aderência, as lacunas e,
           quando o match permite, um PDF otimizado.
         </CardDescription>
       </CardHeader>
@@ -171,7 +201,7 @@ export function ProcessarPanel({
             disabled={submitting}
             value={texto}
             onChange={(event) => setTexto(event.target.value)}
-            placeholder="Cole aqui a descricao completa da vaga para enviar ao /processar..."
+            placeholder="Cole aqui a descrição completa da vaga..."
             className="mt-1.5"
           />
           <Button
@@ -193,7 +223,7 @@ export function ProcessarPanel({
             aria-live="polite"
             className="mt-4 text-sm text-muted-foreground"
           >
-            A API esta analisando a vaga e preparando a resposta.
+            A análise está em andamento.
           </p>
         ) : null}
 
@@ -203,7 +233,7 @@ export function ProcessarPanel({
             className="mt-5 rounded-lg border border-border bg-muted/60 p-4"
           >
             <p className="font-display text-base font-semibold">
-              Analise concluida
+              Análise concluída
             </p>
             {typeof outcome.result.match_score === 'number' ? (
               <p data-testid="processar-match" className="mt-2 text-sm">
@@ -226,7 +256,7 @@ export function ProcessarPanel({
                 disabled={downloading}
                 className="mt-4 w-full"
               >
-                {downloading ? 'Baixando PDF...' : 'Baixar PDF autenticado'}
+                {downloading ? 'Baixando PDF...' : 'Baixar PDF'}
               </Button>
             ) : (
               <p data-testid="processar-no-pdf" className="mt-3 text-sm">
@@ -239,7 +269,7 @@ export function ProcessarPanel({
                 role="status"
                 className="mt-3 text-sm"
               >
-                PDF autenticado conferido (%PDF) e baixado.
+                PDF baixado.
               </p>
             ) : null}
             {downloadState === 'error' && downloadError ? (
@@ -261,14 +291,12 @@ export function ProcessarPanel({
             variant="warning"
             className="mt-5"
           >
-            <AlertTitle>PDF nao gerado</AlertTitle>
+            <AlertTitle>PDF não gerado</AlertTitle>
             <AlertDescription className="mt-2">
-              A aderencia ficou abaixo do minimo. O servidor bloqueou a geracao
-              do curriculo otimizado
-              {outcome.result.blocked_reason
-                ? ` (${outcome.result.blocked_reason})`
-                : ''}
-              . Nenhum link de PDF e oferecido.
+              A aderência ficou abaixo do mínimo. O currículo otimizado não foi
+              gerado
+              {publicBlockedReason(outcome.result.blocked_reason)}
+              . Nenhum PDF é oferecido.
             </AlertDescription>
             {outcome.result.texto_resposta ? (
               <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed">
@@ -284,8 +312,8 @@ export function ProcessarPanel({
             <AlertDescription className="mt-2">
               <p>{outcome.message}</p>
               <p className="mt-2">
-                A cota nao e descontada no navegador. Tente de novo so no proximo
-                periodo UTC ou apos uma assinatura no servidor.
+                A cota não é descontada nesta tela. Tente de novo no próximo
+                período ou depois de assinar.
               </p>
             </AlertDescription>
             {outcome.code === SUBSCRIPTION_REQUIRED ? (
@@ -296,7 +324,7 @@ export function ProcessarPanel({
 
         {outcome.kind === 'error' ? (
           <Alert data-testid="processar-error" variant="destructive" className="mt-5">
-            <AlertTitle>Nao foi possivel analisar</AlertTitle>
+            <AlertTitle>Não foi possível analisar</AlertTitle>
             <AlertDescription className="mt-2">{outcome.message}</AlertDescription>
           </Alert>
         ) : null}

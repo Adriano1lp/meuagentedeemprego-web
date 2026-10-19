@@ -79,7 +79,7 @@ test('Free vê o CTA, o POST não leva preço e o Checkout é stripe.com', async
 
   await page.goto('/entrar');
   await login(page);
-  await expect(page.getByTestId('cv-ready')).toBeVisible();
+  await expect(page.getByTestId('processar-panel')).toBeVisible();
   await page
     .getByTestId('processar-texto')
     .fill('Vaga para desenvolvedor Python com requisitos e responsabilidades.');
@@ -139,7 +139,11 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(mockedBillingEssencial),
+      body: JSON.stringify({
+        ...mockedBillingEssencial,
+        used: 5,
+        remaining: 25,
+      }),
     });
   });
 
@@ -255,12 +259,14 @@ test('cancelamento deixa o Free com aviso neutro', async ({ page }, testInfo) =>
     'Pagamento cancelado. Você continua no plano Free.',
   );
   await expect(page.getByTestId('status-plan')).toHaveText('Free');
-  await expect(page.getByTestId('status-quota')).toContainText('1 de 5');
+  await expect(page.getByTestId('status-quota')).toContainText('5 de 5');
+  await expect(page.getByTestId('billing-confirming')).toHaveCount(0);
+  await expect(page.getByTestId('billing-confirmed')).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath('billing-cancel.png'),
     fullPage: true,
   });
-  expect(billingHits).toEqual([]);
+  expect(billingHits.length).toBeGreaterThan(0);
 });
 
 test('Essencial não vê o CTA no perfil nem no bloqueio', async ({ page }) => {
@@ -294,7 +300,7 @@ test('Essencial não vê o CTA no perfil nem no bloqueio', async ({ page }) => {
   await expect(page.getByTestId('subscribe-essencial')).toHaveCount(0);
 
   await page.getByTestId('nav-home').click();
-  await expect(page.getByTestId('cv-ready')).toBeVisible();
+  await expect(page.getByTestId('processar-panel')).toBeVisible();
   await page
     .getByTestId('processar-texto')
     .fill('Vaga para desenvolvedor Python com requisitos e responsabilidades.');

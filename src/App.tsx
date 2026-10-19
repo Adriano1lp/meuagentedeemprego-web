@@ -14,6 +14,7 @@ import {
 import { BillingReturnProvider } from './billing/BillingReturn';
 import { ConsentGate } from './components/ConsentGate';
 import { AuthPage } from './pages/AuthPage';
+import { CurriculoPage } from './pages/CurriculoPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HomePage } from './pages/HomePage';
 import { LandingPage } from './pages/LandingPage';
@@ -78,6 +79,7 @@ export function App() {
           <Route path={APP_HOME} element={<RequireAuth />}>
             <Route index element={<HomePage />} />
             <Route path="historico" element={<HistoryPage />} />
+            <Route path="curriculo" element={<CurriculoPage />} />
             <Route path="perfil" element={<ProfilePage />} />
             <Route path="*" element={<Navigate to={APP_HOME} replace />} />
           </Route>

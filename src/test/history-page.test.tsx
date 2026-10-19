@@ -155,7 +155,7 @@ describe('Feature: Historico de analises na web', () => {
     );
     expect(screen.getByTestId('history-item-company')).toHaveTextContent('Acme');
     expect(screen.getByTestId('history-item-score')).toHaveTextContent(
-      'Aderencia: 88/100',
+      'Aderência: 88/100',
     );
     expect(screen.getByTestId('history-item-date')).toHaveAttribute(
       'datetime',
@@ -249,7 +249,7 @@ describe('Feature: Historico de analises na web', () => {
     await user2.click(screen.getByTestId('nav-historico'));
     await waitFor(() => {
       expect(screen.getByTestId('history-error')).toHaveTextContent(
-        'Nao foi possivel carregar o historico.',
+        'Não foi possível carregar o histórico.',
       );
     });
     expect(screen.queryByText('Vaga de outra pessoa')).not.toBeInTheDocument();

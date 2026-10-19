@@ -96,6 +96,15 @@ export async function mockAuthSuccess(page: Page): Promise<void> {
   });
 
   await mockUserStatus(page, mockedStatus);
+  await mockBillingMe(page, {
+    plan: mockedStatus.plan,
+    subscription_status: mockedStatus.subscription_status,
+    used: mockedStatus.used,
+    limit: mockedStatus.limit,
+    remaining: mockedStatus.remaining,
+    period: mockedStatus.period,
+    period_end: '2026-11-01T00:00:00Z',
+  });
 }
 
 export const mockedCurrentUser = {

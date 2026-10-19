@@ -42,7 +42,7 @@ test('lista com itens — autenticado + 200 com itens → lista das minhas anali
   );
   await expect(page.getByTestId('history-item-company')).toContainText('Acme');
   await expect(page.getByTestId('history-item-score')).toHaveText(
-    'Aderencia: 88/100',
+    'Aderência: 88/100',
   );
   await expect(page.getByTestId('history-item-date')).toHaveAttribute(
     'datetime',
@@ -93,7 +93,7 @@ test('nao autorizado — 401/403 → erro legivel, zero dados de outro user', as
   await page.getByTestId('nav-historico').click();
 
   await expect(page.getByTestId('history-error')).toContainText(
-    'Sessao expirada. Entre novamente para ver o historico.',
+    'Sessão expirada. Entre novamente para ver o histórico.',
   );
   await expect(page.getByText('Vaga de outra pessoa')).toHaveCount(0);
   await expect(page.getByTestId('history-list')).toHaveCount(0);
@@ -101,7 +101,7 @@ test('nao autorizado — 401/403 → erro legivel, zero dados de outro user', as
   status = 403;
   await page.getByTestId('history-retry').click();
   await expect(page.getByTestId('history-error')).toContainText(
-    'Nao foi possivel carregar o historico.',
+    'Não foi possível carregar o histórico.',
   );
   await expect(page.getByText('Vaga de outra pessoa')).toHaveCount(0);
   await expect(page.getByText('Outra Corp')).toHaveCount(0);
@@ -131,7 +131,7 @@ test('falha de rede/servidor — 5xx/rede → erro sanitizado (sem URL/path inte
 
   const error = page.getByTestId('history-error');
   await expect(error).toContainText(
-    'Nao foi possivel carregar o historico. Tente novamente.',
+    'Não foi possível carregar o histórico. Tente novamente.',
   );
   await expect(error).not.toContainText('/users/me/gap-history');
   await expect(error).not.toContainText('onrender.com');
@@ -145,7 +145,7 @@ test('falha de rede/servidor — 5xx/rede → erro sanitizado (sem URL/path inte
   });
   await page.getByTestId('history-retry').click();
   await expect(page.getByTestId('history-error')).toContainText(
-    'Nao foi possivel carregar o historico. Tente novamente.',
+    'Não foi possível carregar o histórico. Tente novamente.',
   );
   await expect(page.getByTestId('history-error')).not.toContainText(
     'onrender.com',

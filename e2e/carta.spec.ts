@@ -135,7 +135,7 @@ test('C4 500 mantem o historico e tentar de novo gera a carta', async ({ page })
   await page.getByTestId('nav-historico').click();
   await page.getByTestId('cover-letter-generate').click();
   await expect(page.getByTestId('cover-letter-error')).toContainText(
-    'Nao foi possivel gerar a carta.',
+    'Não foi possível gerar a carta.',
   );
   await expect(page.getByTestId('cover-letter-error')).not.toContainText('/users/me');
   await expect(page.getByTestId('history-item-title')).toHaveText(

@@ -54,7 +54,7 @@ export default defineConfig({
         name: 'Meu Agente de Emprego',
         short_name: 'MAE',
         description:
-          'Analise de vaga com o seu curriculo, historico e carta de apresentacao.',
+          'Análise de vaga com o seu currículo, histórico e carta de apresentação.',
         lang: 'pt-BR',
         theme_color: '#1c2433',
         background_color: '#f7f5f1',

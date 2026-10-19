@@ -80,10 +80,13 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
       return new Response(
         JSON.stringify({
           user_id: 'user-1',
+          embedding_run_id: 'run-9',
           chunks: 4,
-          vector_store: 'mongodb',
           processed_at: '2026-09-14T12:01:00+00:00',
           embedding_model: 'text-embedding-3-small',
+          chroma_dir: '/data/chroma',
+          vector_store: 'mongodb',
+          cv_file: '/data/cv.txt',
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
@@ -99,6 +102,10 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
     expect(result.chunks).toBe(4);
     expect(result.processed_at).toBe('2026-09-14T12:01:00+00:00');
     expect(result.embedding_model).toBe('text-embedding-3-small');
+    expect(result).not.toHaveProperty('chroma_dir');
+    expect(result).not.toHaveProperty('vector_store');
+    expect(result).not.toHaveProperty('cv_file');
+    expect(JSON.stringify(result)).not.toMatch(/chroma_dir|vector_store|cv_file|\/data\//);
   });
 
   it('erro de upload vira ApiError acionavel', async () => {
@@ -121,7 +128,8 @@ describe('api.uploadCv / rebuildEmbeddings', () => {
       api.uploadCv(new File(['%PDF-1.4'], 'cv.pdf', { type: 'application/pdf' })),
     ).rejects.toMatchObject({
       status: 400,
-      message: expect.stringContaining('Formato de arquivo invalido'),
+      body: null,
+      message: 'Não conseguimos ler esse arquivo. Envie um PDF ou TXT com texto.',
     });
   });
 });

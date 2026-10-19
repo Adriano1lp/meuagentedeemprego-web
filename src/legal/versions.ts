@@ -15,18 +15,14 @@ export function currentVersionFor(doc: LegalDocId): string {
 }
 
 export function legalTitle(doc: LegalDocId): string {
-  return doc === LegalDoc.terms ? 'Termos de uso' : 'Politica de privacidade';
+  return doc === LegalDoc.terms ? 'Termos de uso' : 'Política de privacidade';
 }
 
 export function legalCheckboxLabel(doc: LegalDocId): string {
   const version = currentVersionFor(doc);
   return doc === LegalDoc.terms
-    ? `Li e aceito os Termos de uso (v${version}). Obrigatorio apos ler o texto acima.`
-    : `Li e aceito a Politica de privacidade (v${version}). Obrigatorio apos ler o texto acima.`;
-}
-
-export function legalEndpoint(doc: LegalDocId): string {
-  return `GET /legal/${doc}?version=${currentVersionFor(doc)}`;
+    ? `Li e aceito os Termos de uso (v${version}). Obrigatório após ler o texto acima.`
+    : `Li e aceito a Política de privacidade (v${version}). Obrigatório após ler o texto acima.`;
 }
 
 export function isCurrentTermsVersion(version: string | null | undefined): boolean {

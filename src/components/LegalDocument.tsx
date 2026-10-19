@@ -4,7 +4,6 @@ import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import {
   legalCheckboxLabel,
-  legalEndpoint,
   legalTitle,
   type LegalDocId,
 } from '../legal/versions';
@@ -47,7 +46,7 @@ export function LegalDocument({
       const message =
         cause instanceof ApiError
           ? cause.message
-          : `Nao foi possivel carregar ${legalTitle(doc)}`;
+          : `Não foi possível carregar ${legalTitle(doc)}`;
       setMarkdown('');
       setError(message);
       onLoadedRef.current(false);
@@ -67,12 +66,6 @@ export function LegalDocument({
   return (
     <Card data-testid={`${doc}DocumentPanel`} className="mb-3 p-3.5">
       <h3 className="font-display text-base font-semibold">{legalTitle(doc)}</h3>
-      <p
-        data-testid={`${doc}DocumentEndpoint`}
-        className="mt-1 break-all text-xs font-medium text-muted-foreground"
-      >
-        {legalEndpoint(doc)}
-      </p>
       <div className="mt-2.5 max-h-[180px] min-h-24 overflow-auto rounded-lg border border-border bg-muted">
         {loading ? (
           <p className="p-4 text-sm text-muted-foreground" role="status" aria-live="polite">
@@ -81,8 +74,8 @@ export function LegalDocument({
         ) : error ? (
           <div className="p-3">
             <p className="text-sm">
-              Nao foi possivel carregar o documento. Sem o texto vigente nao e
-              possivel aceitar.
+              Não foi possível carregar o documento. Sem o texto vigente não é
+              possível aceitar.
             </p>
             <p className="mt-2 break-words text-xs text-muted-foreground">{error}</p>
             <Button

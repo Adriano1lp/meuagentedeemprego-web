@@ -13,17 +13,17 @@ export const DEFAULT_GAP_HISTORY_OFFSET = 0;
 export const MAX_GAP_HISTORY_LIMIT = 100;
 
 export const HISTORY_LOGIN_REQUIRED =
-  'Entre na sua conta para ver o historico.';
+  'Entre na sua conta para ver o histórico.';
 export const HISTORY_SESSION_EXPIRED =
-  'Sessao expirada. Entre novamente para ver o historico.';
+  'Sessão expirada. Entre novamente para ver o histórico.';
 export const HISTORY_LOAD_FAILED =
-  'Nao foi possivel carregar o historico. Tente novamente.';
+  'Não foi possível carregar o histórico. Tente novamente.';
 export const HISTORY_CV_DOWNLOAD_FAILED =
-  'Nao foi possivel baixar o CV desta analise. Tente novamente.';
+  'Não foi possível baixar o CV desta análise. Tente novamente.';
 export const HISTORY_PDF_DOWNLOAD_FAILED =
-  'Nao foi possivel baixar o PDF desta analise. Tente novamente.';
+  'Não foi possível baixar o PDF desta análise. Tente novamente.';
 export const HISTORY_DOWNLOAD_INVALID =
-  'O arquivo recebido nao e um PDF valido.';
+  'O arquivo recebido não é um PDF válido.';
 
 export type GapHistoryQuery = {
   limit?: number;

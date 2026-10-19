@@ -77,7 +77,7 @@ describe('validateSignup', () => {
         privacyAccepted: true,
       }),
     ).toBe(
-      'Aceite os Termos de uso e a Politica de privacidade para criar a conta.',
+      'Aceite os Termos de uso e a Política de privacidade para criar a conta.',
     );
   });
 });

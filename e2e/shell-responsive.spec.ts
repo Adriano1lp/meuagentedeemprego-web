@@ -24,7 +24,7 @@ function isMobile(page: Page) {
 
 async function expectShell(
   page: Page,
-  active: 'Inicio' | 'Historico' | 'Perfil',
+  active: 'Início' | 'Histórico' | 'Perfil',
 ) {
   const sidebar = page.getByTestId('app-sidebar');
   const bottom = page.getByTestId('app-bottom-nav');
@@ -122,18 +122,18 @@ for (const width of widths) {
 
     await login(page);
     await expect(page).toHaveURL(/\/app$/);
-    await expectShell(page, 'Inicio');
+    await expectShell(page, 'Início');
     await expectNoHorizontalScroll(page);
     await page.screenshot({
       path: testInfo.outputPath(`inicio-${width}.png`),
     });
 
     const historico = isMobile(page)
-      ? page.getByTestId('app-bottom-nav').getByRole('link', { name: 'Historico' })
+      ? page.getByTestId('app-bottom-nav').getByRole('link', { name: 'Histórico' })
       : page.getByTestId('nav-historico');
     await historico.click();
     await expect(page.getByTestId('history-panel')).toBeVisible();
-    await expectShell(page, 'Historico');
+    await expectShell(page, 'Histórico');
     await expectNoHorizontalScroll(page);
     await page.screenshot({
       path: testInfo.outputPath(`historico-${width}.png`),
@@ -155,7 +155,7 @@ for (const width of widths) {
 test('sidebar ocupa a viewport em 1280px na pagina curta e depois da rolagem', async ({
   page,
 }, testInfo) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setViewportSize({ width: 1280, height: 640 });
   await mockLegalRoutes(page);
   await mockAuthSuccess(page);
   await mockCurrentUser(page);
@@ -185,6 +185,7 @@ test('sidebar ocupa a viewport em 1280px na pagina curta e depois da rolagem', a
     path: testInfo.outputPath('sidebar-rolada-1280.png'),
   });
 
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.getByTestId('nav-historico').click();
   await expect(page.getByTestId('history-empty')).toBeVisible();
   const fits = await page.evaluate(

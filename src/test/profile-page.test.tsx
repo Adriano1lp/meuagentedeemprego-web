@@ -276,7 +276,7 @@ describe('Feature: Perfil leve na web', () => {
     await user.click(await screen.findByTestId('nav-perfil'));
     await waitFor(() => {
       expect(screen.getByTestId('profile-empty')).toHaveTextContent(
-        'A conta nao trouxe nome, email ou plano.',
+        'A conta não trouxe nome, e-mail ou plano.',
       );
     });
     expect(screen.queryByTestId('profile-name')).not.toBeInTheDocument();
@@ -623,7 +623,7 @@ describe('Feature: Perfil leve na web', () => {
     ]);
     expect(screen.getByTestId('location-pathname')).toHaveTextContent('/entrar');
     expect(screen.getByTestId('account-deleted-notice')).toHaveTextContent(
-      'Sua conta foi excluida.',
+      'Sua conta foi excluída.',
     );
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('delete-account-dialog')).not.toBeInTheDocument();

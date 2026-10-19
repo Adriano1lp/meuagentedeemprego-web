@@ -54,6 +54,7 @@ type Harness = {
 
 function createHarness(options: {
   status?: unknown | (() => unknown);
+  billing?: unknown | (() => unknown);
   processar?: (texto: string) => Response;
   file?: () => Response;
   me?: () => Response;
@@ -73,6 +74,25 @@ function createHarness(options: {
     }
     if (url.includes('/auth/me')) {
       return options.me?.() ?? jsonResponse(userBody);
+    }
+    if (url.includes('/billing/me')) {
+      if (options.billing) {
+        const payload =
+          typeof options.billing === 'function' ? options.billing() : options.billing;
+        return jsonResponse(payload);
+      }
+      const payload =
+        typeof options.status === 'function' ? options.status() : options.status;
+      const body = (payload ?? statusBody) as Record<string, unknown>;
+      return jsonResponse({
+        plan: body.plan,
+        subscription_status: body.subscription_status,
+        used: body.used,
+        limit: body.limit,
+        remaining: body.remaining,
+        period: body.period,
+        period_end: body.period_end,
+      });
     }
     if (url.includes('/users/me/status')) {
       const payload =
@@ -119,7 +139,7 @@ async function login(user: ReturnType<typeof userEvent.setup>) {
     expect(screen.getByTestId('home-shell')).toBeInTheDocument();
   });
   await waitFor(() => {
-    expect(screen.getByTestId('cv-ready')).toBeInTheDocument();
+    expect(screen.getByTestId('processar-panel')).toBeInTheDocument();
   });
 }
 
@@ -139,14 +159,22 @@ describe('HomePage processar + cotas', () => {
     vi.restoreAllMocks();
   });
 
-  it('1. UI de status reflete so GET /users/me/status', async () => {
+  it('1. UI de cota reflete GET /billing/me sem calcular remaining', async () => {
     const harness = createHarness({
       status: {
         ...statusBody,
-        used: 2,
-        remaining: 3,
+        used: 9,
+        remaining: 1,
+        plan: 'free',
+        limit: 5,
+      },
+      billing: {
         plan: 'essencial',
+        used: 2,
         limit: 30,
+        remaining: 28,
+        period: '2026-10',
+        period_end: '2026-11-01T00:00:00Z',
       },
     });
     const user = userEvent.setup();
@@ -157,15 +185,18 @@ describe('HomePage processar + cotas', () => {
       expect(screen.getByTestId('status-plan')).toHaveTextContent('Essencial');
     });
     expect(screen.getByTestId('status-quota')).toHaveTextContent(
-      '2 de 30 analises usadas',
+      '2 de 30 análises usadas',
     );
-    expect(screen.getByTestId('status-quota')).toHaveTextContent('3 restantes');
-    expect(screen.getByTestId('status-period')).toHaveTextContent('2026-09');
+    expect(screen.getByTestId('status-quota')).not.toHaveTextContent('28');
+    expect(screen.getByTestId('quota-reset')).toHaveTextContent(
+      'Sua cota reinicia em 1º de novembro',
+    );
+    expect(screen.queryByText(/restantes/)).not.toBeInTheDocument();
     expect(
       harness.fetchImpl.mock.calls.some(([input]) =>
         String(input).includes('/billing/me'),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(window.localStorage.length).toBe(0);
   });
 
@@ -184,7 +215,7 @@ describe('HomePage processar + cotas', () => {
     await login(user);
     await waitFor(() => {
       expect(screen.getByTestId('status-quota')).toHaveTextContent(
-        '1 de 5 analises usadas',
+        '1 de 5 análises usadas',
       );
     });
 
@@ -210,7 +241,7 @@ describe('HomePage processar + cotas', () => {
     );
     await waitFor(() => {
       expect(screen.getByTestId('status-quota')).toHaveTextContent(
-        '2 de 5 analises usadas',
+        '2 de 5 análises usadas',
       );
     });
     expect(harness.statusPayloads.length).toBeGreaterThan(1);
@@ -270,7 +301,7 @@ describe('HomePage processar + cotas', () => {
     await login(user);
     await waitFor(() => {
       expect(screen.getByTestId('status-quota')).toHaveTextContent(
-        '1 de 5 analises usadas',
+        '1 de 5 análises usadas',
       );
     });
 
@@ -287,7 +318,7 @@ describe('HomePage processar + cotas', () => {
     });
     expect(screen.queryByTestId('processar-success')).not.toBeInTheDocument();
     expect(screen.getByTestId('status-quota')).toHaveTextContent(
-      '1 de 5 analises usadas',
+      '1 de 5 análises usadas',
     );
     expect(harness.processarCalls).toHaveLength(1);
     expect(window.localStorage.length).toBe(0);
@@ -316,13 +347,16 @@ describe('HomePage processar + cotas', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('processar-error')).toHaveTextContent(
-        'Embeddings do usuario nao encontrados',
+        'Não foi possível analisar a vaga.',
+      );
+      expect(screen.getByTestId('processar-error').textContent).not.toMatch(
+        /\/users\/|POST |has_cv|Bearer/,
       );
     });
     expect(screen.queryByTestId('processar-success')).not.toBeInTheDocument();
     expect(screen.queryByTestId('download-pdf')).not.toBeInTheDocument();
     expect(screen.getByTestId('status-quota')).toHaveTextContent(
-      '1 de 5 analises usadas',
+      '1 de 5 análises usadas',
     );
   });
 

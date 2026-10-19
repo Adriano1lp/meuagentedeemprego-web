@@ -74,7 +74,7 @@ test('signup envia 4 campos vigentes e login com consent vigente', async ({
   await page.getByTestId('login-email').fill('ada@example.com');
   await page.getByTestId('login-password').fill('senha-segura');
   await page.getByTestId('login-submit').click();
-  await expect(page.getByTestId('home-shell')).toContainText('Voce esta logado');
+  await expect(page.getByTestId('home-shell')).toContainText('Você está logado');
 });
 
 test('403 OUTDATED bloqueia o app e checkboxes nao vem pre-marcados', async ({

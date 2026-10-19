@@ -206,7 +206,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           aria-live="polite"
           className="mt-3 text-sm outline-none"
         >
-          Gerando a carta de apresentacao...
+          Gerando a carta de apresentação...
         </p>
       ) : null}
 
@@ -219,7 +219,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           className="mt-4 rounded-lg border border-border bg-muted p-4 outline-none"
         >
           <h4 id={titleId} className="font-display text-lg font-semibold break-words">
-            Carta de apresentacao
+            Carta de apresentação
             {company ? ` para ${company}` : ''}
           </h4>
           <pre
@@ -288,7 +288,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           variant="destructive"
           className="mt-4 outline-none"
         >
-          <AlertTitle>Nao foi possivel gerar a carta</AlertTitle>
+          <AlertTitle>Não foi possível gerar a carta</AlertTitle>
           <AlertDescription className="mt-2">{phase.message}</AlertDescription>
           <Button
             type="button"

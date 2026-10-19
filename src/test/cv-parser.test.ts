@@ -28,11 +28,37 @@ describe('parseUploadCvResponse', () => {
       content_type: 'application/pdf',
       bytes_received: 2048,
       updated_at: '2026-09-14T12:00:00+00:00',
+      has_cv: undefined,
+      has_embeddings: undefined,
+      ready_for_analysis: undefined,
+      reason: undefined,
+    });
+    expect(parsed).not.toHaveProperty('cv_file');
+    expect(parsed).not.toHaveProperty('original_file');
+    expect(parsed).not.toHaveProperty('object_key');
+    expect(JSON.stringify(parsed)).not.toMatch(/cv_file|original_file|object_key|\/data\//);
+  });
+
+  it('le ready_for_analysis e descarta caminhos de storage', () => {
+    const parsed = parseUploadCvResponse({
+      filename: 'cv.pdf',
+      updated_at: '2026-11-01T00:00:00Z',
+      has_cv: true,
+      has_embeddings: false,
+      ready_for_analysis: false,
+      reason: 'Embeddings indisponiveis',
       cv_file: '/data/cv.txt',
       original_file: '/data/cv_original.pdf',
       object_key: 'users/user-1/documents/cv_original.pdf',
-      extracted_text_object_key: 'users/user-1/documents/cv.txt',
     });
+    expect(parsed.ready_for_analysis).toBe(false);
+    expect(parsed.has_cv).toBe(true);
+    expect(parsed.has_embeddings).toBe(false);
+    expect(parsed.reason).toBe('Embeddings indisponiveis');
+    expect(Object.keys(parsed)).not.toEqual(
+      expect.arrayContaining(['cv_file', 'original_file', 'object_key']),
+    );
+    expect(JSON.stringify(parsed)).not.toMatch(/cv_file|original_file|object_key|\/data\//);
   });
 
   it('rejeita payload que nao e objeto', () => {
@@ -57,8 +83,11 @@ describe('parseRebuildEmbeddingsResponse', () => {
     expect(parsed.chunks).toBe(12);
     expect(parsed.processed_at).toBe('2026-09-14T12:01:00+00:00');
     expect(parsed.embedding_model).toBe('text-embedding-3-small');
-    expect(parsed.vector_store).toBe('mongodb');
     expect(parsed.embedding_run_id).toBe('run-9');
+    expect(parsed).not.toHaveProperty('chroma_dir');
+    expect(parsed).not.toHaveProperty('vector_store');
+    expect(parsed).not.toHaveProperty('cv_file');
+    expect(JSON.stringify(parsed)).not.toMatch(/chroma_dir|vector_store|cv_file|\/data\//);
   });
 
   it('rejeita payload que nao e objeto', () => {
