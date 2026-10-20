@@ -13,6 +13,7 @@ import {
   FOLLOWER_GRANT_WAIT_MS,
   resetSessionRuntimeForTests,
   SESSION_CHANNEL_NAME,
+  SESSION_REFRESH_MARK_KEY,
 } from '../auth/sessionRefresh';
 import { resetReturnToMemory } from '../auth/returnTo';
 
@@ -680,6 +681,20 @@ describe('logout com timeout ou erro', () => {
     expect(sessionSet).not.toHaveBeenCalled();
     sessionSet.mockRestore();
     restoreLocks();
+  });
+
+  it('login e logout apagam a marca de refresh de outra aba', async () => {
+    const foreign = JSON.stringify({ tabId: 'outra-aba', startedAt: Date.now() });
+    window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, foreign);
+    const { fetchImpl } = authFetch('error');
+    await loginToApp(fetchImpl);
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
+
+    window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, foreign);
+    fireEvent.click(screen.getByTestId('logout-button'));
+    expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
+    expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
   });
 });
 

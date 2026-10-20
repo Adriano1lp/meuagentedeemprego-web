@@ -375,29 +375,48 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   function readRefreshMark(): RefreshMark | null {
+    let raw: string | null = null;
     try {
-      const raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
-      if (!raw) {
-        return null;
-      }
-      const data = JSON.parse(raw) as {
-        tabId?: unknown;
-        startedAt?: unknown;
-        at?: unknown;
-      } | null;
-      if (!data || typeof data !== 'object') {
-        return null;
-      }
-      if (typeof data.tabId === 'string' && typeof data.startedAt === 'number') {
-        return { tabId: data.tabId, startedAt: data.startedAt };
-      }
-      if (typeof data.at === 'number') {
-        return { at: data.at };
-      }
-      return null;
+      raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
     } catch {
       return null;
     }
+    if (!raw) {
+      return null;
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      removeRefreshMark();
+      return null;
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      removeRefreshMark();
+      return null;
+    }
+    const record = data as Record<string, unknown>;
+    const timeOk = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value) && value <= now() + 1_000;
+    if (typeof record.tabId === 'string' && 'startedAt' in record) {
+      if (!timeOk(record.startedAt)) {
+        removeRefreshMark();
+        return null;
+      }
+      return { tabId: record.tabId, startedAt: record.startedAt };
+    }
+    if ('at' in record) {
+      if (!timeOk(record.at)) {
+        removeRefreshMark();
+        return null;
+      }
+      return { at: record.at };
+    }
+    if ('startedAt' in record) {
+      removeRefreshMark();
+      return null;
+    }
+    return null;
   }
 
   function writeRefreshMark(mark: RefreshMark): void {
@@ -411,11 +430,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   function removeRefreshMark(): void {
-    try {
-      window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
-    } catch {
-      // Sem storage, não há marca para apagar.
-    }
+    clearSessionRefreshMark();
   }
 
   function clearOwnRefreshingMark(): void {
@@ -936,6 +951,15 @@ export function restoreSessionOnce(): Promise<AccessGrant | null> {
       .catch(() => null);
   }
   return restoreFlight;
+}
+
+/** Some a marca de qualquer aba. Login e logout não deixam data futura travar o refresh. */
+export function clearSessionRefreshMark(): void {
+  try {
+    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+  } catch {
+    // Sem storage, não há marca para apagar.
+  }
 }
 
 export function resetSessionRuntimeForTests(): void {

@@ -41,6 +41,7 @@ import {
   returnPathFromLocation,
 } from './returnTo';
 import {
+  clearSessionRefreshMark,
   getSessionCoordinator,
   restoreSessionOnce,
   setRefreshImplementation,
@@ -286,6 +287,7 @@ export function AuthProvider({
       setAccountDeleted(false);
       suppressExpire.current = false;
       getSessionCoordinator().reset();
+      clearSessionRefreshMark();
       const response = await api.login({ email, password });
       clearLoggedOutFlag();
       await applySession(response.access_token, response.user, response.expires_in);
@@ -319,6 +321,7 @@ export function AuthProvider({
       loggingOut.current = true;
       suppressExpire.current = true;
       markLoggedOut();
+      clearSessionRefreshMark();
       const deleted = reason === LOGOUT_ACCOUNT_DELETED;
       setRedirectHeld(true);
       void retryLoggedOut(apiBaseUrl, fetchRef.current ?? fetch, true).finally(() => {

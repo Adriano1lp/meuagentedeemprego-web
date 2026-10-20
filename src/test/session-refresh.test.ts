@@ -503,6 +503,68 @@ describe('single-flight do refresh', () => {
     survivor.reset();
   });
 
+  it('com locks, marca no futuro não trava o refresh e a sessão fica', async () => {
+    const locks = sharedLocks();
+    const future = Date.now() + 1e9;
+    const shapes = [{ tabId: 'outra', startedAt: future }, { at: future }];
+
+    for (const stale of shapes) {
+      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, JSON.stringify(stale));
+      let posts = 0;
+      const coordinator = createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => null,
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          const during = JSON.parse(
+            window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}',
+          ) as { at?: number; startedAt?: number };
+          expect(during.startedAt).not.toBe(future);
+          expect(during.at).not.toBe(future);
+          return { accessToken: 'jwt-futuro', expiresIn: 90 };
+        },
+      });
+
+      const grant = await coordinator.refresh();
+      expect(posts).toBe(1);
+      expect(grant.accessToken).toBe('jwt-futuro');
+      const stored = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
+        at?: number;
+      };
+      expect(stored.at).toBeLessThanOrEqual(Date.now() + 1_000);
+      coordinator.reset();
+    }
+  });
+
+  it('com locks, JSON malformado ou valor não numérico na marca é ignorado', async () => {
+    const locks = sharedLocks();
+    const raws = ['{', JSON.stringify({ at: 'amanha' }), JSON.stringify({ startedAt: 'amanha' })];
+
+    for (const raw of raws) {
+      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, raw);
+      let posts = 0;
+      const coordinator = createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => null,
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          const during = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '';
+          expect(during).not.toBe(raw);
+          expect(during).not.toMatch(/amanha/);
+          return { accessToken: 'jwt-marca-ruim', expiresIn: 90 };
+        },
+      });
+
+      const grant = await coordinator.refresh();
+      expect(posts).toBe(1);
+      expect(grant.accessToken).toBe('jwt-marca-ruim');
+      expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).not.toBe(raw);
+      coordinator.reset();
+    }
+  });
+
   it('com locks e storage bloqueado, o canal sozinho continua com um POST', async () => {
     const bus = createBus();
     const locks = sharedLocks();
