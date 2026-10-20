@@ -21,6 +21,7 @@ import {
   retryLoggedOut,
 } from '../auth/loggedOut';
 import {
+  CLAIM_COLLISION_MS,
   CLAIM_CONFIRM_MS,
   createSessionCoordinator,
   FOLLOWER_GRANT_WAIT_MS,
@@ -816,6 +817,45 @@ describe('eleição sem navigator.locks', () => {
         expect(tokens).toEqual([`jwt-rodada-${round}`, `jwt-rodada-${round}`]);
       }
     }
+  });
+
+  it('uma aba que abre depois reaproveita o grant e não faz outro POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    let posts = 0;
+    let revoked = false;
+    const postRefresh = async () => {
+      if (posts > 0) {
+        revoked = true;
+        throw new SessionExpiredError(true);
+      }
+      posts += 1;
+      return { accessToken: 'jwt-tarde', expiresIn: 90 };
+    };
+    const first = createSessionCoordinator({
+      locks: null,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh,
+    });
+    first.subscribe(() => {});
+    const pending = first.refresh();
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 20);
+    const grant = await pending;
+    expect(grant.accessToken).toBe('jwt-tarde');
+    expect(posts).toBe(1);
+
+    const second = createSessionCoordinator({
+      locks: null,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh,
+    });
+    second.subscribe(() => {});
+    const shared = await second.refresh();
+    expect(shared.accessToken).toBe('jwt-tarde');
+    expect(posts).toBe(1);
+    expect(revoked).toBe(false);
   });
 
   it('sem ack do claim as duas abas falham fechado e não há POST', async () => {

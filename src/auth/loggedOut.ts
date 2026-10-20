@@ -235,7 +235,10 @@ export function retryLoggedOut(
     if (inflight) {
       return inflight;
     }
-    inflight = sendOnce(apiBaseUrl, fetchImpl, true).finally(() => {
+    const run = sendOnce(apiBaseUrl, fetchImpl, true).then(() => {
+      // O clique em Sair não entra no backoff.
+    });
+    inflight = run.finally(() => {
       inflight = null;
     });
     return inflight;

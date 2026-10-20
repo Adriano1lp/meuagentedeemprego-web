@@ -154,6 +154,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let channel: ChannelLike | null = null;
   let inflight: Promise<AccessGrant> | null = null;
   let peerGrant: { grant: AccessGrant; at: number } | null = null;
+  let announcedGrant: { grant: AccessGrant; at: number } | null = null;
   let peerFailureAt: number | null = null;
   let peerFailureConfirmed = false;
   const claims = new Map<string, number>();
@@ -171,11 +172,37 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
+  function holdAnnouncedGrant(grant: AccessGrant, at: number): void {
+    if (!grant.accessToken.trim()) {
+      return;
+    }
+    announcedGrant = { grant, at };
+  }
+
+  function republishAnnouncedGrant(): void {
+    if (!announcedGrant || now() - announcedGrant.at > PEER_TTL_MS) {
+      announcedGrant = null;
+      return;
+    }
+    if (isLoggedOutFlag()) {
+      return;
+    }
+    publish({
+      v: 1,
+      type: 'grant',
+      accessToken: announcedGrant.grant.accessToken,
+      expiresIn: announcedGrant.grant.expiresIn,
+      at: announcedGrant.at,
+    });
+  }
+
   function rememberGrant(accessToken: string, expiresIn: number | null, at: number): void {
     if (!accessToken.trim()) {
       return;
     }
-    peerGrant = { grant: { accessToken, expiresIn }, at };
+    const grant = { accessToken, expiresIn };
+    peerGrant = { grant, at };
+    holdAnnouncedGrant(grant, at);
     peerFailureAt = null;
     peerFailureConfirmed = false;
     peerRefreshingId = null;
@@ -188,6 +215,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     peerFailureAt = at;
     peerFailureConfirmed = confirmed;
     peerGrant = null;
+    announcedGrant = null;
     peerRefreshingId = null;
     peerRefreshingAt = null;
     notifyPeerWaiters();
@@ -371,9 +399,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return;
       }
       if (data.type === 'claim' && typeof data.id === 'string') {
+        const known = claims.has(data.id);
         claims.set(data.id, now());
+        republishAnnouncedGrant();
         if (attemptId && data.id !== attemptId) {
           publish({ v: 1, type: 'claim-ack', id: data.id, from: attemptId });
+          if (!known) {
+            publish({ v: 1, type: 'claim', id: attemptId });
+          }
         }
         if (refreshingId) {
           publish({ v: 1, type: 'refreshing', id: refreshingId });
@@ -399,10 +432,12 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return;
       }
       if (data.type === 'logout') {
+        announcedGrant = null;
         emit({ type: 'logout' });
         return;
       }
       if (data.type === 'session-expired') {
+        announcedGrant = null;
         emit({ type: 'session-expired' });
       }
     };
@@ -420,12 +455,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
     try {
       const grant = await postRefresh();
+      const at = now();
+      holdAnnouncedGrant(grant, at);
       publish({
         v: 1,
         type: 'grant',
         accessToken: grant.accessToken,
         expiresIn: grant.expiresIn,
-        at: now(),
+        at,
       });
       return grant;
     } catch (error) {
@@ -635,6 +672,13 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     reset() {
       inflight = null;
       peerGrant = null;
+      announcedGrant = null;
+      try {
+        channel?.close();
+      } catch {
+        // Canal já fechado.
+      }
+      channel = null;
       peerFailureAt = null;
       peerFailureConfirmed = false;
       attemptId = null;
