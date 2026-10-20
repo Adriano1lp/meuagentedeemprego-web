@@ -27,10 +27,13 @@ const COOKIE_PATHS = new Set([
 
 export class SessionExpiredError extends Error {
   readonly status = 401;
+  /** true só quando o POST /auth/refresh desta aba respondeu 401. */
+  readonly confirmed: boolean;
 
-  constructor() {
+  constructor(confirmed = false) {
     super('Sua sessão expirou. Entre de novo.');
     this.name = 'SessionExpiredError';
+    this.confirmed = confirmed;
   }
 }
 
@@ -133,8 +136,11 @@ export async function requestRefresh(
   } catch {
     throw new SessionExpiredError();
   }
-  if (response.status === 401 || !response.ok) {
-    throw new SessionExpiredError();
+  if (response.status === 401) {
+    throw new SessionExpiredError(true);
+  }
+  if (!response.ok) {
+    throw new SessionExpiredError(false);
   }
   const body = await readJson(response);
   const accessToken = readAccessToken(body);

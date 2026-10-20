@@ -20,6 +20,13 @@ export default defineConfig({
         channel: 'chrome',
       },
     },
+    {
+      name: 'webkit',
+      testMatch: /session-locks\.spec\.ts/,
+      use: {
+        ...devices['Desktop Safari'],
+      },
+    },
   ],
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 5173',
