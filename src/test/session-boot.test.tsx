@@ -8,6 +8,8 @@ import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
 import { LOGGED_OUT_KEY } from '../auth/loggedOut';
 import {
+  CLAIM_COLLISION_MS,
+  CLAIM_CONFIRM_MS,
   FOLLOWER_GRANT_WAIT_MS,
   resetSessionRuntimeForTests,
   SESSION_CHANNEL_NAME,
@@ -444,6 +446,123 @@ describe('boot da sessão', () => {
     expect(screen.getByTestId('session-location').textContent).toContain('aviso=sessao');
     expect(screen.queryByTestId('profile-panel')).not.toBeInTheDocument();
     expect(refreshPosts).toBe(0);
+    restoreLocks();
+  });
+
+  it('falha de refresh no boot não avisa as outras abas', async () => {
+    vi.useFakeTimers();
+    const restoreLocks = installSessionChannel();
+    const seen: Array<{ type?: string; accessToken?: string }> = [];
+    const peer = new FollowerChannel(SESSION_CHANNEL_NAME);
+    peer.addEventListener('message', (event) => {
+      seen.push(event.data as { type?: string; accessToken?: string });
+    });
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/auth/refresh')) {
+        return json({ detail: 'Sessao invalida' }, 401);
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+
+    renderAt('/app/perfil', fetchImpl);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+    });
+
+    expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
+      'Sua sessão expirou. Entre de novo.',
+    );
+    expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
+    expect(decodeURIComponent(screen.getByTestId('session-location').textContent ?? '')).toContain(
+      'next=/app/perfil',
+    );
+    expect(screen.getByTestId('session-location').textContent).toContain('aviso=sessao');
+    expect(seen.some((message) => message.type === 'session-expired')).toBe(false);
+    expect(seen.some((message) => message.accessToken)).toBe(false);
+    restoreLocks();
+  });
+
+  async function bootLoggedIn(refreshAfter: () => Response) {
+    let refreshHits = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/auth/refresh')) {
+        refreshHits += 1;
+        if (refreshHits === 1) {
+          return json({ access_token: 'jwt-boot', token_type: 'bearer', expires_in: 30 });
+        }
+        return refreshAfter();
+      }
+      if (url.includes('/auth/me') || /\/users\/me($|\?)/.test(url)) {
+        return json(userBody);
+      }
+      if (url.includes('/users/me/status') || url.includes('/billing/me')) {
+        return json({
+          user_id: 'user-1',
+          has_cv: true,
+          has_embeddings: true,
+          plan: 'free',
+          subscription_status: 'none',
+          used: 0,
+          limit: 5,
+          remaining: 5,
+          period: '2026-10',
+        });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+    renderAt('/app/perfil', fetchImpl);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+    });
+    expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
+    return { refreshHits: () => refreshHits };
+  }
+
+  it('refresh 401 de quem já estava logado avisa as outras abas', async () => {
+    vi.useFakeTimers();
+    const restoreLocks = installSessionChannel();
+    const seen: Array<{ type?: string; accessToken?: string }> = [];
+    const peer = new FollowerChannel(SESSION_CHANNEL_NAME);
+    peer.addEventListener('message', (event) => {
+      seen.push(event.data as { type?: string; accessToken?: string });
+    });
+    await bootLoggedIn(() => json({ detail: 'Sessao invalida' }, 401));
+    expect(seen.some((message) => message.type === 'session-expired')).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000 + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+    });
+
+    expect(seen.some((message) => message.type === 'session-expired')).toBe(true);
+    expect(
+      seen
+        .filter((message) => message.type === 'session-expired')
+        .every((message) => message.accessToken == null),
+    ).toBe(true);
+    expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
+    expect(decodeURIComponent(screen.getByTestId('session-location').textContent ?? '')).toContain(
+      'next=/app/perfil',
+    );
+    restoreLocks();
+  });
+
+  it('falha que não é 401 não avisa as outras abas', async () => {
+    vi.useFakeTimers();
+    const restoreLocks = installSessionChannel();
+    const seen: Array<{ type?: string }> = [];
+    const peer = new FollowerChannel(SESSION_CHANNEL_NAME);
+    peer.addEventListener('message', (event) => {
+      seen.push(event.data as { type?: string });
+    });
+    await bootLoggedIn(() => json({ detail: 'indisponivel' }, 500));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000 + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+    });
+
+    expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
+    expect(seen.some((message) => message.type === 'session-expired')).toBe(false);
     restoreLocks();
   });
 });

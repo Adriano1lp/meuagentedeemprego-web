@@ -14,10 +14,14 @@ import { createMemoryTokenStore } from '../api/token';
 import {
   clearLoggedOutFlag,
   LOGGED_OUT_KEY,
+  LOGOUT_RETRY_BASE_MS,
+  LOGOUT_RETRY_MAX_MS,
+  logoutRetryDelay,
   markLoggedOut,
   retryLoggedOut,
 } from '../auth/loggedOut';
 import {
+  CLAIM_CONFIRM_MS,
   createSessionCoordinator,
   FOLLOWER_GRANT_WAIT_MS,
   getSessionCoordinator,
@@ -32,15 +36,18 @@ import {
   SESSION_EXPIRED_NOTICE,
 } from '../auth/returnTo';
 
-type Wire = { v: 1; type: string; accessToken?: string; id?: string; at?: number };
+type Wire = { v: 1; type: string; accessToken?: string; id?: string; at?: number; from?: string };
 
-function createBus() {
+function createBus(drop: (data: Wire) => boolean = () => false) {
   const handlers = new Set<(data: Wire) => void>();
   return {
     channel() {
       const mine = new Set<(data: Wire) => void>();
       return {
         postMessage(data: Wire) {
+          if (drop(data)) {
+            return;
+          }
           for (const handler of handlers) {
             if (!mine.has(handler)) {
               handler(data);
@@ -649,12 +656,16 @@ describe('flag de logout', () => {
     expect(posts).toBe(1);
     expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
 
+    vi.useFakeTimers();
     for (const status of [401, 500]) {
       const again = vi.fn(async () => new Response(null, { status }));
-      await retryLoggedOut('https://api.example.test', again);
+      const pending = retryLoggedOut('https://api.example.test', again);
+      await vi.advanceTimersByTimeAsync(LOGOUT_RETRY_MAX_MS);
+      await pending;
       expect(again).toHaveBeenCalledTimes(1);
       expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
     }
+    vi.useRealTimers();
   });
 
   it('login enquanto o reenvio espera não chama /auth/logout, com lock e sem', async () => {
@@ -714,3 +725,201 @@ function gatingLocks() {
     },
   };
 }
+
+function createDelayedBus(delayMs: number) {
+  const handlers = new Set<(data: Wire) => void>();
+  return {
+    channel() {
+      const mine = new Set<(data: Wire) => void>();
+      return {
+        postMessage(data: Wire) {
+          setTimeout(() => {
+            for (const handler of handlers) {
+              if (!mine.has(handler)) {
+                handler(data);
+              }
+            }
+          }, delayMs);
+        },
+        addEventListener(_type: 'message', listener: (event: MessageEvent) => void) {
+          const handler = (data: Wire) => listener({ data } as MessageEvent);
+          mine.add(handler);
+          handlers.add(handler);
+        },
+        removeEventListener() {},
+        close() {
+          for (const handler of mine) {
+            handlers.delete(handler);
+          }
+        },
+      };
+    },
+  };
+}
+
+describe('401 do refresh', () => {
+  it('confirma só quando o POST responde 401', async () => {
+    const fetch401 = vi.fn(async () => new Response(JSON.stringify({ detail: 'nao' }), { status: 401 }));
+    await expect(requestRefresh('https://api.example.test', fetch401)).rejects.toMatchObject({
+      confirmed: true,
+    });
+    const fetch500 = vi.fn(async () => new Response('no', { status: 500 }));
+    await expect(requestRefresh('https://api.example.test', fetch500)).rejects.toMatchObject({
+      confirmed: false,
+    });
+  });
+});
+
+describe('eleição sem navigator.locks', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('cinco rodadas com F5 simultâneo não revogam a família', async () => {
+    vi.useFakeTimers();
+    expect(CLAIM_CONFIRM_MS).toBeGreaterThan(0);
+    for (let round = 0; round < 5; round += 1) {
+      let used = false;
+      let revoked = false;
+      let posts = 0;
+      const bus = createDelayedBus(40);
+      const coordinators = [0, 1].map(() =>
+        createSessionCoordinator({
+          locks: null,
+          createChannel: () => bus.channel(),
+          drain: async () => {},
+          postRefresh: async () => {
+            if (revoked || used) {
+              revoked = true;
+              throw new SessionExpiredError(true);
+            }
+            posts += 1;
+            used = true;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return { accessToken: `jwt-rodada-${round}`, expiresIn: 90 };
+          },
+        }),
+      );
+      for (const tab of coordinators) {
+        tab.subscribe(() => {});
+      }
+      const pending = Promise.allSettled(coordinators.map((tab) => tab.refresh()));
+      await vi.advanceTimersByTimeAsync(2_000);
+      const results = await pending;
+      expect(revoked, `rodada ${round + 1}`).toBe(false);
+      expect(posts, `rodada ${round + 1}`).toBe(1);
+      expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+      if (results.every((result) => result.status === 'fulfilled')) {
+        const tokens = results.map((result) =>
+          result.status === 'fulfilled' ? result.value.accessToken : '',
+        );
+        expect(tokens).toEqual([`jwt-rodada-${round}`, `jwt-rodada-${round}`]);
+      }
+    }
+  });
+
+  it('sem ack do claim as duas abas falham fechado e não há POST', async () => {
+    vi.useFakeTimers();
+    let posts = 0;
+    let revoked = false;
+    const bus = createBus((data) => data.type === 'claim-ack');
+    const coordinators = [0, 1].map(() =>
+      createSessionCoordinator({
+        locks: null,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          if (posts > 0) {
+            revoked = true;
+            throw new SessionExpiredError(true);
+          }
+          posts += 1;
+          return { accessToken: 'jwt-nao', expiresIn: 30 };
+        },
+      }),
+    );
+    for (const tab of coordinators) {
+      tab.subscribe(() => {});
+    }
+    const pending = Promise.allSettled(coordinators.map((tab) => tab.refresh()));
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + FOLLOWER_GRANT_WAIT_MS);
+    const results = await pending;
+    expect(posts).toBe(0);
+    expect(revoked).toBe(false);
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+  });
+});
+
+describe('backoff do reenvio de logout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('dobra a espera até o teto e não agenda outro POST sozinho', async () => {
+    expect(logoutRetryDelay(1)).toBe(LOGOUT_RETRY_BASE_MS);
+    expect(logoutRetryDelay(2)).toBe(2_000);
+    expect(logoutRetryDelay(3)).toBe(4_000);
+    expect(logoutRetryDelay(6)).toBe(LOGOUT_RETRY_MAX_MS);
+    expect(logoutRetryDelay(8)).toBe(LOGOUT_RETRY_MAX_MS);
+
+    vi.useFakeTimers();
+    markLoggedOut();
+    let posts = 0;
+    const fetchImpl = vi.fn(async () => {
+      posts += 1;
+      return new Response(null, { status: 500 });
+    });
+
+    await retryLoggedOut('https://api.example.test', fetchImpl);
+    expect(posts).toBe(1);
+
+    const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+    for (const delay of delays) {
+      const before = posts;
+      const pending = retryLoggedOut('https://api.example.test', fetchImpl);
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(posts).toBe(before);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(posts).toBe(before + 1);
+    }
+    await vi.advanceTimersByTimeAsync(LOGOUT_RETRY_MAX_MS);
+    expect(posts).toBe(1 + delays.length);
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).not.toMatch(/jwt|eyJ|token/i);
+  });
+
+  it('o Sair forçado não espera o intervalo e a flag continua', async () => {
+    vi.useFakeTimers();
+    markLoggedOut();
+    const failing = vi.fn(async () => new Response(null, { status: 500 }));
+    await retryLoggedOut('https://api.example.test', failing);
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    const forced = vi.fn(async () => new Response(null, { status: 204 }));
+    await retryLoggedOut('https://api.example.test', forced, true);
+    expect(forced).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+  });
+
+  it('pede o mesmo lock do refresh', async () => {
+    markLoggedOut();
+    const names: string[] = [];
+    const restore = installLocks({
+      request(name: string, callback: () => Promise<unknown> | unknown) {
+        names.push(name);
+        return Promise.resolve(callback());
+      },
+    } as unknown as LockManager);
+    try {
+      await retryLoggedOut(
+        'https://api.example.test',
+        async () => new Response(null, { status: 204 }),
+      );
+      expect(names).toEqual([REFRESH_LOCK_NAME]);
+      expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
+    } finally {
+      restore();
+    }
+  });
+});

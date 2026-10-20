@@ -345,3 +345,180 @@ test('storage bloqueado ainda envia o logout e o F5 em /app cai em /entrar', asy
   await expect(page.getByTestId('home-shell')).toHaveCount(0);
   expect(refreshAfterLogout).toBeGreaterThan(0);
 });
+
+test('falha de refresh no boot da aba nova não derruba a aba logada', async ({ context }, testInfo) => {
+  let failBoot = false;
+  await context.route('**/auth/refresh', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    if (failBoot) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Sessao invalida' }),
+      });
+      return;
+    }
+    await fulfillRefresh(route);
+  });
+
+  const pageA = await context.newPage();
+  await mockLegalRoutes(pageA);
+  await mockAuthSuccess(pageA);
+  await mockCurrentUser(pageA);
+  await pageA.goto('/app/perfil');
+  await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+  await expect(pageA).toHaveURL(/\/app\/perfil$/);
+
+  failBoot = true;
+  const pageB = await context.newPage();
+  await mockLegalRoutes(pageB);
+  await mockAuthSuccess(pageB);
+  await mockCurrentUser(pageB);
+  await pageB.goto('/app/perfil');
+  await expect(pageB.getByTestId('session-expired-notice')).toHaveText(
+    'Sua sessão expirou. Entre de novo.',
+  );
+  const expired = new URL(pageB.url());
+  expect(expired.pathname).toBe('/entrar');
+  expect(expired.searchParams.get('aviso')).toBe('sessao');
+  expect(expired.searchParams.get('next')).toBe('/app/perfil');
+
+  await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+  await expect(pageA).toHaveURL(/\/app\/perfil$/);
+  await expect(pageA.getByTestId('session-expired-notice')).toHaveCount(0);
+  await expect(pageA.getByTestId('login-submit')).toHaveCount(0);
+
+  await pageA.screenshot({
+    path: testInfo.outputPath('aba-logada.png'),
+    fullPage: true,
+  });
+  await pageB.screenshot({
+    path: testInfo.outputPath('aba-boot-entrar.png'),
+    fullPage: true,
+  });
+});
+
+test('duas abas sem locks no F5 simultâneo não revogam a família', async ({ browser }, testInfo) => {
+  for (let round = 0; round < 5; round += 1) {
+    const context = await browser.newContext();
+    await context.addInitScript(() => {
+      const hide = () => undefined;
+      try {
+        Object.defineProperty(Navigator.prototype, 'locks', {
+          configurable: true,
+          get: hide,
+        });
+      } catch {
+        Object.defineProperty(navigator, 'locks', {
+          configurable: true,
+          get: hide,
+        });
+      }
+    });
+    await context.addCookies([
+      {
+        name: 'mae_refresh',
+        value: `rodada-${round}`,
+        url: 'http://127.0.0.1:5173',
+      },
+    ]);
+
+    let revoked = false;
+    let posts = 0;
+    let inflightCookie: string | null = null;
+    const used = new Set<string>();
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const cookie = route.request().headers()['cookie'] ?? '';
+      const reuse =
+        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
+      if (reuse) {
+        revoked = true;
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Sessao invalida' }),
+        });
+        return;
+      }
+      posts += 1;
+      inflightCookie = cookie;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      used.add(cookie);
+      inflightCookie = null;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: {
+          'set-cookie': `mae_refresh=nova-${round}; Path=/; HttpOnly`,
+        },
+        body: JSON.stringify(grant),
+      });
+    });
+
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    for (const tab of [pageA, pageB]) {
+      await mockLegalRoutes(tab);
+      await mockAuthSuccess(tab);
+      await mockCurrentUser(tab);
+    }
+    expect(await pageA.evaluate(() => navigator.locks == null)).toBe(true);
+
+    await Promise.all([pageA.goto('/app/perfil'), pageB.goto('/app/perfil')]);
+    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+    await expect(pageA).toHaveURL(/\/app\/perfil$/);
+    await expect(pageB).toHaveURL(/\/app\/perfil$/);
+    expect(revoked, `rodada ${round + 1}`).toBe(false);
+    expect(posts, `rodada ${round + 1}`).toBe(1);
+
+    if (round === 0) {
+      await pageA.screenshot({
+        path: testInfo.outputPath('f5-sem-locks-a.png'),
+        fullPage: true,
+      });
+      await pageB.screenshot({
+        path: testInfo.outputPath('f5-sem-locks-b.png'),
+        fullPage: true,
+      });
+    }
+    await context.close();
+  }
+});
+
+test('reenvio do logout espera entre tentativas e não entra em loop', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('mae.loggedOut', '1');
+  });
+  let logoutPosts = 0;
+  await page.route('**/auth/logout', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    logoutPosts += 1;
+    await route.fulfill({ status: 500, body: '' });
+  });
+
+  await page.goto('/entrar');
+  await expect.poll(() => logoutPosts).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(400);
+  expect(logoutPosts).toBe(1);
+  await expect.poll(() => logoutPosts, { timeout: 3_000 }).toBe(2);
+  await page.waitForTimeout(2_500);
+  expect(logoutPosts).toBe(2);
+  expect(await page.evaluate(() => localStorage.getItem('mae.loggedOut'))).toBe('1');
+
+  await page.screenshot({
+    path: testInfo.outputPath('logout-backoff.png'),
+    fullPage: true,
+  });
+});

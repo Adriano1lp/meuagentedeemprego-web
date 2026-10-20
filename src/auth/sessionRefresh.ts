@@ -1,8 +1,9 @@
 /**
  * Um refresh por vez na aba (promise compartilhada) e entre abas
  * (navigator.locks, nome fixo). Sem Web Locks, o BroadcastChannel elege
- * um líder. A aba que não liderou espera o grant ou a falha por até
- * FOLLOWER_GRANT_WAIT_MS e, se nada chegar, falha fechado — sem outro POST.
+ * um líder e só renova depois do ack do claim. Sem essa confirmação,
+ * a aba falha fechado — sem outro POST. A seguidora espera o grant ou
+ * a falha por até FOLLOWER_GRANT_WAIT_MS.
  * O token só atravessa o canal efêmero para a aba que esperou
  * o mesmo refresh — não vai para localStorage, sessionStorage, cookie
  * legível nem console.
@@ -26,6 +27,15 @@ const PEER_TTL_MS = 5_000;
  */
 export const FOLLOWER_GRANT_WAIT_MS = 5_000;
 
+/**
+ * Sem locks, a aba espera outro claim antes de concluir que está sozinha.
+ * Se aparecer um par e o ack não chegar, não há POST.
+ */
+export const CLAIM_CONFIRM_MS = 300;
+
+/** Segunda janela, curta, para dois F5 que ainda não se viram. */
+export const CLAIM_COLLISION_MS = 100;
+
 export type SessionEvent = { type: 'logout' } | { type: 'session-expired' };
 
 type Listener = (event: SessionEvent) => void;
@@ -35,12 +45,20 @@ type PeerWaiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type ClaimWaiter = {
+  ready: () => boolean;
+  settle: () => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 type WireMessage =
   | { v: 1; type: 'grant'; accessToken: string; expiresIn: number | null; at: number }
   | { v: 1; type: 'refresh-failed'; at: number }
   | { v: 1; type: 'logout' }
   | { v: 1; type: 'session-expired' }
-  | { v: 1; type: 'claim'; id: string };
+  | { v: 1; type: 'claim'; id: string }
+  | { v: 1; type: 'claim-ack'; id: string; from: string }
+  | { v: 1; type: 'refreshing'; id: string };
 
 type ChannelLike = {
   postMessage: (message: WireMessage) => void;
@@ -137,8 +155,15 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let inflight: Promise<AccessGrant> | null = null;
   let peerGrant: { grant: AccessGrant; at: number } | null = null;
   let peerFailureAt: number | null = null;
-  const claims = new Set<string>();
+  let peerFailureConfirmed = false;
+  const claims = new Map<string, number>();
+  const acks = new Set<string>();
+  let attemptId: string | null = null;
+  let refreshingId: string | null = null;
+  let peerRefreshingId: string | null = null;
+  let peerRefreshingAt: number | null = null;
   const peerWaiters = new Set<PeerWaiter>();
+  const claimWaiters = new Set<ClaimWaiter>();
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -152,13 +177,21 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
     peerGrant = { grant: { accessToken, expiresIn }, at };
     peerFailureAt = null;
+    peerFailureConfirmed = false;
+    peerRefreshingId = null;
+    peerRefreshingAt = null;
     notifyPeerWaiters();
+    notifyClaimWaiters();
   }
 
-  function rememberFailure(at: number): void {
+  function rememberFailure(at: number, confirmed: boolean): void {
     peerFailureAt = at;
+    peerFailureConfirmed = confirmed;
     peerGrant = null;
+    peerRefreshingId = null;
+    peerRefreshingAt = null;
     notifyPeerWaiters();
+    notifyClaimWaiters();
   }
 
   function peekPeerOutcome(): 'grant' | 'failed' | null {
@@ -221,13 +254,98 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return grant;
   }
 
-  function takePeerFailure(): boolean {
+  function takePeerFailure(): SessionExpiredError | null {
     if (peerFailureAt == null || now() - peerFailureAt > PEER_TTL_MS) {
       peerFailureAt = null;
-      return false;
+      peerFailureConfirmed = false;
+      return null;
     }
+    const confirmed = peerFailureConfirmed;
     peerFailureAt = null;
-    return true;
+    peerFailureConfirmed = false;
+    return new SessionExpiredError(confirmed);
+  }
+
+  function finishClaimWaiter(waiter: ClaimWaiter): void {
+    if (!claimWaiters.has(waiter)) {
+      return;
+    }
+    clearTimeout(waiter.timer);
+    claimWaiters.delete(waiter);
+    waiter.settle();
+  }
+
+  function notifyClaimWaiters(): void {
+    for (const waiter of [...claimWaiters]) {
+      if (waiter.ready()) {
+        finishClaimWaiter(waiter);
+      }
+    }
+  }
+
+  function waitUntil(timeoutMs: number, ready: () => boolean): Promise<void> {
+    if (ready()) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const waiter: ClaimWaiter = {
+        ready,
+        settle: resolve,
+        timer: setTimeout(() => finishClaimWaiter(waiter), timeoutMs),
+      };
+      claimWaiters.add(waiter);
+    });
+  }
+
+  function livePeerRefreshing(): string | null {
+    if (peerRefreshingId == null || peerRefreshingAt == null) {
+      return null;
+    }
+    if (now() - peerRefreshingAt > PEER_TTL_MS) {
+      peerRefreshingId = null;
+      peerRefreshingAt = null;
+      return null;
+    }
+    return peerRefreshingId;
+  }
+
+  function foreignClaimIds(selfId: string): string[] {
+    const cutoff = now() - PEER_TTL_MS;
+    const ids: string[] = [];
+    for (const [claimId, at] of claims) {
+      if (at < cutoff) {
+        claims.delete(claimId);
+        continue;
+      }
+      if (claimId !== selfId) {
+        ids.push(claimId);
+      }
+    }
+    return ids;
+  }
+
+  function leaderIs(selfId: string): boolean {
+    const ids = [selfId, ...foreignClaimIds(selfId)];
+    const peer = livePeerRefreshing();
+    if (peer && peer !== selfId) {
+      ids.push(peer);
+    }
+    ids.sort();
+    return ids[0] === selfId;
+  }
+
+  function peersAcked(selfId: string): boolean {
+    return foreignClaimIds(selfId).every((claimId) => acks.has(claimId));
+  }
+
+  function armAttempt(id: string): void {
+    attemptId = id;
+    refreshingId = null;
+    acks.clear();
+    claims.set(id, now());
+    for (const peerId of foreignClaimIds(id)) {
+      publish({ v: 1, type: 'claim-ack', id: peerId, from: id });
+    }
   }
 
   function ensureChannel(): ChannelLike | null {
@@ -248,11 +366,36 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return;
       }
       if (data.type === 'refresh-failed') {
-        rememberFailure(data.at || now());
+        // A falha anunciada não confirma 401 nesta aba. Quem fez o POST é que confirma.
+        rememberFailure(data.at || now(), false);
         return;
       }
       if (data.type === 'claim' && typeof data.id === 'string') {
-        claims.add(data.id);
+        claims.set(data.id, now());
+        if (attemptId && data.id !== attemptId) {
+          publish({ v: 1, type: 'claim-ack', id: data.id, from: attemptId });
+        }
+        if (refreshingId) {
+          publish({ v: 1, type: 'refreshing', id: refreshingId });
+        }
+        notifyClaimWaiters();
+        return;
+      }
+      if (
+        data.type === 'claim-ack' &&
+        typeof data.id === 'string' &&
+        typeof data.from === 'string' &&
+        data.id === attemptId
+      ) {
+        acks.add(data.from);
+        notifyClaimWaiters();
+        return;
+      }
+      if (data.type === 'refreshing' && typeof data.id === 'string' && data.id !== attemptId) {
+        peerRefreshingId = data.id;
+        peerRefreshingAt = now();
+        claims.set(data.id, now());
+        notifyClaimWaiters();
         return;
       }
       if (data.type === 'logout') {
@@ -297,8 +440,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (shared) {
       return shared;
     }
-    if (takePeerFailure()) {
-      throw new SessionExpiredError();
+    const peerError = takePeerFailure();
+    if (peerError) {
+      throw peerError;
     }
     return postAndAnnounce();
   }
@@ -311,35 +455,150 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return await inner;
   }
 
-  async function refreshWithClaim(): Promise<AccessGrant> {
-    const id = randomId();
-    claims.add(id);
-    publish({ v: 1, type: 'claim', id });
-    await drain();
-    const leader = [...claims].sort()[0] === id;
-    claims.clear();
+  function failClosed(): never {
+    publish({ v: 1, type: 'refresh-failed', at: now() });
+    throw new SessionExpiredError(false);
+  }
+
+  async function followOrFail(): Promise<AccessGrant> {
+    const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
+    if (isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    if (outcome === 'grant') {
+      const grant = takePeerGrant();
+      if (grant) {
+        return grant;
+      }
+    }
+    if (outcome === 'failed') {
+      throw takePeerFailure() ?? new SessionExpiredError(false);
+    }
+    throw new SessionExpiredError(false);
+  }
+
+  async function finishAsLeader(id: string): Promise<AccessGrant> {
+    const smallerPeer = () => {
+      const peer = livePeerRefreshing();
+      return peer != null && peer < id;
+    };
+    if (!leaderIs(id) || smallerPeer()) {
+      return followOrFail();
+    }
+    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
+      await waitUntil(
+        CLAIM_CONFIRM_MS,
+        () => peersAcked(id) || !leaderIs(id) || smallerPeer() || peekPeerOutcome() != null,
+      );
+    }
     const shared = takePeerGrant();
     if (shared) {
       return shared;
     }
-    if (takePeerFailure()) {
-      throw new SessionExpiredError();
+    const peerError = takePeerFailure();
+    if (peerError) {
+      throw peerError;
     }
-    if (!leader) {
-      // Não renova por conta própria: um segundo POST reusa o refresh token.
-      const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
-      if (isLoggedOutFlag()) {
-        throw new SessionExpiredError();
+    if (!leaderIs(id) || smallerPeer()) {
+      return followOrFail();
+    }
+    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
+      return failClosed();
+    }
+    refreshingId = id;
+    publish({ v: 1, type: 'refreshing', id });
+    await drain();
+    if (smallerPeer()) {
+      refreshingId = null;
+      return followOrFail();
+    }
+    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
+      refreshingId = null;
+      return failClosed();
+    }
+    try {
+      return await postAndAnnounce();
+    } finally {
+      refreshingId = null;
+    }
+  }
+
+  async function refreshWithClaim(): Promise<AccessGrant> {
+    const initialGrant = takePeerGrant();
+    if (initialGrant) {
+      return initialGrant;
+    }
+    const initialFailure = takePeerFailure();
+    if (initialFailure) {
+      throw initialFailure;
+    }
+
+    const id = randomId();
+    try {
+      armAttempt(id);
+      publish({ v: 1, type: 'claim', id });
+      await drain();
+
+      if (!channel) {
+        return await postAndAnnounce();
       }
-      if (outcome === 'grant') {
-        const grant = takePeerGrant();
-        if (grant) {
-          return grant;
+
+      if (foreignClaimIds(id).length === 0 && livePeerRefreshing() == null) {
+        await waitUntil(
+          CLAIM_CONFIRM_MS,
+          () =>
+            foreignClaimIds(id).length > 0 ||
+            livePeerRefreshing() != null ||
+            peekPeerOutcome() != null,
+        );
+      }
+
+      const afterWait = takePeerGrant();
+      if (afterWait) {
+        return afterWait;
+      }
+      const afterFailure = takePeerFailure();
+      if (afterFailure) {
+        throw afterFailure;
+      }
+
+      if (foreignClaimIds(id).length === 0 && livePeerRefreshing() == null) {
+        refreshingId = id;
+        publish({ v: 1, type: 'refreshing', id });
+        await waitUntil(
+          CLAIM_COLLISION_MS,
+          () =>
+            foreignClaimIds(id).length > 0 ||
+            (livePeerRefreshing() != null && livePeerRefreshing() !== id) ||
+            peekPeerOutcome() != null,
+        );
+        const collidedGrant = takePeerGrant();
+        if (collidedGrant) {
+          return collidedGrant;
         }
+        const collidedFailure = takePeerFailure();
+        if (collidedFailure) {
+          throw collidedFailure;
+        }
+        if (
+          foreignClaimIds(id).length === 0 &&
+          (livePeerRefreshing() == null || livePeerRefreshing() === id)
+        ) {
+          return await postAndAnnounce();
+        }
+        refreshingId = null;
       }
-      throw new SessionExpiredError();
+
+      if (!leaderIs(id)) {
+        return await followOrFail();
+      }
+      return await finishAsLeader(id);
+    } finally {
+      attemptId = null;
+      refreshingId = null;
+      claims.clear();
+      acks.clear();
     }
-    return postAndAnnounce();
   }
 
   async function refreshExclusive(): Promise<AccessGrant> {
@@ -377,9 +636,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       inflight = null;
       peerGrant = null;
       peerFailureAt = null;
+      peerFailureConfirmed = false;
+      attemptId = null;
+      refreshingId = null;
+      peerRefreshingId = null;
+      peerRefreshingAt = null;
       claims.clear();
+      acks.clear();
       for (const waiter of [...peerWaiters]) {
         finishPeerWaiter(waiter, 'timeout');
+      }
+      for (const waiter of [...claimWaiters]) {
+        finishClaimWaiter(waiter);
       }
     },
   };

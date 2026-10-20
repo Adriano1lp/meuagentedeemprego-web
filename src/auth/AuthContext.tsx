@@ -17,7 +17,7 @@ import {
   type FetchLike,
 } from '../api/client';
 import { fromOutdatedCode, type OutdatedDetail } from '../api/outdated';
-import { requestRefresh, type AccessGrant } from '../api/sessionHttp';
+import { requestRefresh, SessionExpiredError, type AccessGrant } from '../api/sessionHttp';
 import { createMemoryTokenStore } from '../api/token';
 import type { User } from '../api/types';
 import { API_BASE_URL } from '../config';
@@ -132,6 +132,8 @@ export function AuthProvider({
   const loggingOut = useRef(false);
   /** Logout desta aba ou de outra: um refresh que ainda resolve não manda para /entrar. */
   const suppressExpire = useRef(false);
+  /** O POST /auth/refresh desta aba respondeu 401. */
+  const refreshConfirmed = useRef(false);
   const fetchRef = useRef(fetchImpl);
   fetchRef.current = fetchImpl;
 
@@ -156,6 +158,7 @@ export function AuthProvider({
       if (isLoggedOutFlag()) {
         return;
       }
+      refreshConfirmed.current = false;
       tokenStore.set(grant.accessToken);
       setToken(grant.accessToken);
       setSessionExpired(false);
@@ -171,7 +174,9 @@ export function AuthProvider({
           .then((next) => {
             rememberGrant(next);
           })
-          .catch(() => {
+          .catch((error: unknown) => {
+            refreshConfirmed.current =
+              error instanceof SessionExpiredError && error.confirmed;
             expireRef.current();
           });
       }, delayMs);
@@ -192,11 +197,16 @@ export function AuthProvider({
     if (suppressExpire.current) {
       return;
     }
+    const wasLoggedIn = tokenStore.get() != null;
+    const confirmed = refreshConfirmed.current;
+    refreshConfirmed.current = false;
     clearMemory();
     setAccountDeleted(false);
     setSessionExpired(true);
     getSessionCoordinator().reset();
-    getSessionCoordinator().notifySessionExpired();
+    if (wasLoggedIn && confirmed) {
+      getSessionCoordinator().notifySessionExpired();
+    }
     const current = locationRef.current;
     const next = returnPathFromLocation(current.pathname, current.search);
     if (isSafeAppPath(next)) {
@@ -213,14 +223,21 @@ export function AuthProvider({
 
   const refreshSession = useCallback(async () => {
     if (isLoggedOutFlag()) {
+      refreshConfirmed.current = false;
       return false;
     }
-    const grant = await getSessionCoordinator().refresh();
-    if (isLoggedOutFlag()) {
+    try {
+      const grant = await getSessionCoordinator().refresh();
+      if (isLoggedOutFlag()) {
+        refreshConfirmed.current = false;
+        return false;
+      }
+      rememberGrant(grant);
+      return true;
+    } catch (error) {
+      refreshConfirmed.current = error instanceof SessionExpiredError && error.confirmed;
       return false;
     }
-    rememberGrant(grant);
-    return true;
   }, [rememberGrant]);
 
   const api = useMemo(
@@ -347,8 +364,8 @@ export function AuthProvider({
           path === '/historico' ||
           path === '/perfil';
         if (protectedEntry && !suppressExpire.current) {
+          // Falha de boot fica nesta aba. Quem já estava logado não é avisado.
           setSessionExpired(true);
-          getSessionCoordinator().notifySessionExpired();
         }
         setSessionPhase('ready');
         return;
