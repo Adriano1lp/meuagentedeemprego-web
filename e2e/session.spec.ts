@@ -72,8 +72,12 @@ test('reload em /app/perfil fica na mesma rota, sem passar por /entrar', async (
   const storage = await page.evaluate(() => ({
     local: localStorage.length,
     session: sessionStorage.length,
+    mark: localStorage.getItem('mae.sessionRefresh'),
   }));
-  expect(storage).toEqual({ local: 0, session: 0 });
+  expect(storage.session).toBe(0);
+  expect(storage.local).toBe(1);
+  expect(storage.mark).not.toMatch(/jwt|eyJ|access_token/i);
+  expect(storage.mark).toContain('"at"');
 
   await page.screenshot({
     path: testInfo.outputPath('reload-perfil.png'),
@@ -373,6 +377,7 @@ test('falha de refresh no boot da aba nova não derruba a aba logada', async ({ 
   await expect(pageA).toHaveURL(/\/app\/perfil$/);
 
   failBoot = true;
+  await pageA.evaluate(() => localStorage.removeItem('mae.sessionRefresh'));
   const pageB = await context.newPage();
   await mockLegalRoutes(pageB);
   await mockAuthSuccess(pageB);

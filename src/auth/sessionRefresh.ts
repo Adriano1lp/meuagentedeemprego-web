@@ -12,9 +12,11 @@
  *   ou a falha. Se o líder morre no meio do POST, quem viu o refreshing
  *   não faz outro POST.
  *
- * Com Web Locks, dentro do lock: um grant recente é reaproveitado. Se esta
- * aba viu refreshing de outra nos últimos PEER_TTL_MS, espera o grant e,
- * se ele não chegar, falha fechado sem POST.
+ * Com Web Locks, dentro do lock: um grant recente no canal é reaproveitado.
+ * Se o canal perdeu o aviso, vale a marca em localStorage (sem token) pelo
+ * mesmo PEER_TTL_MS. Refresh em curso de outra aba espera o grant. Grant
+ * recente espera de novo pelo canal e, se não chegar, falha fechado sem POST.
+ * Sem localStorage, segue só o canal. O evento storage repete o refreshing.
  *
  * Sem Web Locks, quem não lidera nunca manda claim-ack: republica o
  * refreshing do líder que já conhece, ou fica calada. Refreshing só é
@@ -33,6 +35,11 @@ import { isLoggedOutFlag } from './loggedOut';
 
 export const REFRESH_LOCK_NAME = 'mae-web-session-refresh';
 export const SESSION_CHANNEL_NAME = 'mae-web-session';
+
+/** Sem token: só quem está renovando, ou o instante do último grant. */
+export const SESSION_REFRESH_MARK_KEY = 'mae.sessionRefresh';
+
+type RefreshMark = { tabId: string; startedAt: number } | { at: number };
 
 const PEER_TTL_MS = 5_000;
 
@@ -131,6 +138,14 @@ function randomId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+let tabSerial = 0;
+
+/** Não usa randomUUID: a eleição sem locks reserva esses ids para o claim. */
+function nextTabId(): string {
+  tabSerial += 1;
+  return `tab-${tabSerial}-${Math.random().toString(16).slice(2)}`;
+}
+
 function readLocks(explicit: LockManager | null | undefined): LockManager | null {
   if (explicit === null) {
     return null;
@@ -185,6 +200,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   const grantTold = new Set<string>();
   const peerWaiters = new Set<PeerWaiter>();
   const claimWaiters = new Set<ClaimWaiter>();
+  const tabId = nextTabId();
+  let ownGrantAt: number | null = null;
+  let storageBound = false;
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -354,6 +372,152 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       };
       claimWaiters.add(waiter);
     });
+  }
+
+  function readRefreshMark(): RefreshMark | null {
+    try {
+      const raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
+      if (!raw) {
+        return null;
+      }
+      const data = JSON.parse(raw) as {
+        tabId?: unknown;
+        startedAt?: unknown;
+        at?: unknown;
+      } | null;
+      if (!data || typeof data !== 'object') {
+        return null;
+      }
+      if (typeof data.tabId === 'string' && typeof data.startedAt === 'number') {
+        return { tabId: data.tabId, startedAt: data.startedAt };
+      }
+      if (typeof data.at === 'number') {
+        return { at: data.at };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeRefreshMark(mark: RefreshMark): void {
+    try {
+      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, JSON.stringify(mark));
+    } catch {
+      if (!('tabId' in mark)) {
+        clearOwnRefreshingMark();
+      }
+    }
+  }
+
+  function removeRefreshMark(): void {
+    try {
+      window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+    } catch {
+      // Sem storage, não há marca para apagar.
+    }
+  }
+
+  function clearOwnRefreshingMark(): void {
+    const mark = readRefreshMark();
+    if (mark && 'tabId' in mark && mark.tabId === tabId) {
+      removeRefreshMark();
+    }
+  }
+
+  function clearOwnGrantMark(): void {
+    const mark = readRefreshMark();
+    if (mark && 'at' in mark && !('tabId' in mark) && mark.at === ownGrantAt) {
+      removeRefreshMark();
+    }
+  }
+
+  function foreignRefreshingMark(): { tabId: string; startedAt: number } | null {
+    const mark = readRefreshMark();
+    if (!mark || !('tabId' in mark)) {
+      return null;
+    }
+    if (mark.tabId === tabId || now() - mark.startedAt > PEER_TTL_MS) {
+      return null;
+    }
+    return mark;
+  }
+
+  function foreignGrantMark(): number | null {
+    const mark = readRefreshMark();
+    if (!mark || !('at' in mark) || 'tabId' in mark) {
+      return null;
+    }
+    if (mark.at === ownGrantAt || now() - mark.at > PEER_TTL_MS) {
+      return null;
+    }
+    return mark.at;
+  }
+
+  function noteForeignRefreshing(mark: { tabId: string; startedAt: number }): void {
+    peerRefreshingId = mark.tabId;
+    peerRefreshingAt = mark.startedAt;
+  }
+
+  function askForStoredGrant(): void {
+    if (posting || isLoggedOutFlag()) {
+      return;
+    }
+    if (peerGrant && now() - peerGrant.at <= PEER_TTL_MS) {
+      return;
+    }
+    const id = randomId();
+    const previous = attemptId;
+    attemptId = id;
+    publish({ v: 1, type: 'claim', id });
+    if (previous && previous !== id) {
+      attemptId = previous;
+    }
+  }
+
+  function onStorage(event: StorageEvent): void {
+    if (event.key !== SESSION_REFRESH_MARK_KEY || !event.newValue) {
+      return;
+    }
+    const mark = readRefreshMark();
+    if (!mark) {
+      return;
+    }
+    if ('tabId' in mark) {
+      if (mark.tabId !== tabId && now() - mark.startedAt <= PEER_TTL_MS) {
+        noteForeignRefreshing(mark);
+        notifyClaimWaiters();
+      }
+      return;
+    }
+    if (peerWaiters.size > 0 && mark.at !== ownGrantAt && now() - mark.at <= PEER_TTL_MS) {
+      askForStoredGrant();
+    }
+  }
+
+  function onPageHide(event: Event): void {
+    if ('persisted' in event && Boolean((event as PageTransitionEvent).persisted)) {
+      return;
+    }
+    clearOwnGrantMark();
+  }
+
+  function ensureStorageListener(): void {
+    if (storageBound || typeof window === 'undefined') {
+      return;
+    }
+    storageBound = true;
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('pagehide', onPageHide);
+  }
+
+  function unbindStorage(): void {
+    if (!storageBound || typeof window === 'undefined') {
+      return;
+    }
+    window.removeEventListener('storage', onStorage);
+    window.removeEventListener('pagehide', onPageHide);
+    storageBound = false;
   }
 
   function livePeerRefreshing(): string | null {
@@ -546,15 +710,37 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (peerError) {
       throw peerError;
     }
-    // Refreshing de outra aba ainda vale: espera o grant dela, sem POST.
-    if (livePeerRefreshing()) {
+    // Canal ou marca: refresh de outra aba ainda vale. Sem segundo POST.
+    const markedRefreshing = foreignRefreshingMark();
+    if (livePeerRefreshing() || markedRefreshing) {
+      if (markedRefreshing) {
+        noteForeignRefreshing(markedRefreshing);
+      }
       return followOrFail();
+    }
+    if (foreignGrantMark() != null) {
+      askForStoredGrant();
+      try {
+        return await followOrFail();
+      } finally {
+        if (!posting) {
+          attemptId = null;
+        }
+      }
     }
     const id = randomId();
     attemptId = id;
     refreshingId = id;
+    writeRefreshMark({ tabId, startedAt: now() });
     try {
-      return await postAndAnnounce();
+      const grant = await postAndAnnounce();
+      const at = now();
+      ownGrantAt = at;
+      writeRefreshMark({ at });
+      return grant;
+    } catch (error) {
+      clearOwnRefreshingMark();
+      throw error;
     } finally {
       if (attemptId === id) {
         attemptId = null;
@@ -658,6 +844,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
 
   async function refreshExclusive(): Promise<AccessGrant> {
     ensureChannel();
+    ensureStorageListener();
     return refreshWithLock();
   }
 
@@ -683,6 +870,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     subscribe(listener) {
       listeners.add(listener);
       ensureChannel();
+      ensureStorageListener();
       return () => {
         listeners.delete(listener);
       };
@@ -692,6 +880,10 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       peerGrant = null;
       clearAnnouncedGrant();
       posting = false;
+      clearOwnRefreshingMark();
+      clearOwnGrantMark();
+      ownGrantAt = null;
+      unbindStorage();
       try {
         channel?.close();
       } catch {

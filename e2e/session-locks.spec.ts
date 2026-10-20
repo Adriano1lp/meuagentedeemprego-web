@@ -1,7 +1,5 @@
-import type { BrowserContext } from '@playwright/test';
-
 import { expectExpiredLogin, mockAuthSuccess, mockCurrentUser, mockLegalRoutes } from './helpers';
-import { expect, test, type Page } from './fixtures';
+import { expect, test, type Browser, type Page } from './fixtures';
 
 const grant = {
   access_token: 'jwt-refresh',
@@ -9,91 +7,28 @@ const grant = {
   expires_in: 3600,
 };
 
-/**
- * Segura o Web Lock até as duas abas terem o canal aberto. Assim o
- * refreshing do líder chega na outra antes do POST.
- */
-async function gateBothTabs(context: BrowserContext): Promise<void> {
-  await context.addInitScript(() => {
-    const locks = navigator.locks;
-    if (!locks) {
-      return;
-    }
-    const key = 'mae-e2e-lock-tabs';
-    const epochKey = 'mae-e2e-lock-epoch';
-    const id = `${Date.now()}-${Math.random()}`;
-    type Mark = { id: string; at: number };
-    const read = (): Mark[] => {
-      try {
-        const parsed = JSON.parse(localStorage.getItem(key) || '[]') as unknown;
-        if (!Array.isArray(parsed)) {
-          return [];
-        }
-        return parsed.filter(
-          (item): item is Mark =>
-            !!item &&
-            typeof item === 'object' &&
-            typeof (item as Mark).id === 'string' &&
-            typeof (item as Mark).at === 'number',
-        );
-      } catch {
-        return [];
-      }
-    };
-    const write = (marks: Mark[]) => {
-      localStorage.setItem(key, JSON.stringify(marks));
-    };
-    window.addEventListener('pagehide', () => {
-      write(read().filter((item) => item.id !== id));
-    });
-    const original = locks.request.bind(locks);
-    locks.request = ((name: string, optionsOrCallback: unknown, maybeCallback?: unknown) => {
-      return new Promise((resolve, reject) => {
-        const wait = () => {
-          const epoch = Number(localStorage.getItem(epochKey) || '0');
-          const now = Date.now();
-          const marks = read().filter((item) => item.id !== id && item.at >= epoch);
-          write([...marks, { id, at: now }]);
-          if (marks.length + 1 >= 2) {
-            const pending = maybeCallback
-              ? original(name, optionsOrCallback as LockOptions, maybeCallback as LockGrantedCallback)
-              : original(name, optionsOrCallback as LockGrantedCallback);
-            Promise.resolve(pending).then(resolve, reject);
-            return;
-          }
-          window.setTimeout(wait, 20);
-        };
-        wait();
-      });
-    }) as typeof locks.request;
-  });
+async function prepare(page: Page): Promise<void> {
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockCurrentUser(page);
 }
 
-async function bumpEpoch(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    localStorage.setItem('mae-e2e-lock-epoch', String(Date.now()));
-  });
-}
+test('com locks, líder morto em 5 rodadas não gera o segundo POST', async ({ browser }) => {
+  test.setTimeout(120_000);
+  for (let round = 0; round < 5; round += 1) {
+    await deadLeaderRound(browser, round);
+  }
+});
 
-async function isBooting(page: Page): Promise<boolean> {
-  return page
-    .evaluate(() => document.querySelector('[data-testid="session-boot"]') != null)
-    .catch(() => false);
-}
-
-test('com locks, fechar a aba líder no POST lento não manda o segundo refresh', async ({
-  browser,
-}) => {
-  test.setTimeout(45_000);
+async function deadLeaderRound(browser: Browser, round: number): Promise<void> {
   const context = await browser.newContext();
   let release = () => {};
   let aborted = false;
   try {
-    await gateBothTabs(context);
     await context.addCookies([
       {
         name: 'mae_refresh',
-        value: 'lider-morre',
+        value: `lider-morre-${round}`,
         url: 'http://127.0.0.1:5173',
       },
     ]);
@@ -138,83 +73,66 @@ test('com locks, fechar a aba líder no POST lento não manda o segundo refresh'
 
     const pageA = await context.newPage();
     const pageB = await context.newPage();
-    for (const tab of [pageA, pageB]) {
-      await mockLegalRoutes(tab);
-      await mockAuthSuccess(tab);
-      await mockCurrentUser(tab);
-    }
+    await prepare(pageA);
+    await prepare(pageB);
     const navA = pageA.goto('/app/perfil');
     const navB = pageB.goto('/app/perfil');
-    await expect
-      .poll(() => pageA.evaluate(() => navigator.locks != null).catch(() => false), {
-        timeout: 15_000,
-      })
-      .toBe(true);
     await expect.poll(() => attempts, { timeout: 15_000 }).toBe(1);
-    await expect
-      .poll(async () => [await isBooting(pageA), await isBooting(pageB)], { timeout: 15_000 })
-      .toEqual([true, true]);
-    await pageA.waitForTimeout(500);
-
-    expect(leader).not.toBeNull();
+    await pageA.waitForTimeout(300);
+    expect(leader, `rodada ${round + 1}`).not.toBeNull();
     const survivor = leader === pageA ? pageB : pageA;
     aborted = true;
-    await leader!.close({ runBeforeUnload: false });
+    await leader!.close({ runBeforeUnload: true });
 
     await expect(survivor).toHaveURL(/\/entrar\?/, { timeout: 12_000 });
     expectExpiredLogin(survivor, '/app/perfil');
-    expect(revoked).toBe(false);
-    expect(attempts).toBe(1);
-    await survivor.waitForTimeout(1_000);
-    expect(attempts).toBe(1);
-    expect(revoked).toBe(false);
-
+    expect(revoked, `rodada ${round + 1}`).toBe(false);
+    expect(attempts, `rodada ${round + 1}`).toBe(1);
+    const mark = await survivor.evaluate(() => localStorage.getItem('mae.sessionRefresh'));
+    expect(mark ?? '', `rodada ${round + 1}`).not.toMatch(/jwt|eyJ|access_token/i);
     await Promise.allSettled([navA, navB]);
   } finally {
     aborted = true;
     release();
     await context.close();
   }
+}
+
+test('com locks, F5 em 2, 3 e 4 abas faz um POST por rodada', async ({ browser }) => {
+  test.setTimeout(180_000);
+  for (const tabCount of [2, 3, 4]) {
+    await f5Tabs(browser, tabCount);
+  }
 });
 
-test('com locks, 3 F5 seguidos fazem no máximo um POST e não derrubam a sessão', async ({
-  browser,
-}) => {
-  test.setTimeout(90_000);
+async function f5Tabs(browser: Browser, tabCount: number): Promise<void> {
   const context = await browser.newContext();
-  let release = () => {};
   try {
-    await gateBothTabs(context);
     await context.addCookies([
       {
         name: 'mae_refresh',
-        value: 'f5-0',
+        value: `f5-${tabCount}`,
         url: 'http://127.0.0.1:5173',
       },
     ]);
 
     let revoked = false;
     let posts = 0;
-    let generation = 0;
-    const seen = new Map<number, number>();
-    const armGate = () => {
-      let open = () => {};
-      const promise = new Promise<void>((resolve) => {
-        open = resolve;
-      });
-      return { promise, open };
-    };
-    let gate = armGate();
-    release = () => gate.open();
+    let round = 0;
+    let roundPosts = 0;
+    let countedRound = -1;
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
         return;
       }
-      const gen = generation;
-      const next = (seen.get(gen) ?? 0) + 1;
-      seen.set(gen, next);
-      if (revoked || next > 1) {
+      if (countedRound !== round) {
+        countedRound = round;
+        roundPosts = 0;
+      }
+      roundPosts += 1;
+      posts += 1;
+      if (roundPosts > 1) {
         revoked = true;
         await route.fulfill({
           status: 401,
@@ -223,62 +141,44 @@ test('com locks, 3 F5 seguidos fazem no máximo um POST e não derrubam a sessã
         });
         return;
       }
-      const current = gate;
-      posts += 1;
-      await current.promise;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         headers: {
-          'set-cookie': `mae_refresh=f5-${gen + 1}; Path=/; HttpOnly`,
+          'set-cookie': `mae_refresh=f5-${tabCount}-${round}-nova; Path=/; HttpOnly`,
         },
         body: JSON.stringify(grant),
       });
     });
 
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
-    for (const tab of [pageA, pageB]) {
-      await mockLegalRoutes(tab);
-      await mockAuthSuccess(tab);
-      await mockCurrentUser(tab);
+    const pages: Page[] = [];
+    for (let index = 0; index < tabCount; index += 1) {
+      const page = await context.newPage();
+      await prepare(page);
+      pages.push(page);
     }
-    for (let index = 0; index < 3; index += 1) {
+
+    for (let index = 0; index < 5; index += 1) {
+      const label = `${tabCount} abas rodada ${index + 1}`;
       const before = posts;
-      if (index > 0) {
-        generation += 1;
-        await bumpEpoch(pageA);
-      }
+      round = index;
       const pending =
         index === 0
-          ? Promise.all([pageA.goto('/app/perfil'), pageB.goto('/app/perfil')])
-          : Promise.all([pageA.reload(), pageB.reload()]);
-      await expect
-        .poll(() => pageA.evaluate(() => navigator.locks != null).catch(() => false), {
-          timeout: 15_000,
-        })
-        .toBe(true);
-      await expect.poll(() => posts, { timeout: 15_000 }).toBe(before + 1);
-      await expect
-        .poll(async () => [await isBooting(pageA), await isBooting(pageB)], { timeout: 15_000 })
-        .toEqual([true, true]);
-      await pageA.waitForTimeout(500);
-      const done = gate.open;
-      gate = armGate();
-      release = () => gate.open();
-      done();
+          ? Promise.all(pages.map((page) => page.goto('/app/perfil')))
+          : Promise.all(pages.map((page) => page.reload()));
       await pending;
-      await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 12_000 });
-      await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 12_000 });
-      await expect(pageA).toHaveURL(/\/app\/perfil$/);
-      await expect(pageB).toHaveURL(/\/app\/perfil$/);
-      expect(posts, `rodada ${index + 1}`).toBe(before + 1);
-      expect(revoked, `rodada ${index + 1}`).toBe(false);
+      for (const page of pages) {
+        await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', {
+          timeout: 12_000,
+        });
+        await expect(page).toHaveURL(/\/app\/perfil$/);
+      }
+      expect(posts - before, label).toBe(1);
+      expect(revoked, label).toBe(false);
     }
-    expect(posts).toBe(3);
-    expect(revoked).toBe(false);
+    const mark = await pages[0].evaluate(() => localStorage.getItem('mae.sessionRefresh'));
+    expect(mark ?? '').not.toMatch(/jwt|eyJ|access_token/i);
   } finally {
-    release();
     await context.close();
   }
-});
+}

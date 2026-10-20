@@ -27,6 +27,7 @@ import {
   FOLLOWER_GRANT_WAIT_MS,
   getSessionCoordinator,
   REFRESH_LOCK_NAME,
+  SESSION_REFRESH_MARK_KEY,
   setRefreshImplementation,
   type SessionCoordinator,
 } from '../auth/sessionRefresh';
@@ -264,6 +265,7 @@ describe('opt-in da sessão e origem', () => {
 describe('single-flight do refresh', () => {
   afterEach(() => {
     vi.useRealTimers();
+    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
   });
 
   it('N chamadas concorrentes na mesma aba geram 1 refresh', async () => {
@@ -387,6 +389,168 @@ describe('single-flight do refresh', () => {
 
     leader.reset();
     survivor.reset();
+  });
+
+  it('com locks, a marca segura o POST quando o canal perde o refreshing', async () => {
+    vi.useFakeTimers();
+    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+    const bus = createBus((data) => data.type === 'refreshing' || data.type === 'grant');
+    const locks = stealableLocks();
+    let posts = 0;
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          return new Promise(() => {});
+        },
+      });
+    }
+
+    const leader = makeTab();
+    const survivor = makeTab();
+    leader.subscribe(() => {});
+    survivor.subscribe(() => {});
+
+    const leaderResult = leader.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    const raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
+    expect(raw).toBeTruthy();
+    expect(raw).not.toMatch(/jwt|eyJ|accessToken|access_token/i);
+    expect(JSON.parse(raw ?? '{}')).toEqual({
+      tabId: expect.any(String),
+      startedAt: expect.any(Number),
+    });
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect(JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}')).toEqual({
+      tabId: expect.any(String),
+      startedAt: expect.any(Number),
+    });
+
+    const survivorResult = survivor.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    locks.killHolder();
+    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS);
+
+    await leaderResult;
+    const error = await survivorResult;
+    expect(error).toBeInstanceOf(SessionExpiredError);
+    expect((error as SessionExpiredError).confirmed).toBe(false);
+    expect(posts).toBe(1);
+    leader.reset();
+    survivor.reset();
+  });
+
+  it('com locks, canal atrasado e grant na marca não geram outro POST', async () => {
+    vi.useFakeTimers();
+    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+    const bus = createDelayedBus(400);
+    const locks = sharedLocks();
+    let posts = 0;
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          return { accessToken: 'jwt-marca', expiresIn: 90 };
+        },
+      });
+    }
+
+    const leader = makeTab();
+    const survivor = makeTab();
+    leader.subscribe(() => {});
+    survivor.subscribe(() => {});
+
+    const pending = Promise.all([leader.refresh(), survivor.refresh()]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    const mark = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
+      at?: number;
+      tabId?: string;
+    };
+    expect(mark.tabId).toBeUndefined();
+    expect(typeof mark.at).toBe('number');
+    expect(JSON.stringify(mark)).not.toMatch(/jwt|eyJ|access/i);
+
+    await vi.advanceTimersByTimeAsync(400);
+    const grants = await pending;
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-marca', 'jwt-marca']);
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
+    leader.reset();
+    survivor.reset();
+  });
+
+  it('com locks e storage bloqueado, o canal sozinho continua com um POST', async () => {
+    const bus = createBus();
+    const locks = sharedLocks();
+    let posts = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts === 1) {
+            await gate;
+          }
+          return { accessToken: 'jwt-sem-storage', expiresIn: 30 };
+        },
+      });
+    }
+
+    try {
+      const tabA = makeTab();
+      const tabB = makeTab();
+      const pending = Promise.all([tabA.refresh(), tabB.refresh()]);
+      await vi.waitFor(() => {
+        expect(posts).toBe(1);
+      });
+      release();
+      const grants = await pending;
+      expect(posts).toBe(1);
+      expect(grants.map((grant) => grant.accessToken)).toEqual([
+        'jwt-sem-storage',
+        'jwt-sem-storage',
+      ]);
+    } finally {
+      setItem.mockRestore();
+      getItem.mockRestore();
+    }
   });
 });
 
