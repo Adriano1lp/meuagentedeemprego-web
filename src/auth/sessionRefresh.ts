@@ -2,8 +2,10 @@
  * Um refresh por vez na aba (promise compartilhada) e entre abas
  * (navigator.locks, nome fixo). Sem Web Locks, o BroadcastChannel elege
  * um líder e só renova depois do ack do claim. Sem essa confirmação,
- * a aba falha fechado — sem outro POST. A seguidora espera o grant ou
- * a falha por até FOLLOWER_GRANT_WAIT_MS.
+ * a aba falha fechado — sem outro POST. Um refreshing vivo de outra aba
+ * sempre vence, qualquer que seja o id. Quem já está no POST não manda
+ * claim-ack. A seguidora espera o grant ou a falha por até
+ * FOLLOWER_GRANT_WAIT_MS.
  * O token só atravessa o canal efêmero para a aba que esperou
  * o mesmo refresh — não vai para localStorage, sessionStorage, cookie
  * legível nem console.
@@ -161,8 +163,10 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   const acks = new Set<string>();
   let attemptId: string | null = null;
   let refreshingId: string | null = null;
+  let posting = false;
   let peerRefreshingId: string | null = null;
   let peerRefreshingAt: number | null = null;
+  const grantTold = new Set<string>();
   const peerWaiters = new Set<PeerWaiter>();
   const claimWaiters = new Set<ClaimWaiter>();
 
@@ -177,16 +181,27 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       return;
     }
     announcedGrant = { grant, at };
+    grantTold.clear();
   }
 
-  function republishAnnouncedGrant(): void {
+  function clearAnnouncedGrant(): void {
+    announcedGrant = null;
+    grantTold.clear();
+  }
+
+  /** No máximo um grant por aba que pediu, dentro do prazo. */
+  function republishAnnouncedGrant(requesterId: string): void {
+    if (!requesterId) {
+      return;
+    }
     if (!announcedGrant || now() - announcedGrant.at > PEER_TTL_MS) {
-      announcedGrant = null;
+      clearAnnouncedGrant();
       return;
     }
-    if (isLoggedOutFlag()) {
+    if (isLoggedOutFlag() || grantTold.has(requesterId)) {
       return;
     }
+    grantTold.add(requesterId);
     publish({
       v: 1,
       type: 'grant',
@@ -215,7 +230,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     peerFailureAt = at;
     peerFailureConfirmed = confirmed;
     peerGrant = null;
-    announcedGrant = null;
+    clearAnnouncedGrant();
     peerRefreshingId = null;
     peerRefreshingAt = null;
     notifyPeerWaiters();
@@ -353,11 +368,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   function leaderIs(selfId: string): boolean {
-    const ids = [selfId, ...foreignClaimIds(selfId)];
     const peer = livePeerRefreshing();
     if (peer && peer !== selfId) {
-      ids.push(peer);
+      return false;
     }
+    const ids = [selfId, ...foreignClaimIds(selfId)];
     ids.sort();
     return ids[0] === selfId;
   }
@@ -401,7 +416,15 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (data.type === 'claim' && typeof data.id === 'string') {
         const known = claims.has(data.id);
         claims.set(data.id, now());
-        republishAnnouncedGrant();
+        if (posting) {
+          const activeId = refreshingId ?? attemptId;
+          if (activeId) {
+            publish({ v: 1, type: 'refreshing', id: activeId });
+          }
+          notifyClaimWaiters();
+          return;
+        }
+        republishAnnouncedGrant(data.id);
         if (attemptId && data.id !== attemptId) {
           publish({ v: 1, type: 'claim-ack', id: data.id, from: attemptId });
           if (!known) {
@@ -432,12 +455,12 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return;
       }
       if (data.type === 'logout') {
-        announcedGrant = null;
+        clearAnnouncedGrant();
         emit({ type: 'logout' });
         return;
       }
       if (data.type === 'session-expired') {
-        announcedGrant = null;
+        clearAnnouncedGrant();
         emit({ type: 'session-expired' });
       }
     };
@@ -453,6 +476,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (isLoggedOutFlag()) {
       throw new SessionExpiredError();
     }
+    posting = true;
     try {
       const grant = await postRefresh();
       const at = now();
@@ -468,6 +492,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     } catch (error) {
       publish({ v: 1, type: 'refresh-failed', at: now() });
       throw error;
+    } finally {
+      posting = false;
     }
   }
 
@@ -515,17 +541,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   async function finishAsLeader(id: string): Promise<AccessGrant> {
-    const smallerPeer = () => {
+    const peerAlreadyRefreshing = () => {
       const peer = livePeerRefreshing();
-      return peer != null && peer < id;
+      return peer != null && peer !== id;
     };
-    if (!leaderIs(id) || smallerPeer()) {
+    if (!leaderIs(id) || peerAlreadyRefreshing()) {
       return followOrFail();
     }
     if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
       await waitUntil(
         CLAIM_CONFIRM_MS,
-        () => peersAcked(id) || !leaderIs(id) || smallerPeer() || peekPeerOutcome() != null,
+        () =>
+          peersAcked(id) || !leaderIs(id) || peerAlreadyRefreshing() || peekPeerOutcome() != null,
       );
     }
     const shared = takePeerGrant();
@@ -536,7 +563,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (peerError) {
       throw peerError;
     }
-    if (!leaderIs(id) || smallerPeer()) {
+    if (!leaderIs(id) || peerAlreadyRefreshing()) {
       return followOrFail();
     }
     if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
@@ -545,7 +572,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     refreshingId = id;
     publish({ v: 1, type: 'refreshing', id });
     await drain();
-    if (smallerPeer()) {
+    if (peerAlreadyRefreshing()) {
       refreshingId = null;
       return followOrFail();
     }
@@ -631,6 +658,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       }
       return await finishAsLeader(id);
     } finally {
+      posting = false;
       attemptId = null;
       refreshingId = null;
       claims.clear();
@@ -672,7 +700,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     reset() {
       inflight = null;
       peerGrant = null;
-      announcedGrant = null;
+      clearAnnouncedGrant();
+      posting = false;
       try {
         channel?.close();
       } catch {

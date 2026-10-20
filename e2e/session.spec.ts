@@ -493,6 +493,155 @@ test('duas abas sem locks no F5 simultâneo não revogam a família', async ({ b
   }
 });
 
+async function hideWebLocks(context: import('@playwright/test').BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    const hide = () => undefined;
+    try {
+      Object.defineProperty(Navigator.prototype, 'locks', {
+        configurable: true,
+        get: hide,
+      });
+    } catch {
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        get: hide,
+      });
+    }
+  });
+}
+
+async function pinAttemptId(page: import('@playwright/test').Page, attemptId: string): Promise<void> {
+  await page.addInitScript((id) => {
+    const value = () => id;
+    try {
+      Object.defineProperty(crypto, 'randomUUID', { configurable: true, value });
+    } catch {
+      crypto.randomUUID = value;
+    }
+  }, attemptId);
+}
+
+async function lateTabDuringSlowPost(
+  browser: import('@playwright/test').Browser,
+  testInfo: import('@playwright/test').TestInfo,
+  delayMs: number,
+  round: number,
+  capture: boolean,
+): Promise<void> {
+  const context = await browser.newContext();
+  let release = () => {};
+  try {
+    await hideWebLocks(context);
+    await context.addCookies([
+      {
+        name: 'mae_refresh',
+        value: `lento-${delayMs}-${round}`,
+        url: 'http://127.0.0.1:5173',
+      },
+    ]);
+
+    let revoked = false;
+    let attempts = 0;
+    let inflightCookie: string | null = null;
+    const used = new Set<string>();
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const cookie = route.request().headers()['cookie'] ?? '';
+      const reuse =
+        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
+      attempts += 1;
+      if (reuse || attempts > 1) {
+        revoked = true;
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Sessao invalida' }),
+        });
+        return;
+      }
+      inflightCookie = cookie;
+      await held;
+      used.add(cookie);
+      inflightCookie = null;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: {
+          'set-cookie': `mae_refresh=nova-${delayMs}-${round}; Path=/; HttpOnly`,
+        },
+        body: JSON.stringify(grant),
+      });
+    });
+
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    await pinAttemptId(pageA, 'ffffffff-ffff-4fff-8fff-ffffffffffff');
+    await pinAttemptId(pageB, '00000000-0000-4000-8000-000000000000');
+    for (const tab of [pageA, pageB]) {
+      await mockLegalRoutes(tab);
+      await mockAuthSuccess(tab);
+      await mockCurrentUser(tab);
+    }
+    expect(await pageA.evaluate(() => navigator.locks == null)).toBe(true);
+
+    const navA = pageA.goto('/app/perfil');
+    await expect.poll(() => attempts, { timeout: 15_000 }).toBe(1);
+    await pageA.waitForTimeout(delayMs);
+    const navB = pageB.goto('/app/perfil');
+    await pageB.waitForTimeout(1_500);
+    const label = `atraso ${delayMs}ms rodada ${round + 1}`;
+    expect(attempts, label).toBe(1);
+    expect(revoked, label).toBe(false);
+
+    release();
+    await navA;
+    await navB;
+    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+    await expect(pageA).toHaveURL(/\/app\/perfil$/);
+    await expect(pageB).toHaveURL(/\/app\/perfil$/);
+    expect(attempts, label).toBe(1);
+    expect(revoked, label).toBe(false);
+
+    if (capture) {
+      await pageA.screenshot({
+        path: testInfo.outputPath('post-lento-a.png'),
+        fullPage: true,
+      });
+      await pageB.screenshot({
+        path: testInfo.outputPath('post-lento-b.png'),
+        fullPage: true,
+      });
+    }
+  } finally {
+    release();
+    await context.close();
+  }
+}
+
+test('POST lento com aba tardia de id menor não revoga a família', async ({ browser }, testInfo) => {
+  test.setTimeout(360_000);
+  for (let round = 0; round < 20; round += 1) {
+    await lateTabDuringSlowPost(browser, testInfo, 600, round, round === 0);
+  }
+});
+
+test('variações de atraso no POST lento não disparam o segundo refresh', async ({ browser }, testInfo) => {
+  test.setTimeout(240_000);
+  const delays = [100, 450, 900, 1_400];
+  for (const delay of delays) {
+    for (let round = 0; round < 3; round += 1) {
+      await lateTabDuringSlowPost(browser, testInfo, delay, round, false);
+    }
+  }
+});
+
 test('reenvio do logout espera entre tentativas e não entra em loop', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     localStorage.setItem('mae.loggedOut', '1');

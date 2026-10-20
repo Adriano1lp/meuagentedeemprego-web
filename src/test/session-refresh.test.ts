@@ -758,6 +758,86 @@ function createDelayedBus(delayMs: number) {
   };
 }
 
+const LEADER_ATTEMPT_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const LATE_ATTEMPT_ID = '00000000-0000-4000-8000-000000000000';
+
+function installAttemptIds(ids: string[]): () => void {
+  const queue = [...ids];
+  const spy = vi.spyOn(crypto, 'randomUUID').mockImplementation(() => {
+    const next = queue.shift() ?? LATE_ATTEMPT_ID;
+    return next as ReturnType<Crypto['randomUUID']>;
+  });
+  return () => spy.mockRestore();
+}
+
+function watchBus(delayMs: number) {
+  const inner = delayMs > 0 ? createDelayedBus(delayMs) : createBus();
+  const seen: Wire[] = [];
+  return {
+    seen,
+    channel() {
+      const raw = inner.channel();
+      return {
+        postMessage(data: Wire) {
+          seen.push(data);
+          raw.postMessage(data);
+        },
+        addEventListener: raw.addEventListener.bind(raw),
+        removeEventListener: raw.removeEventListener.bind(raw),
+        close() {
+          raw.close();
+        },
+      };
+    },
+  };
+}
+
+async function lateSmallerRefresh(input: { delayMs: number; busDelayMs: number; slowMs: number }) {
+  const restoreIds = installAttemptIds([LEADER_ATTEMPT_ID, LATE_ATTEMPT_ID]);
+  try {
+    const watched = watchBus(input.busDelayMs);
+    let calls = 0;
+    let revoked = false;
+    const postRefresh = async () => {
+      calls += 1;
+      if (calls > 1) {
+        revoked = true;
+        throw new SessionExpiredError(true);
+      }
+      await new Promise((resolve) => setTimeout(resolve, input.slowMs));
+      if (revoked) {
+        throw new SessionExpiredError(true);
+      }
+      return { accessToken: 'jwt-lento', expiresIn: 90 };
+    };
+    const first = createSessionCoordinator({
+      locks: null,
+      createChannel: () => watched.channel(),
+      drain: async () => {},
+      postRefresh,
+    });
+    const second = createSessionCoordinator({
+      locks: null,
+      createChannel: () => watched.channel(),
+      drain: async () => {},
+      postRefresh,
+    });
+    first.subscribe(() => {});
+    const pendingA = first.refresh();
+    await vi.advanceTimersByTimeAsync(input.delayMs);
+    second.subscribe(() => {});
+    const pendingB = second.refresh();
+    const resultsPromise = Promise.allSettled([pendingA, pendingB]);
+    await vi.advanceTimersByTimeAsync(input.slowMs + FOLLOWER_GRANT_WAIT_MS);
+    const results = await resultsPromise;
+    first.reset();
+    second.reset();
+    return { calls, revoked, results, seen: watched.seen };
+  } finally {
+    restoreIds();
+  }
+}
+
 describe('401 do refresh', () => {
   it('confirma só quando o POST responde 401', async () => {
     const fetch401 = vi.fn(async () => new Response(JSON.stringify({ detail: 'nao' }), { status: 401 }));
@@ -856,6 +936,96 @@ describe('eleição sem navigator.locks', () => {
     expect(shared.accessToken).toBe('jwt-tarde');
     expect(posts).toBe(1);
     expect(revoked).toBe(false);
+  });
+
+  it('não republica o grant a cada claim da mesma aba', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    let grants = 0;
+    const tap = bus.channel();
+    tap.addEventListener('message', (event) => {
+      if ((event.data as Wire).type === 'grant') {
+        grants += 1;
+      }
+    });
+    const first = createSessionCoordinator({
+      locks: null,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh: async () => ({ accessToken: 'jwt-uma-vez', expiresIn: 90 }),
+    });
+    first.subscribe(() => {});
+    const pending = first.refresh();
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 20);
+    await pending;
+    expect(grants).toBe(1);
+
+    const asker = bus.channel();
+    const claim = (id: string) => {
+      asker.postMessage({ v: 1, type: 'claim', id });
+    };
+    claim('aba-1');
+    claim('aba-1');
+    claim('aba-1');
+    expect(grants).toBe(2);
+    claim('aba-2');
+    claim('aba-2');
+    expect(grants).toBe(3);
+  });
+
+  it('refreshing em andamento vence id menor e não faz o segundo POST', async () => {
+    vi.useFakeTimers();
+    const slowMs = 1_500;
+    const postStartsAt = CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS;
+    const cases: Array<{ delay: number; rounds: number; busDelay: number; duringPost: boolean }> = [
+      { delay: 600, rounds: 20, busDelay: 0, duringPost: true },
+      { delay: 600, rounds: 20, busDelay: 40, duringPost: true },
+      { delay: 80, rounds: 5, busDelay: 0, duringPost: false },
+      { delay: 200, rounds: 5, busDelay: 15, duringPost: false },
+      { delay: 350, rounds: 5, busDelay: 0, duringPost: false },
+      { delay: 450, rounds: 5, busDelay: 20, duringPost: true },
+      { delay: 900, rounds: 5, busDelay: 0, duringPost: true },
+      { delay: 1_200, rounds: 5, busDelay: 30, duringPost: true },
+      { delay: 2_200, rounds: 5, busDelay: 0, duringPost: false },
+    ];
+    let doubles = 0;
+
+    for (const spec of cases) {
+      for (let round = 0; round < spec.rounds; round += 1) {
+        const outcome = await lateSmallerRefresh({
+          delayMs: spec.delay,
+          busDelayMs: spec.busDelay,
+          slowMs,
+        });
+        const label = `atraso ${spec.delay}ms canal ${spec.busDelay}ms rodada ${round + 1}`;
+        if (outcome.calls >= 2 || outcome.revoked) {
+          doubles += 1;
+        }
+        expect(outcome.calls, label).toBeLessThan(2);
+        expect(outcome.revoked, label).toBe(false);
+        const inCollision =
+          spec.delay >= CLAIM_CONFIRM_MS && spec.delay < postStartsAt && spec.busDelay === 0;
+        if (!inCollision) {
+          expect(outcome.calls, label).toBe(1);
+          expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
+          if (outcome.results.every((result) => result.status === 'fulfilled')) {
+            const tokens = outcome.results.map((result) =>
+              result.status === 'fulfilled' ? result.value.accessToken : '',
+            );
+            expect(tokens, label).toEqual(['jwt-lento', 'jwt-lento']);
+          }
+        }
+        if (spec.duringPost) {
+          const acks = outcome.seen.filter((message) => message.type === 'claim-ack');
+          expect(acks, label).toEqual([]);
+          expect(
+            outcome.seen.some((message) => message.type === 'refreshing'),
+            label,
+          ).toBe(true);
+        }
+      }
+    }
+    expect(doubles).toBe(0);
   });
 
   it('sem ack do claim as duas abas falham fechado e não há POST', async () => {
