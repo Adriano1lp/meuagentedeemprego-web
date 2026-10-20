@@ -642,6 +642,96 @@ test('variações de atraso no POST lento não disparam o segundo refresh', asyn
   }
 });
 
+test('três abas sem locks fazem um único refresh', async ({ browser }) => {
+  test.setTimeout(60_000);
+  const context = await browser.newContext();
+  let release = () => {};
+  try {
+    await hideWebLocks(context);
+    await context.addCookies([
+      {
+        name: 'mae_refresh',
+        value: 'tres-abas',
+        url: 'http://127.0.0.1:5173',
+      },
+    ]);
+
+    let revoked = false;
+    let attempts = 0;
+    let inflightCookie: string | null = null;
+    const used = new Set<string>();
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const cookie = route.request().headers()['cookie'] ?? '';
+      const reuse =
+        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
+      attempts += 1;
+      if (reuse || attempts > 1) {
+        revoked = true;
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Sessao invalida' }),
+        });
+        return;
+      }
+      inflightCookie = cookie;
+      await held;
+      used.add(cookie);
+      inflightCookie = null;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: {
+          'set-cookie': 'mae_refresh=nova-tres; Path=/; HttpOnly',
+        },
+        body: JSON.stringify(grant),
+      });
+    });
+
+    const pageA = await context.newPage();
+    const pageB = await context.newPage();
+    const pageC = await context.newPage();
+    await pinAttemptId(pageA, 'cccccccc-0000-4000-8000-000000000000');
+    await pinAttemptId(pageB, 'aaaaaaaa-0000-4000-8000-000000000000');
+    await pinAttemptId(pageC, '00000000-0000-4000-8000-000000000000');
+    for (const tab of [pageA, pageB, pageC]) {
+      await mockLegalRoutes(tab);
+      await mockAuthSuccess(tab);
+      await mockCurrentUser(tab);
+    }
+
+    const navA = pageA.goto('/app/perfil');
+    await pageA.waitForTimeout(100);
+    const navB = pageB.goto('/app/perfil');
+    await expect.poll(() => attempts, { timeout: 15_000 }).toBe(1);
+    const navC = pageC.goto('/app/perfil');
+    await pageC.waitForTimeout(1_500);
+    expect(attempts).toBe(1);
+    expect(revoked).toBe(false);
+
+    release();
+    await navA;
+    await navB;
+    await navC;
+    for (const tab of [pageA, pageB, pageC]) {
+      await expect(tab.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+      await expect(tab).toHaveURL(/\/app\/perfil$/);
+    }
+    expect(attempts).toBe(1);
+    expect(revoked).toBe(false);
+  } finally {
+    release();
+    await context.close();
+  }
+});
+
 test('reenvio do logout espera entre tentativas e não entra em loop', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     localStorage.setItem('mae.loggedOut', '1');

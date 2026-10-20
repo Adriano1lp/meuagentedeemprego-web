@@ -1,14 +1,20 @@
 /**
  * Um refresh por vez na aba (promise compartilhada) e entre abas
  * (navigator.locks, nome fixo). Sem Web Locks, o BroadcastChannel elege
- * um líder e só renova depois do ack do claim. Sem essa confirmação,
- * a aba falha fechado — sem outro POST. Um refreshing vivo de outra aba
- * sempre vence, qualquer que seja o id. Quem já está no POST não manda
- * claim-ack. A seguidora espera o grant ou a falha por até
+ * quem renova. O token só atravessa o canal efêmero para a aba que
+ * esperou o mesmo refresh — não vai para localStorage, sessionStorage,
+ * cookie legível nem console.
+ *
+ * Invariáveis de uma rodada sem Web Locks (N abas, nenhuma chegou com token):
+ * - No máximo um POST /auth/refresh.
+ * - Exatamente um POST. As outras esperam o grant ou a falha.
+ *
+ * Quem não lidera nunca manda claim-ack: republica o refreshing do líder
+ * que já conhece, ou fica calada. Refreshing só é anunciado por quem está
+ * de fato no POST e vence qualquer id. Se ninguém está no POST, o menor id
+ * desempata. Mesmo com ack, o POST espera CLAIM_COLLISION_MS sem nenhum
+ * refreshing. A seguidora espera o grant ou a falha por até
  * FOLLOWER_GRANT_WAIT_MS.
- * O token só atravessa o canal efêmero para a aba que esperou
- * o mesmo refresh — não vai para localStorage, sessionStorage, cookie
- * legível nem console.
  */
 
 import {
@@ -35,7 +41,10 @@ export const FOLLOWER_GRANT_WAIT_MS = 5_000;
  */
 export const CLAIM_CONFIRM_MS = 300;
 
-/** Segunda janela, curta, para dois F5 que ainda não se viram. */
+/**
+ * Janela curta imediatamente antes do POST. Mesmo que o ack já tenha
+ * chegado, sem nenhum refreshing nesse intervalo não há segundo POST.
+ */
 export const CLAIM_COLLISION_MS = 100;
 
 export type SessionEvent = { type: 'logout' } | { type: 'session-expired' };
@@ -377,8 +386,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return ids[0] === selfId;
   }
 
-  function peersAcked(selfId: string): boolean {
-    return foreignClaimIds(selfId).every((claimId) => acks.has(claimId));
+  function knowsForeignRefreshing(selfId: string | null): boolean {
+    const peer = livePeerRefreshing();
+    return peer != null && peer !== selfId;
+  }
+
+  /** Seguidora: não é o menor id, ou já existe quem está no POST. */
+  function actingAsFollower(selfId: string): boolean {
+    return knowsForeignRefreshing(selfId) || !leaderIs(selfId);
   }
 
   function armAttempt(id: string): void {
@@ -386,6 +401,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     refreshingId = null;
     acks.clear();
     claims.set(id, now());
+    if (actingAsFollower(id)) {
+      return;
+    }
     for (const peerId of foreignClaimIds(id)) {
       publish({ v: 1, type: 'claim-ack', id: peerId, from: id });
     }
@@ -424,15 +442,24 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           notifyClaimWaiters();
           return;
         }
+        const leaderRefreshing = livePeerRefreshing();
+        // Seguidora não confirma claim. Só repete o refreshing do líder, ou fica calada.
+        if (
+          (leaderRefreshing && leaderRefreshing !== attemptId) ||
+          (attemptId != null && actingAsFollower(attemptId))
+        ) {
+          if (leaderRefreshing && leaderRefreshing !== attemptId) {
+            publish({ v: 1, type: 'refreshing', id: leaderRefreshing });
+          }
+          notifyClaimWaiters();
+          return;
+        }
         republishAnnouncedGrant(data.id);
-        if (attemptId && data.id !== attemptId) {
+        if (attemptId && data.id !== attemptId && !actingAsFollower(attemptId)) {
           publish({ v: 1, type: 'claim-ack', id: data.id, from: attemptId });
           if (!known) {
             publish({ v: 1, type: 'claim', id: attemptId });
           }
-        }
-        if (refreshingId) {
-          publish({ v: 1, type: 'refreshing', id: refreshingId });
         }
         notifyClaimWaiters();
         return;
@@ -477,6 +504,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       throw new SessionExpiredError();
     }
     posting = true;
+    const activeId = refreshingId ?? attemptId;
+    if (activeId) {
+      refreshingId = activeId;
+      publish({ v: 1, type: 'refreshing', id: activeId });
+    }
     try {
       const grant = await postRefresh();
       const at = now();
@@ -518,11 +550,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return await inner;
   }
 
-  function failClosed(): never {
-    publish({ v: 1, type: 'refresh-failed', at: now() });
-    throw new SessionExpiredError(false);
-  }
-
   async function followOrFail(): Promise<AccessGrant> {
     const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
     if (isLoggedOutFlag()) {
@@ -538,53 +565,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       throw takePeerFailure() ?? new SessionExpiredError(false);
     }
     throw new SessionExpiredError(false);
-  }
-
-  async function finishAsLeader(id: string): Promise<AccessGrant> {
-    const peerAlreadyRefreshing = () => {
-      const peer = livePeerRefreshing();
-      return peer != null && peer !== id;
-    };
-    if (!leaderIs(id) || peerAlreadyRefreshing()) {
-      return followOrFail();
-    }
-    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
-      await waitUntil(
-        CLAIM_CONFIRM_MS,
-        () =>
-          peersAcked(id) || !leaderIs(id) || peerAlreadyRefreshing() || peekPeerOutcome() != null,
-      );
-    }
-    const shared = takePeerGrant();
-    if (shared) {
-      return shared;
-    }
-    const peerError = takePeerFailure();
-    if (peerError) {
-      throw peerError;
-    }
-    if (!leaderIs(id) || peerAlreadyRefreshing()) {
-      return followOrFail();
-    }
-    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
-      return failClosed();
-    }
-    refreshingId = id;
-    publish({ v: 1, type: 'refreshing', id });
-    await drain();
-    if (peerAlreadyRefreshing()) {
-      refreshingId = null;
-      return followOrFail();
-    }
-    if (foreignClaimIds(id).length > 0 && !peersAcked(id)) {
-      refreshingId = null;
-      return failClosed();
-    }
-    try {
-      return await postAndAnnounce();
-    } finally {
-      refreshingId = null;
-    }
   }
 
   async function refreshWithClaim(): Promise<AccessGrant> {
@@ -607,15 +587,13 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         return await postAndAnnounce();
       }
 
-      if (foreignClaimIds(id).length === 0 && livePeerRefreshing() == null) {
-        await waitUntil(
-          CLAIM_CONFIRM_MS,
-          () =>
-            foreignClaimIds(id).length > 0 ||
-            livePeerRefreshing() != null ||
-            peekPeerOutcome() != null,
-        );
-      }
+      await waitUntil(
+        CLAIM_CONFIRM_MS,
+        () =>
+          foreignClaimIds(id).length > 0 ||
+          knowsForeignRefreshing(id) ||
+          peekPeerOutcome() != null,
+      );
 
       const afterWait = takePeerGrant();
       if (afterWait) {
@@ -625,38 +603,27 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (afterFailure) {
         throw afterFailure;
       }
-
-      if (foreignClaimIds(id).length === 0 && livePeerRefreshing() == null) {
-        refreshingId = id;
-        publish({ v: 1, type: 'refreshing', id });
-        await waitUntil(
-          CLAIM_COLLISION_MS,
-          () =>
-            foreignClaimIds(id).length > 0 ||
-            (livePeerRefreshing() != null && livePeerRefreshing() !== id) ||
-            peekPeerOutcome() != null,
-        );
-        const collidedGrant = takePeerGrant();
-        if (collidedGrant) {
-          return collidedGrant;
-        }
-        const collidedFailure = takePeerFailure();
-        if (collidedFailure) {
-          throw collidedFailure;
-        }
-        if (
-          foreignClaimIds(id).length === 0 &&
-          (livePeerRefreshing() == null || livePeerRefreshing() === id)
-        ) {
-          return await postAndAnnounce();
-        }
-        refreshingId = null;
-      }
-
-      if (!leaderIs(id)) {
+      if (actingAsFollower(id)) {
         return await followOrFail();
       }
-      return await finishAsLeader(id);
+
+      await waitUntil(
+        CLAIM_COLLISION_MS,
+        () => actingAsFollower(id) || peekPeerOutcome() != null,
+      );
+
+      const quietGrant = takePeerGrant();
+      if (quietGrant) {
+        return quietGrant;
+      }
+      const quietFailure = takePeerFailure();
+      if (quietFailure) {
+        throw quietFailure;
+      }
+      if (actingAsFollower(id)) {
+        return await followOrFail();
+      }
+      return await postAndAnnounce();
     } finally {
       posting = false;
       attemptId = null;

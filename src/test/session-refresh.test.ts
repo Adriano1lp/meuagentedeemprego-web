@@ -475,6 +475,8 @@ describe('seguidora sem navigator.locks', () => {
       return { accessToken: 'jwt-3s', expiresIn: 90 };
     });
     const pending = Promise.all(pair.coordinators.map((tab) => tab.refresh()));
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS);
+    expect(pair.posts()).toBe(1);
     await vi.advanceTimersByTimeAsync(2_999);
     expect(pair.posts()).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -534,7 +536,7 @@ describe('seguidora sem navigator.locks', () => {
         (error: unknown) => error,
       ),
     );
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 3_000);
     const results = await Promise.all(tasks);
     expect(pair.posts()).toBe(1);
     expect(results.every((result) => result instanceof SessionExpiredError)).toBe(true);
@@ -792,6 +794,74 @@ function watchBus(delayMs: number) {
   };
 }
 
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+async function electTabs(input: {
+  delays: number[];
+  ids: string[];
+  busDelayMs: number;
+  slowMs: number;
+}) {
+  const order = input.delays
+    .map((delay, index) => ({ delay, index }))
+    .sort((left, right) => left.delay - right.delay || left.index - right.index);
+  const restoreIds = installAttemptIds(order.map((item) => input.ids[item.index]));
+  try {
+    const watched = watchBus(input.busDelayMs);
+    let calls = 0;
+    let revoked = false;
+    const postRefresh = async () => {
+      calls += 1;
+      if (calls > 1) {
+        revoked = true;
+        throw new SessionExpiredError(true);
+      }
+      await new Promise((resolve) => setTimeout(resolve, input.slowMs));
+      if (revoked) {
+        throw new SessionExpiredError(true);
+      }
+      return { accessToken: 'jwt-lento', expiresIn: 90 };
+    };
+    const tabs = input.ids.map(() =>
+      createSessionCoordinator({
+        locks: null,
+        createChannel: () => watched.channel(),
+        drain: async () => {},
+        postRefresh,
+      }),
+    );
+    const started: Promise<{ accessToken: string; expiresIn: number | null }>[] = [];
+    let elapsed = 0;
+    for (const item of order) {
+      if (item.delay > elapsed) {
+        await vi.advanceTimersByTimeAsync(item.delay - elapsed);
+        elapsed = item.delay;
+      }
+      tabs[item.index].subscribe(() => {});
+      started.push(tabs[item.index].refresh());
+    }
+    const resultsPromise = Promise.allSettled(started);
+    await vi.advanceTimersByTimeAsync(
+      input.slowMs + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + FOLLOWER_GRANT_WAIT_MS,
+    );
+    const results = await resultsPromise;
+    for (const tab of tabs) {
+      tab.reset();
+    }
+    return { calls, revoked, results, seen: watched.seen };
+  } finally {
+    restoreIds();
+  }
+}
+
 async function lateSmallerRefresh(input: { delayMs: number; busDelayMs: number; slowMs: number }) {
   const restoreIds = installAttemptIds([LEADER_ATTEMPT_ID, LATE_ATTEMPT_ID]);
   try {
@@ -976,7 +1046,6 @@ describe('eleição sem navigator.locks', () => {
   it('refreshing em andamento vence id menor e não faz o segundo POST', async () => {
     vi.useFakeTimers();
     const slowMs = 1_500;
-    const postStartsAt = CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS;
     const cases: Array<{ delay: number; rounds: number; busDelay: number; duringPost: boolean }> = [
       { delay: 600, rounds: 20, busDelay: 0, duringPost: true },
       { delay: 600, rounds: 20, busDelay: 40, duringPost: true },
@@ -1001,19 +1070,14 @@ describe('eleição sem navigator.locks', () => {
         if (outcome.calls >= 2 || outcome.revoked) {
           doubles += 1;
         }
-        expect(outcome.calls, label).toBeLessThan(2);
+        expect(outcome.calls, label).toBe(1);
         expect(outcome.revoked, label).toBe(false);
-        const inCollision =
-          spec.delay >= CLAIM_CONFIRM_MS && spec.delay < postStartsAt && spec.busDelay === 0;
-        if (!inCollision) {
-          expect(outcome.calls, label).toBe(1);
-          expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
-          if (outcome.results.every((result) => result.status === 'fulfilled')) {
-            const tokens = outcome.results.map((result) =>
-              result.status === 'fulfilled' ? result.value.accessToken : '',
-            );
-            expect(tokens, label).toEqual(['jwt-lento', 'jwt-lento']);
-          }
+        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
+        if (outcome.results.every((result) => result.status === 'fulfilled')) {
+          const tokens = outcome.results.map((result) =>
+            result.status === 'fulfilled' ? result.value.accessToken : '',
+          );
+          expect(tokens, label).toEqual(['jwt-lento', 'jwt-lento']);
         }
         if (spec.duringPost) {
           const acks = outcome.seen.filter((message) => message.type === 'claim-ack');
@@ -1028,7 +1092,7 @@ describe('eleição sem navigator.locks', () => {
     expect(doubles).toBe(0);
   });
 
-  it('sem ack do claim as duas abas falham fechado e não há POST', async () => {
+  it('sem ack do claim ainda sai exatamente um POST', async () => {
     vi.useFakeTimers();
     let posts = 0;
     let revoked = false;
@@ -1052,11 +1116,119 @@ describe('eleição sem navigator.locks', () => {
       tab.subscribe(() => {});
     }
     const pending = Promise.allSettled(coordinators.map((tab) => tab.refresh()));
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + FOLLOWER_GRANT_WAIT_MS);
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
     const results = await pending;
-    expect(posts).toBe(0);
+    expect(posts).toBe(1);
     expect(revoked).toBe(false);
-    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+  });
+
+  it('A em 0, B em 100ms e C em 1200ms não geram o segundo POST', async () => {
+    vi.useFakeTimers();
+    const slowMs = 1_500;
+    const traces = [
+      {
+        label: 'C entre A e B',
+        ids: [
+          'cccccccc-0000-4000-8000-000000000000',
+          'aaaaaaaa-0000-4000-8000-000000000000',
+          'bbbbbbbb-0000-4000-8000-000000000000',
+        ],
+      },
+      {
+        label: 'C menor que quem está no POST',
+        ids: [
+          'cccccccc-0000-4000-8000-000000000000',
+          'bbbbbbbb-0000-4000-8000-000000000000',
+          '00000000-0000-4000-8000-000000000000',
+        ],
+      },
+    ];
+    for (const trace of traces) {
+      for (let round = 0; round < 20; round += 1) {
+        const outcome = await electTabs({
+          delays: [0, 100, 1_200],
+          ids: trace.ids,
+          busDelayMs: 40,
+          slowMs,
+        });
+        const label = `${trace.label} rodada ${round + 1}`;
+        expect(outcome.calls, label).toBe(1);
+        expect(outcome.revoked, label).toBe(false);
+        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
+        expect(
+          outcome.seen.filter(
+            (message) => message.type === 'claim-ack' && message.id === trace.ids[2],
+          ),
+          label,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it('aba tardia em 300ms desempata pelo menor id e as duas permanecem', async () => {
+    vi.useFakeTimers();
+    const larger = 'ffffffff-0000-4000-8000-000000000000';
+    const smaller = '00000000-0000-4000-8000-000000000000';
+    const layouts = [
+      [larger, smaller],
+      [smaller, larger],
+    ];
+    for (const ids of layouts) {
+      for (const busDelayMs of [0, 40]) {
+        for (let round = 0; round < 20; round += 1) {
+          const outcome = await electTabs({
+            delays: [0, 300],
+            ids,
+            busDelayMs,
+            slowMs: 1_500,
+          });
+          const label = `ids ${ids[0].slice(0, 4)}/${ids[1].slice(0, 4)} canal ${busDelayMs}ms rodada ${round + 1}`;
+          expect(outcome.calls, label).toBe(1);
+          expect(outcome.revoked, label).toBe(false);
+          expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(
+            true,
+          );
+        }
+      }
+    }
+  });
+
+  it('estresse com 2, 3 e 4 abas não repete o POST nem derruba sessão válida', async () => {
+    vi.useFakeTimers();
+    const seed = 20_261_020;
+    for (const tabCount of [2, 3, 4]) {
+      const rand = mulberry32(seed + tabCount);
+      let doubles = 0;
+      let falseLogouts = 0;
+      for (let round = 0; round < 50; round += 1) {
+        const delays = Array.from({ length: tabCount }, () => Math.floor(rand() * 1_501));
+        const ids = Array.from({ length: tabCount }, (_, index) => {
+          const hex = Math.floor(rand() * 0xffffffff)
+            .toString(16)
+            .padStart(8, '0');
+          return `${hex}-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+        });
+        const outcome = await electTabs({
+          delays,
+          ids,
+          busDelayMs: 40,
+          slowMs: 1_500,
+        });
+        const label = `${tabCount} abas rodada ${round + 1}`;
+        if (outcome.calls >= 2 || outcome.revoked) {
+          doubles += 1;
+        }
+        if (outcome.calls !== 1 || outcome.results.some((result) => result.status !== 'fulfilled')) {
+          falseLogouts += 1;
+        }
+        expect(outcome.calls, label).toBe(1);
+        expect(outcome.revoked, label).toBe(false);
+        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
+      }
+      expect(doubles, `${tabCount} abas`).toBe(0);
+      expect(falseLogouts, `${tabCount} abas`).toBe(0);
+    }
   });
 });
 
