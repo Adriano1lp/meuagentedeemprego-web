@@ -88,6 +88,47 @@ function sharedLocks() {
   };
 }
 
+/** Solta o lock sem o callback resolver, como a aba que fecha no meio do POST. */
+function stealableLocks() {
+  let current: { release: () => void } | null = null;
+  const queue: Array<() => void> = [];
+  return {
+    request(_name: string, callback: () => Promise<unknown>) {
+      return new Promise((resolve, reject) => {
+        const run = () => {
+          let settled = false;
+          const finish = (fn: () => void) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            current = null;
+            fn();
+            queue.shift()?.();
+          };
+          current = {
+            release: () => finish(() => reject(new Error('aba fechada'))),
+          };
+          void Promise.resolve()
+            .then(() => callback())
+            .then(
+              (value) => finish(() => resolve(value)),
+              (error: unknown) => finish(() => reject(error)),
+            );
+        };
+        if (current) {
+          queue.push(run);
+          return;
+        }
+        run();
+      });
+    },
+    killHolder() {
+      current?.release();
+    },
+  };
+}
+
 function grantResponse(token: string, expiresIn = 600): Response {
   return new Response(
     JSON.stringify({ access_token: token, token_type: 'bearer', expires_in: expiresIn }),
@@ -292,6 +333,60 @@ describe('single-flight do refresh', () => {
     expect(fromA.accessToken).toBe('jwt-compartilhado');
     expect(fromB.accessToken).toBe('jwt-compartilhado');
     expect(locks.names.every((name) => name === REFRESH_LOCK_NAME)).toBe(true);
+  });
+
+  it('com locks, se o líder morre no POST a outra aba não renova de novo', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    const locks = stealableLocks();
+    let posts = 0;
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          return new Promise(() => {});
+        },
+      });
+    }
+
+    const leader = makeTab();
+    const survivor = makeTab();
+    leader.subscribe(() => {});
+    survivor.subscribe(() => {});
+
+    const leaderResult = leader.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+
+    const survivorResult = survivor.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+
+    locks.killHolder();
+    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS);
+
+    const leaderError = await leaderResult;
+    expect(leaderError).toBeInstanceOf(Error);
+    const error = await survivorResult;
+    expect(error).toBeInstanceOf(SessionExpiredError);
+    expect((error as SessionExpiredError).confirmed).toBe(false);
+    expect(posts).toBe(1);
+
+    leader.reset();
+    survivor.reset();
   });
 });
 

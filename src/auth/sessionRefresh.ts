@@ -5,16 +5,23 @@
  * esperou o mesmo refresh — não vai para localStorage, sessionStorage,
  * cookie legível nem console.
  *
- * Invariáveis de uma rodada sem Web Locks (N abas, nenhuma chegou com token):
+ * Invariáveis de uma rodada (N abas, nenhuma chegou com token), com ou sem
+ * Web Locks:
  * - No máximo um POST /auth/refresh.
- * - Exatamente um POST. As outras esperam o grant ou a falha.
+ * - Exatamente um POST quando o líder conclui. As outras esperam o grant
+ *   ou a falha. Se o líder morre no meio do POST, quem viu o refreshing
+ *   não faz outro POST.
  *
- * Quem não lidera nunca manda claim-ack: republica o refreshing do líder
- * que já conhece, ou fica calada. Refreshing só é anunciado por quem está
- * de fato no POST e vence qualquer id. Se ninguém está no POST, o menor id
- * desempata. Mesmo com ack, o POST espera CLAIM_COLLISION_MS sem nenhum
- * refreshing. A seguidora espera o grant ou a falha por até
- * FOLLOWER_GRANT_WAIT_MS.
+ * Com Web Locks, dentro do lock: um grant recente é reaproveitado. Se esta
+ * aba viu refreshing de outra nos últimos PEER_TTL_MS, espera o grant e,
+ * se ele não chegar, falha fechado sem POST.
+ *
+ * Sem Web Locks, quem não lidera nunca manda claim-ack: republica o
+ * refreshing do líder que já conhece, ou fica calada. Refreshing só é
+ * anunciado por quem está de fato no POST e vence qualquer id. Se ninguém
+ * está no POST, o menor id desempata. Mesmo com ack, o POST espera
+ * CLAIM_COLLISION_MS sem nenhum refreshing. A seguidora espera o grant ou
+ * a falha por até FOLLOWER_GRANT_WAIT_MS.
  */
 
 import {
@@ -539,7 +546,23 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (peerError) {
       throw peerError;
     }
-    return postAndAnnounce();
+    // Refreshing de outra aba ainda vale: espera o grant dela, sem POST.
+    if (livePeerRefreshing()) {
+      return followOrFail();
+    }
+    const id = randomId();
+    attemptId = id;
+    refreshingId = id;
+    try {
+      return await postAndAnnounce();
+    } finally {
+      if (attemptId === id) {
+        attemptId = null;
+      }
+      if (refreshingId === id) {
+        refreshingId = null;
+      }
+    }
   }
 
   async function refreshWithLock(): Promise<AccessGrant> {
