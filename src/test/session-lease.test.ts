@@ -461,6 +461,36 @@ describe('lease único do refresh', () => {
     expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt/);
   });
 
+  it('pagehide antes do fetch apaga o open do dono e a aba nova faz 1 POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    let posts = 0;
+    const owner = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-boot', expiresIn: 30 };
+    }, bus);
+    const dying = owner.refresh().then(
+      () => 'ok',
+      () => 'fail',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readLease()?.phase).toBe('open');
+    expect(posts).toBe(0);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()).toBeNull();
+    owner.reset();
+    const next = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-boot', expiresIn: 30 };
+    }, bus);
+    const grant = next.refresh();
+    await flushJitter();
+    expect((await grant).accessToken).toBe('jwt-boot');
+    expect(posts).toBe(1);
+    expect(await dying).toBe('fail');
+    next.reset();
+  });
+
   it('done sem canal falha fechado e não faz POST', async () => {
     vi.useFakeTimers();
     seed({
@@ -605,10 +635,7 @@ describe('lease único do refresh', () => {
         release();
         const results = await pending;
         expect(posts, `${count} abas`).toBe(1);
-        expect(results.filter((result) => result === 'jwt-degradado')).toHaveLength(1);
-        const closed = results.filter((result) => result instanceof SessionExpiredError);
-        expect(closed).toHaveLength(count - 1);
-        expect(closed.every((error) => (error as SessionExpiredError).confirmed === false)).toBe(true);
+        expect(results.every((result) => result === 'jwt-degradado')).toBe(true);
         for (const item of coordinators) {
           item.reset();
         }
@@ -648,17 +675,63 @@ describe('lease único do refresh', () => {
         },
         bus,
       );
-      const result = await late.refresh().then(
+      const lateResult = late.refresh().then(
         (grant) => grant.accessToken,
         (error: unknown) => error,
       );
+      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(posts).toBe(1);
-      expect(result).toBeInstanceOf(SessionExpiredError);
-      expect((result as SessionExpiredError).confirmed).toBe(false);
       release();
+      expect(await lateResult).toBe('jwt-degradado');
       expect((await pending).accessToken).toBe('jwt-degradado');
+      expect(posts).toBe(1);
       first.reset();
       late.reset();
+    } finally {
+      restore();
+    }
+  });
+
+  it('sem locks e sem storage, a perdedora sem grant falha fechado depois de L e não faz POST', async () => {
+    vi.useFakeTimers();
+    const restore = blockStorage();
+    try {
+      const bus = createBus();
+      let posts = 0;
+      const gate = new Promise<{ accessToken: string; expiresIn: number | null }>(() => undefined);
+      const winner = tab(
+        null,
+        () => {
+          posts += 1;
+          return gate;
+        },
+        bus,
+      );
+      const pendingWinner = winner.refresh();
+      await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS + 20);
+      expect(posts).toBe(1);
+      const loser = tab(
+        null,
+        async () => {
+          posts += 1;
+          return { accessToken: 'jwt-nao', expiresIn: 30 };
+        },
+        bus,
+      );
+      const pendingLoser = loser.refresh().then(
+        () => 'grant',
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(LEASE_OPEN_MS - 1);
+      expect(posts).toBe(1);
+      await vi.advanceTimersByTimeAsync(2);
+      const result = await pendingLoser;
+      expect(result).toBeInstanceOf(SessionExpiredError);
+      expect((result as SessionExpiredError).confirmed).toBe(false);
+      expect(posts).toBe(1);
+      winner.reset();
+      loser.reset();
+      void pendingWinner;
     } finally {
       restore();
     }

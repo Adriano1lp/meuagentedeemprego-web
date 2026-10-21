@@ -119,20 +119,155 @@ async function prepare(page: Page): Promise<void> {
   await mockCurrentUser(page);
 }
 
-async function fulfillOk(route: import('@playwright/test').Route, token = 'jwt-refresh'): Promise<void> {
-  await route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ ...GRANT, access_token: token }),
-  });
-}
-
 async function fulfillDenied(route: import('@playwright/test').Route): Promise<void> {
   await route.fulfill({
     status: 401,
     contentType: 'application/json',
     body: JSON.stringify({ detail: 'Sessao invalida' }),
   });
+}
+
+function readRefreshCookie(header: string | undefined): string {
+  if (!header) {
+    return '';
+  }
+  for (const part of header.split(';')) {
+    const [name, ...rest] = part.trim().split('=');
+    if (name === 'mae_refresh') {
+      return rest.join('=');
+    }
+  }
+  return '';
+}
+
+async function presentedRefreshCookie(route: import('@playwright/test').Route): Promise<string> {
+  const headers = await route.request().allHeaders();
+  const fromAll = readRefreshCookie(headers.cookie);
+  if (fromAll) {
+    return fromAll;
+  }
+  const single = await route.request().headerValue('cookie');
+  return readRefreshCookie(single ?? route.request().headers().cookie);
+}
+
+/**
+ * Rotação estrita: dois POST em voo com o mesmo cookie recebem 401 e a
+ * família é revogada. Um POST seguinte, com o cookie novo, recebe 200.
+ */
+async function installRotation(
+  context: BrowserContext,
+  options: {
+    tokenFor?: (index: number) => string;
+    beforeFulfill?: (index: number, route: import('@playwright/test').Route) => Promise<void>;
+  } = {},
+): Promise<void> {
+  let current = 'lease-e2e';
+  let generation = 0;
+  let revoked = false;
+  let active: { route: import('@playwright/test').Route; cookie: string } | null = null;
+  let index = 0;
+  let admit: Promise<void> = Promise.resolve();
+  const tokenFor = options.tokenFor ?? (() => 'jwt-refresh');
+  await context.route('**/auth/refresh', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    // O WebKit não mostra o Cookie na rota. A leitura síncrona na chegada
+    // ainda é o cookie desta geração: o valor só muda depois do 200.
+    const seenAtArrival = readRefreshCookie(route.request().headers().cookie) || current;
+    const previous = admit;
+    let releaseAdmit = () => {};
+    admit = new Promise<void>((resolve) => {
+      releaseAdmit = resolve;
+    });
+    await previous;
+    let flight: { route: import('@playwright/test').Route; cookie: string } | null = null;
+    let mine = 0;
+    try {
+      if (revoked) {
+        await fulfillDenied(route);
+        return;
+      }
+      const fromWire = await presentedRefreshCookie(route);
+      const presented = fromWire || seenAtArrival;
+      if (presented !== current) {
+        revoked = true;
+        const other = active;
+        active = null;
+        if (other) {
+          try {
+            await fulfillDenied(other.route);
+          } catch {
+            // A resposta concorrente já tinha sido encerrada.
+          }
+        }
+        await fulfillDenied(route);
+        return;
+      }
+      if (active && active.cookie === presented) {
+        revoked = true;
+        const other = active;
+        active = null;
+        try {
+          await fulfillDenied(other.route);
+        } catch {
+          // A resposta concorrente já tinha sido encerrada.
+        }
+        await fulfillDenied(route);
+        return;
+      }
+      mine = index;
+      index += 1;
+      flight = { route, cookie: presented };
+      active = flight;
+    } finally {
+      releaseAdmit();
+    }
+    if (!flight) {
+      return;
+    }
+    try {
+      if (options.beforeFulfill) {
+        await options.beforeFulfill(mine, route);
+      }
+      if (revoked || active !== flight) {
+        return;
+      }
+      const next = `lease-e2e-${generation + 1}`;
+      await route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'set-cookie': `mae_refresh=${next}; Path=/; HttpOnly; SameSite=Lax`,
+        },
+        body: JSON.stringify({ ...GRANT, access_token: tokenFor(mine) }),
+      });
+      generation += 1;
+      current = next;
+      await context.addCookies([
+        {
+          name: 'mae_refresh',
+          value: next,
+          url: ORIGIN,
+          httpOnly: true,
+          sameSite: 'Lax',
+        },
+      ]);
+    } catch {
+      // O 200 não saiu. current continua o cookie que ainda vale.
+    } finally {
+      if (active === flight) {
+        active = null;
+      }
+    }
+  });
+}
+
+async function expectOnProfile(page: Page, timeout = 15_000): Promise<void> {
+  await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout });
+  await expect(page).toHaveURL(/\/app\/perfil$/);
+  expect(page.url(), 'entrar falso').not.toContain('/entrar');
 }
 
 async function leasePhase(page: Page): Promise<string> {
@@ -207,23 +342,11 @@ async function orphan(browser: Browser, withLocks: boolean, counter: Counter): P
         }),
       );
     });
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      await fulfillOk(route);
-    });
+    await installRotation(context);
     const page = await context.newPage();
     await prepare(page);
     await page.goto('/app/perfil');
-    await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+    await expectOnProfile(page);
     expect(await page.evaluate(() => navigator.locks != null)).toBe(withLocks);
     expect(counter.posts).toBe(1);
     const raw = await page.evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
@@ -237,19 +360,7 @@ async function orphan(browser: Browser, withLocks: boolean, counter: Counter): P
 async function leaderDeadBeforeSend(browser: Browser, withLocks: boolean, counter: Counter): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      await fulfillOk(route);
-    });
+    await installRotation(context);
     const leader = await context.newPage();
     await holdFirstJitter(leader);
     await prepare(leader);
@@ -279,28 +390,20 @@ async function ownerDeadAfterFetch(browser: Browser, withLocks: boolean, counter
   let release = () => {};
   let abortInFlight: (() => Promise<void>) | null = null;
   try {
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        release = resolve;
-        abortInFlight = async () => {
-          try {
-            await route.abort();
-          } catch {
-            // O fechamento da aba já derrubou o POST.
-          }
-          resolve();
-        };
-      });
+    await installRotation(context, {
+      beforeFulfill: async (_index, route) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+          abortInFlight = async () => {
+            try {
+              await route.abort();
+            } catch {
+              // O fechamento da aba já derrubou o POST.
+            }
+            resolve();
+          };
+        });
+      },
     });
     const owner = await context.newPage();
     await prepare(owner);
@@ -327,72 +430,20 @@ async function ownerDeadAfterFetch(browser: Browser, withLocks: boolean, counter
   }
 }
 
-/**
- * Segura a primeira resposta até as outras abas entrarem no Web Lock.
- * Sem isso, um POST local instantâneo termina antes da aba lenta abrir
- * o canal e ela trata o done como sem dono.
- */
-async function releaseWhenQueued(pages: Page[], release: () => void): Promise<void> {
-  await Promise.all(
-    pages.map((page) => expect(page.getByTestId('session-boot')).toBeVisible({ timeout: 15_000 })),
-  );
-  const queued = await pages[0]
-    .evaluate(async () => {
-      if (!navigator.locks?.query) {
-        return 0;
-      }
-      const state = await navigator.locks.query();
-      return [...(state.held ?? []), ...(state.pending ?? [])].filter(
-        (lock) => lock.name === 'mae-web-session-refresh',
-      ).length;
-    })
-    .catch(() => 0);
-  if (queued < pages.length) {
-    await pages[0].waitForTimeout(400);
-  }
-  release();
-}
-
 /** Primeiro carregamento simultâneo. Não recarrega a página. */
 async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCount: number): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
-    let seen = 0;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (withLocks && seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      if (withLocks && seen === 1) {
-        await gate;
-      }
-      await fulfillOk(route);
-    });
+    await installRotation(context);
     const pages: Page[] = [];
     for (let index = 0; index < tabCount; index += 1) {
       const page = await context.newPage();
       await prepare(page);
       pages.push(page);
     }
-    const navigations = pages.map((page) => page.goto('/app/perfil'));
-    if (withLocks) {
-      await releaseWhenQueued(pages, release);
-    } else {
-      release();
-    }
-    await Promise.all(navigations);
+    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
     for (const page of pages) {
-      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
-      await expect(page).toHaveURL(/\/app\/perfil$/);
+      await expectOnProfile(page);
     }
     expect(counter.posts).toBe(1);
     const raw = await pages[0].evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
@@ -406,40 +457,19 @@ async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCou
 async function slowPost(browser: Browser, withLocks: boolean, counter: Counter): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
-    let seen = 0;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (withLocks && seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      if (withLocks && seen === 1) {
-        await gate;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5_500));
-      await fulfillOk(route, 'jwt-lento');
+    await installRotation(context, {
+      tokenFor: () => 'jwt-lento',
+      beforeFulfill: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5_500));
+      },
     });
     const pageA = await context.newPage();
     const pageB = await context.newPage();
     await prepare(pageA);
     await prepare(pageB);
-    const navigations = [pageA.goto('/app/perfil'), pageB.goto('/app/perfil')];
-    if (withLocks) {
-      await releaseWhenQueued([pageA, pageB], release);
-    } else {
-      release();
-    }
-    await Promise.all(navigations);
-    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 30_000 });
-    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 30_000 });
+    await Promise.all([pageA.goto('/app/perfil'), pageB.goto('/app/perfil')]);
+    await expectOnProfile(pageA, 30_000);
+    await expectOnProfile(pageB, 30_000);
     expect(counter.posts).toBe(1);
     const raw = await pageA.evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
     expect(raw).not.toMatch(/jwt|eyJ|access_token/i);
@@ -458,21 +488,14 @@ async function logoutDuringSlowPost(browser: Browser, withLocks: boolean, counte
   try {
     let slow = false;
     const authz: string[] = [];
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      if (!slow) {
-        await fulfillOk(route, 'jwt-refresh');
-        return;
-      }
-      await held;
-      try {
-        await fulfillOk(route, 'jwt-velho');
-      } catch {
-        // A navegação da aba já seguiu.
-      }
+    await installRotation(context, {
+      tokenFor: (index) => (index === 0 ? 'jwt-refresh' : 'jwt-velho'),
+      beforeFulfill: async (index) => {
+        if (index === 0 || !slow) {
+          return;
+        }
+        await held;
+      },
     });
     const pageA = await context.newPage();
     const pageB = await context.newPage();
@@ -553,23 +576,11 @@ async function wrongGrant(browser: Browser, withLocks: boolean, counter: Counter
       }, 200);
       window.setTimeout(() => window.clearInterval(timer), 3_600);
     });
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      await fulfillOk(route, 'jwt-epoch-novo');
-    });
+    await installRotation(context, { tokenFor: () => 'jwt-epoch-novo' });
     const page = await context.newPage();
     await prepare(page);
     await page.goto('/app/perfil');
-    await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+    await expectOnProfile(page);
     expect(counter.posts).toBe(1);
     const raw = await page.evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
     expect(raw).not.toMatch(/jwt-errado|jwt|eyJ|access_token/i);
@@ -583,19 +594,7 @@ async function tabsWithoutChannel(browser: Browser, withLocks: boolean, counter:
   const context = await openContext(browser, withLocks, counter);
   try {
     await hideChannel(context);
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      await fulfillOk(route);
-    });
+    await installRotation(context);
     const pages: Page[] = [];
     for (let index = 0; index < 3; index += 1) {
       const page = await context.newPage();
@@ -673,18 +672,8 @@ async function reloadWithinDone(
 ): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
-    let seen = 0;
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (seen > 2) {
-        await fulfillDenied(route);
-        return;
-      }
-      await fulfillOk(route, seen === 1 ? 'jwt-boot' : `jwt-reload-${seen}`);
+    await installRotation(context, {
+      tokenFor: (index) => (index === 0 ? 'jwt-boot' : `jwt-reload-${index + 1}`),
     });
     const pages: Page[] = [];
     for (let index = 0; index < tabCount; index += 1) {
@@ -694,7 +683,7 @@ async function reloadWithinDone(
     }
     await Promise.all(pages.map((page) => page.goto('/app/perfil')));
     for (const page of pages) {
-      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+      await expectOnProfile(page);
     }
     expect(counter.posts).toBe(1);
     const bootPosts = counter.posts;
@@ -729,8 +718,7 @@ async function reloadWithinDone(
       }, { timeout: 30_000 })
       .toBe(true);
     for (const page of pages) {
-      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-      await expect(page).toHaveURL(/\/app\/perfil$/);
+      await expectOnProfile(page);
     }
     expect(counter.posts).toBe(bootPosts + 1);
     const raw = await pages[0].evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
@@ -749,39 +737,14 @@ async function storageBlocked(
   const context = await openContext(browser, withLocks, counter);
   try {
     await blockStorage(context);
-    let seen = 0;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      seen += 1;
-      if (withLocks && seen > 1) {
-        await fulfillDenied(route);
-        return;
-      }
-      if (withLocks && seen === 1) {
-        await gate;
-      }
-      await fulfillOk(route, 'jwt-degradado');
-    });
+    await installRotation(context, { tokenFor: () => 'jwt-degradado' });
     const pages: Page[] = [];
     for (let index = 0; index < tabCount; index += 1) {
       const page = await context.newPage();
       await prepare(page);
       pages.push(page);
     }
-    const navigations = pages.map((page) => page.goto('/app/perfil'));
-    if (withLocks) {
-      await releaseWhenQueued(pages, release);
-    } else {
-      release();
-    }
-    await Promise.all(navigations);
+    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
     expect(
       await pages[0].evaluate(() => {
         try {
@@ -808,24 +771,9 @@ async function storageBlocked(
       }, { timeout: 15_000 })
       .toBe(true);
     expect(counter.posts).toBe(1);
-    if (withLocks) {
-      for (const page of pages) {
-        await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-        await expect(page).toHaveURL(/\/app\/perfil$/);
-      }
-      return;
-    }
-    let onApp = 0;
     for (const page of pages) {
-      const state = await settled(page);
-      if (state === 'app') {
-        await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-        onApp += 1;
-      } else {
-        expectExpiredLogin(page, '/app/perfil');
-      }
+      await expectOnProfile(page);
     }
-    expect(onApp).toBe(1);
   } finally {
     await context.close();
   }

@@ -23,17 +23,17 @@
  *   As outras seguem o lease novo, sem POST.
  * - No pagehide, sem canal, o dono apaga só o próprio done. Com canal o
  *   done fica: apagá-lo no reload põe todas as abas no mint ao mesmo tempo
- *   e a janela entre a releitura e o fetch faz um segundo POST. sending
- *   não é apagado.
+ *   e a janela entre a releitura e o fetch faz um segundo POST.
  * - Nada é gravado nem publicado com loggedOut ou com leaseId velho.
  * - O token não entra no storage.
  * - Sem canal, quem não é dona falha fechado, inclusive num done.
- * - sending nunca é retomado; só um open expirado libera epoch novo.
+ * - sending nunca é retomado. No pagehide, se o fetch ainda não saiu, o
+ *   dono apaga o próprio open ou sending (leaseId e owner seus). Se o
+ *   fetch já saiu, o sending fica.
  * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal.
  * - Sem lock e sem storage: a primeira aba que anuncia no canal coordena e
- *   faz um POST. Qualquer outra falha fechado, com 0 POST. Se duas se
- *   comprometem ao mesmo tempo, as duas falham fechado: o pior caso é
- *   /entrar, nunca um segundo POST.
+ *   faz um POST. A perdedora espera o grant degradado até L e não faz POST.
+ *   Se o grant não chega, falha fechado. O desempate é o anúncio mais cedo.
  */
 
 import {
@@ -210,9 +210,30 @@ function readChannelFactory(
   };
 }
 
+const realSetTimeout = setTimeout;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Cede a vez às mensagens já enfileiradas. No WebKit, com a aba carregada,
+ * o timer do ping pode rodar antes do BroadcastChannel; sem essa pausa o
+ * dono vivo parece morto e a aba abre um POST sequencial.
+ * Com timers falsos (teste) basta um timeout de 0, senão o relógio para.
+ */
+function drainMessages(): Promise<void> {
+  if (setTimeout !== realSetTimeout || typeof MessageChannel === 'undefined') {
+    return new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+  return new Promise((resolve) => {
+    const link = new MessageChannel();
+    link.port1.onmessage = () => resolve();
+    link.port2.postMessage(null);
   });
 }
 
@@ -231,6 +252,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let beatTimer: ReturnType<typeof setInterval> | null = null;
   let grantPulse: ReturnType<typeof setInterval> | null = null;
   let degradedReplyTimer: ReturnType<typeof setTimeout> | null = null;
+  let degradedPulse: ReturnType<typeof setInterval> | null = null;
+  const dispatched = new Set<string>();
   let announced: Announced | null = null;
   let degradedAt = 0;
   let degradedCoordinator = false;
@@ -271,6 +294,13 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (degradedReplyTimer != null) {
       clearTimeout(degradedReplyTimer);
       degradedReplyTimer = null;
+    }
+  }
+
+  function stopDegradedPulse(): void {
+    if (degradedPulse != null) {
+      clearInterval(degradedPulse);
+      degradedPulse = null;
     }
   }
 
@@ -315,11 +345,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (peerId === tabId) {
         continue;
       }
-      const earlier = peer.at < degradedAt || (peer.at === degradedAt && peerId < tabId);
-      if (earlier) {
-        return true;
-      }
-      if (peer.commit && degradedCommitted) {
+      if (peer.at < degradedAt || (peer.at === degradedAt && peerId < tabId)) {
         return true;
       }
     }
@@ -344,6 +370,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
 
   function resetDegraded(): void {
     stopDegradedReply();
+    stopDegradedPulse();
     degradedAt = 0;
     degradedCoordinator = false;
     degradedCommitted = false;
@@ -362,6 +389,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     answeredPlease.clear();
     pleaseIds.clear();
     consumed.clear();
+    dispatched.clear();
     resetDegraded();
     wakeAll();
   }
@@ -787,7 +815,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
       const remaining = cap - now();
       if (remaining <= 0) {
-        return null;
+        if (pingMs == null) {
+          return null;
+        }
+        await drainMessages();
+        return takeGrant(lease.leaseId);
       }
       await interruptible(pingMs == null ? remaining : Math.min(remaining, 50));
     }
@@ -844,6 +876,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   function beginPost(leaseId: string | null, myLife: number): Promise<AccessGrant> {
     postingLeaseId = leaseId;
     if (leaseId) {
+      dispatched.add(leaseId);
       startHeartbeat(leaseId, myLife);
     }
     const pending = postRefresh().then(
@@ -908,7 +941,39 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return { pending: promote(lease, myLife) };
   }
 
-  async function electDegradedCoordinator(myLife: number): Promise<boolean> {
+  function startDegradedPulse(grant: AccessGrant, myLife: number): void {
+    stopDegradedPulse();
+    const deadline = now() + LEASE_OPEN_MS;
+    publishDegradedGrant(grant);
+    degradedPulse = setInterval(() => {
+      if (myLife !== life || isLoggedOutFlag() || now() >= deadline) {
+        stopDegradedPulse();
+        return;
+      }
+      publishDegradedGrant(grant);
+    }, 50);
+  }
+
+  async function waitDegradedGrant(myLife: number): Promise<Outcome> {
+    const deadline = now() + LEASE_OPEN_MS;
+    while (now() < deadline) {
+      if (myLife !== life || isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      const reused = takeDegradedGrant();
+      if (reused) {
+        return { kind: 'grant', grant: reused };
+      }
+      await interruptible(Math.min(50, Math.max(0, deadline - now())));
+    }
+    const last = takeDegradedGrant();
+    if (last && myLife === life && !isLoggedOutFlag()) {
+      return { kind: 'grant', grant: last };
+    }
+    throw new SessionExpiredError(false);
+  }
+
+  async function electDegradedCoordinator(myLife: number): Promise<'coordinate' | 'wait' | AccessGrant> {
     degradedAt = now();
     degradedCommitted = false;
     degradedPeers.set(tabId, { at: degradedAt, commit: false });
@@ -918,8 +983,12 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (myLife !== life || isLoggedOutFlag()) {
         throw new SessionExpiredError(false);
       }
+      const reused = takeDegradedGrant();
+      if (reused) {
+        return reused;
+      }
       if (lostDegradedRace()) {
-        return false;
+        return 'wait';
       }
       if (!degradedCommitted && now() >= commitAt) {
         degradedCommitted = true;
@@ -928,27 +997,32 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       } else {
         publish({ v: 1, type: 'degraded-claim', tabId, at: degradedAt });
       }
-      await sleep(Math.min(50, Math.max(0, deadline - now())));
+      await interruptible(Math.min(50, Math.max(0, deadline - now())));
     }
-    return !lostDegradedRace();
+    const trailing = takeDegradedGrant();
+    if (trailing) {
+      return trailing;
+    }
+    return lostDegradedRace() ? 'wait' : 'coordinate';
   }
 
   /**
-   * Storage ilegível. Com Web Lock o POST termina antes de soltar o lock.
-   * O grant é republicado durante o ping para a aba que ainda está abrindo
-   * o canal. Sem lock, uma aba coordena e as outras falham fechado.
+   * Storage ilegível. Com Web Lock o POST termina antes de soltar o lock
+   * e o grant segue no canal até L. Sem lock, a primeira aba faz um POST
+   * e a perdedora espera esse grant até L, sem POST.
    */
   async function runDegraded(myLife: number): Promise<Outcome> {
     if (myLife !== life || isLoggedOutFlag()) {
       throw new SessionExpiredError(false);
     }
     if (locks) {
-      for (let turn = 0; turn < 10; turn += 1) {
+      const grace = now() + 50;
+      while (now() < grace) {
         const reused = takeDegradedGrant();
         if (reused) {
           return { kind: 'grant', grant: reused };
         }
-        await sleep(0);
+        await interruptible(Math.min(50, Math.max(0, grace - now())));
         if (myLife !== life || isLoggedOutFlag()) {
           throw new SessionExpiredError(false);
         }
@@ -960,20 +1034,24 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           break;
         }
         publishDegradedGrant(grant);
-        await sleep(Math.min(50, Math.max(0, deadline - now())));
+        await interruptible(Math.min(50, Math.max(0, deadline - now())));
       }
       if (myLife !== life || isLoggedOutFlag()) {
         throw new SessionExpiredError(false);
       }
+      startDegradedPulse(grant, myLife);
       return { kind: 'grant', grant };
     }
-    const coordinates = await electDegradedCoordinator(myLife);
-    if (!coordinates || lostDegradedRace()) {
-      throw new SessionExpiredError(false);
+    const election = await electDegradedCoordinator(myLife);
+    if (election !== 'coordinate' && election !== 'wait') {
+      return { kind: 'grant', grant: election };
+    }
+    if (election === 'wait' || lostDegradedRace()) {
+      return waitDegradedGrant(myLife);
     }
     degradedCoordinator = true;
     const grant = await beginPost(null, myLife);
-    publishDegradedGrant(grant);
+    startDegradedPulse(grant, myLife);
     return { kind: 'grant', grant };
   }
 
@@ -1180,7 +1258,41 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
+  function releaseUnsentClaim(): void {
+    const current = readLease();
+    if (!current || current.owner !== tabId) {
+      return;
+    }
+    if (current.phase !== 'open' && current.phase !== 'sending') {
+      return;
+    }
+    if (dispatched.has(current.leaseId)) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(SESSION_LEASE_KEY);
+      if (!raw) {
+        return;
+      }
+      const again = JSON.parse(raw) as Partial<SessionLease>;
+      if (
+        again.owner !== tabId ||
+        again.leaseId !== current.leaseId ||
+        (again.phase !== 'open' && again.phase !== 'sending')
+      ) {
+        return;
+      }
+      if (dispatched.has(current.leaseId)) {
+        return;
+      }
+      window.localStorage.removeItem(SESSION_LEASE_KEY);
+    } catch {
+      // Storage bloqueado: não há lease para apagar.
+    }
+  }
+
   function onPageHide(): void {
+    releaseUnsentClaim();
     releaseOwnDone();
   }
 
