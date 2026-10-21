@@ -50,14 +50,19 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
   const generating = phase.kind === 'loading';
   const busy = generating || downloading;
 
+  // O loading sai do DOM com o foco e o botão volta a ser habilitado.
+  // O navegador devolve o foco num task seguinte. O próximo task ganha essa corrida.
   useEffect(() => {
-    if (phase.kind === 'loading') {
-      loadingRef.current?.focus();
-    } else if (phase.kind === 'ready') {
-      resultRef.current?.focus();
-    } else if (phase.kind === 'error' || phase.kind === 'quota') {
-      errorRef.current?.focus();
-    }
+    const timer = window.setTimeout(() => {
+      if (phase.kind === 'loading') {
+        loadingRef.current?.focus();
+      } else if (phase.kind === 'ready') {
+        resultRef.current?.focus();
+      } else if (phase.kind === 'error' || phase.kind === 'quota') {
+        errorRef.current?.focus();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [phase.kind, focusTick]);
 
   function showQuota() {

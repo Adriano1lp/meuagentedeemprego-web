@@ -5,6 +5,9 @@
  * O reenvio do boot e do evento online espera um intervalo que dobra até um
  * teto. Não há loop: sem um novo boot ou online, nada é agendado de novo.
  * O clique em Sair não entra nesse intervalo.
+ * Com o localStorage bloqueado, o logout fica na memória desta aba. O
+ * evento online reenvia o POST no mesmo backoff. Um login novo zera a
+ * memória e não reenvia.
  */
 
 import { requestLogout } from '../api/sessionHttp';
@@ -18,6 +21,9 @@ export const LOGOUT_RETRY_BASE_MS = 1_000;
 export const LOGOUT_RETRY_MAX_MS = 30_000;
 
 const RETRY_TTL_MS = 5_000;
+
+/** Logout desta aba quando o storage não guarda a flag. */
+let memoryLoggedOut = false;
 
 let inflight: Promise<void> | null = null;
 let peerRetryAt: number | null = null;
@@ -33,28 +39,30 @@ export function isLoggedOutFlag(): boolean {
   try {
     return window.localStorage.getItem(LOGGED_OUT_KEY) === LOGGED_OUT_VALUE;
   } catch {
-    return false;
+    return memoryLoggedOut;
   }
 }
 
 /** Todo logout, com ou sem rede. Síncrono, antes do POST. */
 export function markLoggedOut(): void {
+  memoryLoggedOut = true;
   try {
     window.localStorage.setItem(LOGGED_OUT_KEY, LOGGED_OUT_VALUE);
   } catch {
-    // Storage indisponível: a aba ainda limpa a memória.
+    // Storage bloqueado: a memória da aba segura o reenvio.
   }
 }
 
 /** Só depois de login ou cadastro explícito bem-sucedido. */
 export function clearLoggedOutFlag(): void {
+  memoryLoggedOut = false;
   failures = 0;
   notBefore = 0;
   cancelDeferred();
   try {
     window.localStorage.removeItem(LOGGED_OUT_KEY);
   } catch {
-    // Sem storage, não há flag para limpar.
+    // Sem storage, a memória já foi limpa.
   }
 }
 
@@ -257,6 +265,7 @@ export function retryLoggedOut(
 }
 
 export function resetLoggedOutForTests(): void {
+  memoryLoggedOut = false;
   inflight = null;
   peerRetryAt = null;
   lastSentId = null;

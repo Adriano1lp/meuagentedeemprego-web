@@ -13,6 +13,7 @@ import {
 import { createMemoryTokenStore } from '../api/token';
 import {
   clearLoggedOutFlag,
+  isLoggedOutFlag,
   LOGGED_OUT_KEY,
   LOGOUT_RETRY_BASE_MS,
   LOGOUT_RETRY_MAX_MS,
@@ -1623,6 +1624,56 @@ describe('backoff do reenvio de logout', () => {
       expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
     } finally {
       restore();
+    }
+  });
+
+  it('sem storage, o online reenvia com backoff e o login novo não reenvia', async () => {
+    vi.useFakeTimers();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    try {
+      markLoggedOut();
+      expect(isLoggedOutFlag()).toBe(true);
+      let posts = 0;
+      const fetchImpl = vi.fn(async () => {
+        posts += 1;
+        return new Response(null, { status: 500 });
+      });
+
+      await retryLoggedOut('https://api.example.test', fetchImpl, true);
+      expect(posts).toBe(1);
+
+      // O clique não entra no backoff. O primeiro reenvio do online sai na hora.
+      await retryLoggedOut('https://api.example.test', fetchImpl);
+      expect(posts).toBe(2);
+
+      const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const delay of delays) {
+        const before = posts;
+        const pending = retryLoggedOut('https://api.example.test', fetchImpl);
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(posts).toBe(before);
+        await vi.advanceTimersByTimeAsync(1);
+        await pending;
+        expect(posts).toBe(before + 1);
+      }
+
+      clearLoggedOutFlag();
+      expect(isLoggedOutFlag()).toBe(false);
+      await retryLoggedOut('https://api.example.test', fetchImpl);
+      await vi.advanceTimersByTimeAsync(LOGOUT_RETRY_MAX_MS);
+      expect(posts).toBe(2 + delays.length);
+    } finally {
+      setItem.mockRestore();
+      getItem.mockRestore();
+      removeItem.mockRestore();
     }
   });
 });
