@@ -290,11 +290,19 @@ test('storage bloqueado ainda envia o logout e o F5 em /app cai em /entrar', asy
     const deny = () => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     };
-    for (const name of ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const) {
-      Object.defineProperty(window.localStorage, name, {
-        configurable: true,
-        value: deny,
-      });
+    const names = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+    const targets = [window.localStorage, Object.getPrototypeOf(window.localStorage)];
+    for (const target of targets) {
+      for (const name of names) {
+        try {
+          Object.defineProperty(target, name, {
+            configurable: true,
+            value: deny,
+          });
+        } catch {
+          // No WebKit o método da instância pode não ser configurável.
+        }
+      }
     }
   });
 
