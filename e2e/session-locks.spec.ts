@@ -298,3 +298,119 @@ async function orphanBoot(
     await context.close();
   }
 }
+
+test('aba travada no refresh: a aba nova restaura sem passar por /entrar', async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  for (const mode of ['com-locks', 'sem-locks'] as const) {
+    await hungRefreshNewTab(browser, mode, testInfo);
+  }
+});
+
+async function hungRefreshNewTab(
+  browser: Browser,
+  mode: 'com-locks' | 'sem-locks',
+  testInfo: TestInfo,
+): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    await context.addCookies([
+      {
+        name: 'mae_refresh',
+        value: `trava-${mode}`,
+        url: 'http://127.0.0.1:5173',
+      },
+    ]);
+    if (mode === 'sem-locks') {
+      await context.addInitScript(() => {
+        const block = {
+          configurable: true,
+          get: () => undefined,
+        };
+        try {
+          Object.defineProperty(navigator, 'locks', block);
+        } catch {
+          Object.defineProperty(Navigator.prototype, 'locks', block);
+        }
+      });
+    }
+
+    let phase: 'holding' | 'dead' = 'holding';
+    let releaseHeld = () => {};
+    let revoked = false;
+    let posts = 0;
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      posts += 1;
+      if (phase === 'holding' && posts > 1) {
+        revoked = true;
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Sessao invalida' }),
+        });
+        return;
+      }
+      if (phase === 'dead') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(grant),
+        });
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        releaseHeld = () => {
+          phase = 'dead';
+          resolve();
+        };
+      });
+      try {
+        await route.abort();
+      } catch {
+        // A aba travada fechou com o POST no ar.
+      }
+    });
+
+    const stuck = await context.newPage();
+    await prepare(stuck);
+    const stuckNav = stuck.goto('/app/perfil');
+    await expect.poll(() => posts, { timeout: 15_000 }).toBe(1);
+    await expect
+      .poll(async () => stuck.evaluate(() => localStorage.getItem('mae.sessionRefresh')), {
+        timeout: 5_000,
+      })
+      .toContain('tabId');
+    releaseHeld();
+    await stuck.close({ runBeforeUnload: true });
+    await Promise.allSettled([stuckNav]);
+
+    const fresh = await context.newPage();
+    await prepare(fresh);
+    const urls: string[] = [];
+    fresh.on('framenavigated', (frame) => {
+      if (frame === fresh.mainFrame()) {
+        urls.push(frame.url());
+      }
+    });
+    await fresh.goto('/app/perfil');
+    await expect(fresh.getByTestId('profile-name')).toHaveText('Ada Lovelace', {
+      timeout: 15_000,
+    });
+    await expect(fresh).toHaveURL(/\/app\/perfil$/);
+    expect(urls.join(' '), mode).not.toContain('/entrar');
+    await expect(fresh.getByText('Sua sessão expirou')).toHaveCount(0);
+    expect(revoked, mode).toBe(false);
+    expect(posts, mode).toBe(2);
+    const mark = await fresh.evaluate(() => localStorage.getItem('mae.sessionRefresh'));
+    expect(mark ?? '', mode).not.toMatch(/jwt|eyJ|access_token/i);
+    await fresh.screenshot({
+      path: testInfo.outputPath(`aba-nova-sem-entrar-${mode}.png`),
+      fullPage: true,
+    });
+  } finally {
+    await context.close();
+  }
+}

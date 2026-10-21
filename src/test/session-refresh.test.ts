@@ -29,6 +29,7 @@ import {
   getSessionCoordinator,
   PEER_TTL_MS,
   REFRESH_LOCK_NAME,
+  REFRESH_MARK_HEARTBEAT_MS,
   SESSION_REFRESH_MARK_KEY,
   setRefreshImplementation,
   type SessionCoordinator,
@@ -857,6 +858,164 @@ describe('single-flight do refresh', () => {
     expect(posts).toBe(1);
     expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-sem-lock', 'jwt-sem-lock']);
     expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '').not.toContain('aba-morta');
+  });
+
+  it('sem locks e sem canal, POST de 8s não deixa a outra aba repetir', async () => {
+    vi.useFakeTimers();
+    let release: (grant: { accessToken: string; expiresIn: number }) => void = () => {};
+    let posts = 0;
+    const leader = createSessionCoordinator({
+      locks: null,
+      createChannel: () => null,
+      drain: async () => {},
+      postRefresh: () => {
+        posts += 1;
+        if (posts > 1) {
+          throw new SessionExpiredError(true);
+        }
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    const follower = createSessionCoordinator({
+      locks: null,
+      createChannel: () => null,
+      drain: async () => {},
+      postRefresh: () => {
+        posts += 1;
+        throw new SessionExpiredError(true);
+      },
+    });
+    leader.subscribe(() => {});
+    follower.subscribe(() => {});
+
+    const leaderTask = leader.refresh().then(
+      () => 'ok' as const,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    const during = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
+      tabId?: string;
+      startedAt?: number;
+    };
+    expect(during.tabId).toEqual(expect.any(String));
+    expect(during.startedAt).toEqual(expect.any(Number));
+
+    await vi.advanceTimersByTimeAsync(PEER_TTL_MS + 1_000);
+    expect(posts).toBe(1);
+    const still = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
+      tabId?: string;
+      startedAt?: number;
+    };
+    expect(still.tabId).toBe(during.tabId);
+    expect(still.startedAt).toBeGreaterThan(during.startedAt ?? 0);
+
+    const followerTask = follower.refresh().then(
+      () => 'ok' as const,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(REFRESH_MARK_HEARTBEAT_MS + 500);
+    expect(posts).toBe(1);
+
+    release({ accessToken: 'jwt-lento', expiresIn: 90 });
+    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS + REFRESH_MARK_HEARTBEAT_MS);
+    expect(posts).toBe(1);
+    expect(await leaderTask).toBe('ok');
+    const followerResult = await followerTask;
+    expect(followerResult).toBeInstanceOf(SessionExpiredError);
+    expect(followerResult instanceof SessionExpiredError && followerResult.confirmed).toBe(false);
+    leader.reset();
+    follower.reset();
+  });
+
+  it('sem locks e sem canal, marca parada é de aba morta e só há um POST', async () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem(
+      SESSION_REFRESH_MARK_KEY,
+      JSON.stringify({ tabId: 'aba-morta', startedAt: Date.now() }),
+    );
+    let posts = 0;
+    const coordinator = createSessionCoordinator({
+      locks: null,
+      createChannel: () => null,
+      drain: async () => {},
+      postRefresh: async () => {
+        posts += 1;
+        if (posts > 1) {
+          throw new SessionExpiredError(true);
+        }
+        return { accessToken: 'jwt-morta', expiresIn: 30 };
+      },
+    });
+    const pending = coordinator.refresh();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(posts).toBe(0);
+    await vi.advanceTimersByTimeAsync(REFRESH_MARK_HEARTBEAT_MS + 500);
+    const grant = await pending;
+    expect(posts).toBe(1);
+    expect(grant.accessToken).toBe('jwt-morta');
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '').not.toContain('aba-morta');
+    coordinator.reset();
+  });
+
+  it('com locks, refreshing antigo no canal não esconde o grant e não repete o POST', async () => {
+    vi.useFakeTimers();
+    let claimsSeen = 0;
+    const bus = createBus((data) => {
+      if (data.type === 'grant-please') {
+        claimsSeen += 1;
+        return false;
+      }
+      return data.type === 'grant' && claimsSeen === 0;
+    });
+    const locks = sharedLocks();
+    let posts = 0;
+    let release: (grant: { accessToken: string; expiresIn: number }) => void = () => {};
+    const leader = createSessionCoordinator({
+      locks: locks as unknown as LockManager,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh: () => {
+        posts += 1;
+        if (posts > 1) {
+          throw new SessionExpiredError(true);
+        }
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+    const follower = createSessionCoordinator({
+      locks: locks as unknown as LockManager,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh: () => {
+        posts += 1;
+        throw new SessionExpiredError(true);
+      },
+    });
+    leader.subscribe(() => {});
+    follower.subscribe(() => {});
+
+    const leaderTask = leader.refresh().then(
+      () => 'ok' as const,
+      (error: unknown) => error,
+    );
+    const followerTask = follower.refresh().then(
+      (grant) => grant.accessToken,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    release({ accessToken: 'jwt-redelivery', expiresIn: 90 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(posts).toBe(1);
+    expect(await leaderTask).toBe('ok');
+    expect(await followerTask).toBe('jwt-redelivery');
+    leader.reset();
+    follower.reset();
   });
 
   it('sem locks, dono vivo que responde o ping segura o segundo POST', async () => {

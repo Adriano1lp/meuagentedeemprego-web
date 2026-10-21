@@ -756,8 +756,14 @@ describe('Feature: Download do CV no historico', () => {
     expect(openWindow).not.toHaveBeenCalled();
     expect(panel.querySelector('a')).toBeNull();
 
-    expect(setItem).not.toHaveBeenCalled();
-    expect(window.localStorage.length).toBe(0);
+    for (const call of setItem.mock.calls) {
+      expect(call[0]).toBe('mae.sessionRefresh');
+      expect(String(call[1])).not.toMatch(/jwt|eyJ|access_token|%PDF|cdn\.public/i);
+    }
+    expect(window.localStorage.length).toBeLessThanOrEqual(1);
+    if (window.localStorage.length === 1) {
+      expect(window.localStorage.key(0)).toBe('mae.sessionRefresh');
+    }
     expect(window.sessionStorage.length).toBe(0);
     expect(idbOpens).toEqual([]);
     const stored = `${window.localStorage} ${window.sessionStorage}`;
