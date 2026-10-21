@@ -242,7 +242,11 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
-    expect(document.activeElement).toBe(screen.getByTestId('cover-letter-result'));
+    // O foco do resultado é um task depois do commit: o loading desmonta com o foco
+    // e o botão habilitado de novo. Sem este await a leitura pega o botão ou o body.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('cover-letter-result'));
+    });
   });
 
   it('C1 teclado: Enter no botao gera a carta', async () => {
@@ -379,7 +383,9 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
     expect(screen.getByTestId('history-item-title')).toHaveTextContent(
       'Desenvolvedor Flutter',
     );
-    expect(document.activeElement).toBe(error);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(error);
+    });
 
     await user.click(screen.getByTestId('cover-letter-retry'));
     await waitFor(() => {

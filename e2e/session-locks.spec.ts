@@ -1,4 +1,5 @@
 import { expectExpiredLogin, mockAuthSuccess, mockCurrentUser, mockLegalRoutes } from './helpers';
+import type { TestInfo } from '@playwright/test';
 import { expect, test, type Browser, type Page } from './fixtures';
 
 const grant = {
@@ -178,6 +179,121 @@ async function f5Tabs(browser: Browser, tabCount: number): Promise<void> {
     }
     const mark = await pages[0].evaluate(() => localStorage.getItem('mae.sessionRefresh'));
     expect(mark ?? '').not.toMatch(/jwt|eyJ|access_token/i);
+  } finally {
+    await context.close();
+  }
+}
+
+test('marca órfã no boot não vai para /entrar', async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  for (const mode of ['com-locks', 'sem-locks'] as const) {
+    for (const tabs of [1, 2]) {
+      await orphanBoot(browser, mode, tabs, testInfo);
+    }
+  }
+});
+
+async function orphanBoot(
+  browser: Browser,
+  mode: 'com-locks' | 'sem-locks',
+  tabs: number,
+  testInfo: TestInfo,
+): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    await context.addCookies([
+      {
+        name: 'mae_refresh',
+        value: `orfa-${mode}-${tabs}`,
+        url: 'http://127.0.0.1:5173',
+      },
+    ]);
+    if (mode === 'sem-locks') {
+      await context.addInitScript(() => {
+        const block = {
+          configurable: true,
+          get: () => undefined,
+        };
+        try {
+          Object.defineProperty(navigator, 'locks', block);
+        } catch {
+          Object.defineProperty(Navigator.prototype, 'locks', block);
+        }
+      });
+    }
+
+    const seeder = await context.newPage();
+    await seeder.route('**/*', async (route) => {
+      if (route.request().resourceType() === 'document') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: '<!doctype html><title>marca</title>',
+        });
+        return;
+      }
+      await route.abort();
+    });
+    await seeder.goto('/');
+    await seeder.evaluate(() => {
+      localStorage.setItem(
+        'mae.sessionRefresh',
+        JSON.stringify({ tabId: 'aba-morta-sem-dono', startedAt: Date.now() }),
+      );
+    });
+    await seeder.close();
+
+    let revoked = false;
+    let posts = 0;
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      posts += 1;
+      if (posts > 1) {
+        revoked = true;
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Sessao invalida' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(grant),
+      });
+    });
+
+    const pages: Page[] = [];
+    for (let index = 0; index < tabs; index += 1) {
+      const page = await context.newPage();
+      await prepare(page);
+      pages.push(page);
+    }
+    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    for (const page of pages) {
+      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', {
+        timeout: 15_000,
+      });
+      await expect(page).toHaveURL(/\/app\/perfil$/);
+      expect(page.url(), `${mode} ${tabs}`).not.toContain('/entrar');
+    }
+    const hasLocks = await pages[0].evaluate(() => navigator.locks != null);
+    expect(hasLocks, mode).toBe(mode === 'com-locks');
+    expect(posts, `${mode} ${tabs} abas`).toBe(1);
+    expect(revoked, `${mode} ${tabs} abas`).toBe(false);
+    const mark = await pages[0].evaluate(() => localStorage.getItem('mae.sessionRefresh'));
+    expect(mark ?? '', `${mode} ${tabs}`).not.toContain('aba-morta-sem-dono');
+    expect(mark ?? '', `${mode} ${tabs}`).not.toMatch(/jwt|eyJ|access_token/i);
+    if (tabs === 1) {
+      await pages[0].screenshot({
+        path: testInfo.outputPath(`marca-orfa-${mode}.png`),
+        fullPage: true,
+      });
+    }
   } finally {
     await context.close();
   }

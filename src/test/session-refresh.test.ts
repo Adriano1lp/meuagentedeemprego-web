@@ -13,6 +13,7 @@ import {
 import { createMemoryTokenStore } from '../api/token';
 import {
   clearLoggedOutFlag,
+  isLoggedOutFlag,
   LOGGED_OUT_KEY,
   LOGOUT_RETRY_BASE_MS,
   LOGOUT_RETRY_MAX_MS,
@@ -26,6 +27,7 @@ import {
   createSessionCoordinator,
   FOLLOWER_GRANT_WAIT_MS,
   getSessionCoordinator,
+  PEER_TTL_MS,
   REFRESH_LOCK_NAME,
   SESSION_REFRESH_MARK_KEY,
   setRefreshImplementation,
@@ -126,6 +128,107 @@ function stealableLocks() {
     },
     killHolder() {
       current?.release();
+    },
+  };
+}
+
+/** Locks por nome, com query() para o lock de presença da aba. */
+function presenceLocks() {
+  const queues = new Map<string, Array<() => void>>();
+  const held = new Set<{ name: string; abandon: () => void }>();
+
+  function has(name: string): boolean {
+    for (const entry of held) {
+      if (entry.name === name) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function pump(name: string): void {
+    if (has(name)) {
+      return;
+    }
+    queues.get(name)?.shift()?.();
+  }
+
+  return {
+    request(
+      name: string,
+      optionsOrCallback: ((lock: null) => unknown) | { mode?: string },
+      maybeCallback?: (lock: null) => unknown,
+    ) {
+      const callback =
+        typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      if (!callback) {
+        return Promise.reject(new Error('callback ausente'));
+      }
+      return new Promise((resolve, reject) => {
+        const start = () => {
+          let dropped = false;
+          const entry = {
+            name,
+            abandon: () => {
+              if (dropped) {
+                return;
+              }
+              dropped = true;
+              held.delete(entry);
+              reject(new Error('aba fechada'));
+            },
+          };
+          held.add(entry);
+          void Promise.resolve()
+            .then(() => callback(null))
+            .then(
+              (value) => {
+                if (dropped) {
+                  return;
+                }
+                held.delete(entry);
+                resolve(value);
+                pump(name);
+              },
+              (error: unknown) => {
+                if (dropped) {
+                  return;
+                }
+                held.delete(entry);
+                reject(error);
+                pump(name);
+              },
+            );
+        };
+        if (has(name)) {
+          const queue = queues.get(name) ?? [];
+          queue.push(start);
+          queues.set(name, queue);
+          return;
+        }
+        start();
+      });
+    },
+    query() {
+      return Promise.resolve({
+        held: [...held].map((entry) => ({
+          name: entry.name,
+          mode: 'exclusive' as const,
+          clientId: 'aba-teste',
+        })),
+        pending: [] as Array<{ name: string; mode: 'exclusive'; clientId: string }>,
+      });
+    },
+    kill() {
+      for (const entry of [...held]) {
+        entry.abandon();
+      }
+      for (const [name, queue] of queues) {
+        if (has(name)) {
+          continue;
+        }
+        queue.shift()?.();
+      }
     },
   };
 }
@@ -563,6 +666,240 @@ describe('single-flight do refresh', () => {
       expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).not.toBe(raw);
       coordinator.reset();
     }
+  });
+
+  it('com locks, marca órfã no boot é descartada e a aba renova sozinha', async () => {
+    const locks = presenceLocks();
+    window.localStorage.setItem(
+      SESSION_REFRESH_MARK_KEY,
+      JSON.stringify({ tabId: 'aba-morta', startedAt: Date.now() }),
+    );
+    let posts = 0;
+    const coordinator = createSessionCoordinator({
+      locks: locks as unknown as LockManager,
+      createChannel: () => null,
+      drain: async () => {},
+      postRefresh: async () => {
+        posts += 1;
+        const during = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '';
+        expect(during).not.toContain('aba-morta');
+        expect(during).not.toMatch(/jwt|eyJ|access/i);
+        return { accessToken: 'jwt-orfa', expiresIn: 90 };
+      },
+    });
+
+    const grant = await coordinator.refresh();
+    expect(posts).toBe(1);
+    expect(grant.accessToken).toBe('jwt-orfa');
+    const stored = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
+      at?: number;
+      tabId?: string;
+    };
+    expect(stored.tabId).toBeUndefined();
+    expect(typeof stored.at).toBe('number');
+    expect(JSON.stringify(stored)).not.toMatch(/jwt|eyJ|access/i);
+    coordinator.reset();
+  });
+
+  it('com locks, marca expirada ou tabId vazio não segura o refresh', async () => {
+    const locks = presenceLocks();
+    const shapes = [
+      { tabId: 'aba-velha', startedAt: Date.now() - PEER_TTL_MS - 50 },
+      { tabId: '', startedAt: Date.now() },
+      { tabId: '   ', startedAt: Date.now() },
+      { at: Date.now() - PEER_TTL_MS - 50 },
+    ];
+
+    for (const stale of shapes) {
+      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, JSON.stringify(stale));
+      let posts = 0;
+      const coordinator = createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => null,
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          const during = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '';
+          expect(during).not.toContain('aba-velha');
+          return { accessToken: 'jwt-expirada', expiresIn: 30 };
+        },
+      });
+      const grant = await coordinator.refresh();
+      expect(posts).toBe(1);
+      expect(grant.accessToken).toBe('jwt-expirada');
+      coordinator.reset();
+    }
+  });
+
+  it('com locks, duas abas e marca órfã fazem um único POST', async () => {
+    const locks = presenceLocks();
+    const bus = createBus();
+    window.localStorage.setItem(
+      SESSION_REFRESH_MARK_KEY,
+      JSON.stringify({ tabId: 'aba-morta', startedAt: Date.now() }),
+    );
+    let posts = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          await gate;
+          return { accessToken: 'jwt-uma-vez', expiresIn: 40 };
+        },
+      });
+    }
+
+    const tabA = makeTab();
+    const tabB = makeTab();
+    const pending = Promise.all([tabA.refresh(), tabB.refresh()]);
+    await vi.waitFor(() => {
+      expect(posts).toBe(1);
+    });
+    release();
+    const grants = await pending;
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-uma-vez', 'jwt-uma-vez']);
+    expect(JSON.stringify(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY))).not.toMatch(
+      /aba-morta|jwt|eyJ/,
+    );
+    tabA.reset();
+    tabB.reset();
+  });
+
+  it('com locks, quem viu o dono vivo não renova se ele morre no POST', async () => {
+    vi.useFakeTimers();
+    const locks = presenceLocks();
+    const bus = createBus((data) => data.type === 'refreshing' || data.type === 'grant');
+    let posts = 0;
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: locks as unknown as LockManager,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          return new Promise(() => {});
+        },
+      });
+    }
+
+    const leader = makeTab();
+    const survivor = makeTab();
+    leader.subscribe(() => {});
+    survivor.subscribe(() => {});
+    const leaderResult = leader.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toContain('tabId');
+
+    const survivorResult = survivor.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    locks.kill();
+    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS);
+    await leaderResult;
+    const error = await survivorResult;
+    expect(error).toBeInstanceOf(SessionExpiredError);
+    expect((error as SessionExpiredError).confirmed).toBe(false);
+    expect(posts).toBe(1);
+    leader.reset();
+    survivor.reset();
+  });
+
+  it('sem locks, marca órfã é descartada e duas abas fazem um POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    window.localStorage.setItem(
+      SESSION_REFRESH_MARK_KEY,
+      JSON.stringify({ tabId: 'aba-morta', startedAt: Date.now() }),
+    );
+    let posts = 0;
+
+    function makeTab(): SessionCoordinator {
+      return createSessionCoordinator({
+        locks: null,
+        createChannel: () => bus.channel(),
+        drain: async () => {},
+        postRefresh: async () => {
+          posts += 1;
+          if (posts > 1) {
+            throw new SessionExpiredError(true);
+          }
+          return { accessToken: 'jwt-sem-lock', expiresIn: 20 };
+        },
+      });
+    }
+
+    const pending = Promise.all([makeTab().refresh(), makeTab().refresh()]);
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS * 2 + CLAIM_COLLISION_MS + 50);
+    const grants = await pending;
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-sem-lock', 'jwt-sem-lock']);
+    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '').not.toContain('aba-morta');
+  });
+
+  it('sem locks, dono vivo que responde o ping segura o segundo POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    const locks = presenceLocks();
+    let posts = 0;
+    const leader = createSessionCoordinator({
+      locks: locks as unknown as LockManager,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh: async () => {
+        posts += 1;
+        return new Promise(() => {});
+      },
+    });
+    const follower = createSessionCoordinator({
+      locks: null,
+      createChannel: () => bus.channel(),
+      drain: async () => {},
+      postRefresh: async () => {
+        posts += 1;
+        return { accessToken: 'jwt-nao', expiresIn: 20 };
+      },
+    });
+    leader.subscribe(() => {});
+    follower.subscribe(() => {});
+    const leaderResult = leader.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts).toBe(1);
+    const followerResult = follower.refresh().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + FOLLOWER_GRANT_WAIT_MS);
+    const error = await followerResult;
+    expect(error).toBeInstanceOf(SessionExpiredError);
+    expect(posts).toBe(1);
+    leader.reset();
+    follower.reset();
   });
 
   it('com locks e storage bloqueado, o canal sozinho continua com um POST', async () => {
@@ -1623,6 +1960,56 @@ describe('backoff do reenvio de logout', () => {
       expect(window.localStorage.getItem(LOGGED_OUT_KEY)).toBe('1');
     } finally {
       restore();
+    }
+  });
+
+  it('sem storage, o online reenvia com backoff e o login novo não reenvia', async () => {
+    vi.useFakeTimers();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage bloqueado');
+    });
+    try {
+      markLoggedOut();
+      expect(isLoggedOutFlag()).toBe(true);
+      let posts = 0;
+      const fetchImpl = vi.fn(async () => {
+        posts += 1;
+        return new Response(null, { status: 500 });
+      });
+
+      await retryLoggedOut('https://api.example.test', fetchImpl, true);
+      expect(posts).toBe(1);
+
+      // O clique não entra no backoff. O primeiro reenvio do online sai na hora.
+      await retryLoggedOut('https://api.example.test', fetchImpl);
+      expect(posts).toBe(2);
+
+      const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const delay of delays) {
+        const before = posts;
+        const pending = retryLoggedOut('https://api.example.test', fetchImpl);
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(posts).toBe(before);
+        await vi.advanceTimersByTimeAsync(1);
+        await pending;
+        expect(posts).toBe(before + 1);
+      }
+
+      clearLoggedOutFlag();
+      expect(isLoggedOutFlag()).toBe(false);
+      await retryLoggedOut('https://api.example.test', fetchImpl);
+      await vi.advanceTimersByTimeAsync(LOGOUT_RETRY_MAX_MS);
+      expect(posts).toBe(2 + delays.length);
+    } finally {
+      setItem.mockRestore();
+      getItem.mockRestore();
+      removeItem.mockRestore();
     }
   });
 });

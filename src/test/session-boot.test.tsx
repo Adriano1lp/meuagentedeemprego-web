@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOGOUT_TIMEOUT_MS } from '../api/sessionHttp';
 import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
-import { LOGGED_OUT_KEY } from '../auth/loggedOut';
+import { LOGGED_OUT_KEY, resetLoggedOutForTests } from '../auth/loggedOut';
 import {
   CLAIM_COLLISION_MS,
   CLAIM_CONFIRM_MS,
@@ -965,12 +965,134 @@ describe('flag mae.loggedOut', () => {
       cleanup();
       resetReturnToMemory();
       resetSessionRuntimeForTests();
+      // F5 de verdade zera a memória da aba. O remount no jsdom não zera sozinho.
+      resetLoggedOutForTests();
       renderAt('/app', fetchImpl);
       expect(await screen.findByTestId('login-submit')).toBeInTheDocument();
       expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
       expect(screen.queryByTestId('home-shell')).not.toBeInTheDocument();
       expect(refreshPosts).toBeGreaterThan(refreshBeforeLogout);
       expect(logoutPosts).toBe(1);
+
+    } finally {
+      for (const item of saved) {
+        if (item.desc) {
+          Object.defineProperty(proto, item.name, item.desc);
+        }
+      }
+    }
+  });
+
+  it('logout offline sem storage reenvia no online e o login novo corta o reenvio', async () => {
+    const storage = window.localStorage;
+    const proto = Storage.prototype;
+    const names = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+    const saved = names.map((name) => ({
+      name,
+      desc: Object.getOwnPropertyDescriptor(proto, name),
+    }));
+    const deny = () => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    };
+    for (const item of saved) {
+      const original = item.desc?.value as ((this: Storage, ...args: unknown[]) => unknown) | undefined;
+      Object.defineProperty(proto, item.name, {
+        configurable: true,
+        writable: true,
+        value(this: Storage, ...args: unknown[]) {
+          if (this === storage) {
+            deny();
+          }
+          return original?.apply(this, args);
+        },
+      });
+    }
+
+    let offline = true;
+    let logoutPosts = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/auth/logout')) {
+        logoutPosts += 1;
+        expect(init?.credentials).toBe('include');
+        expect(new Headers(init?.headers).get('X-MAE-CSRF')).toBe('1');
+        if (offline) {
+          throw new TypeError('Failed to fetch');
+        }
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes('/auth/login')) {
+        return json({
+          access_token: 'jwt-login',
+          token_type: 'bearer',
+          expires_in: 600,
+          user: userBody,
+        });
+      }
+      if (url.includes('/auth/refresh')) {
+        return json({ detail: 'sem sessao' }, 401);
+      }
+      if (url.includes('/legal/terms')) {
+        return new Response('Texto vigente de Termos de uso v1.0', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        });
+      }
+      if (url.includes('/legal/privacy')) {
+        return new Response('Texto vigente de Politica de privacidade v1.0', {
+          status: 200,
+          headers: { 'Content-Type': 'text/markdown' },
+        });
+      }
+      if (url.includes('/auth/me') || /\/users\/me($|\?)/.test(url)) {
+        return json(userBody);
+      }
+      if (url.includes('/users/me/status') || url.includes('/billing/me')) {
+        return json({
+          user_id: 'user-1',
+          has_cv: false,
+          has_embeddings: false,
+          plan: 'free',
+          subscription_status: 'none',
+          used: 0,
+          limit: 5,
+          remaining: 5,
+          period: '2026-10',
+        });
+      }
+      return json({ detail: 'ausente' }, 404);
+    });
+
+    try {
+      const user = userEvent.setup();
+      renderAt('/entrar', fetchImpl);
+      await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
+      await user.type(screen.getByTestId('login-password'), 'senha-segura');
+      await user.click(screen.getByTestId('login-submit'));
+      expect(await screen.findByTestId('logout-button')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('logout-button'));
+      expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
+      expect(logoutPosts).toBe(1);
+
+      offline = false;
+      window.dispatchEvent(new Event('online'));
+      await waitFor(() => {
+        expect(logoutPosts).toBe(2);
+      });
+
+      await user.click(screen.getByRole('link', { name: 'Entrar' }));
+      await user.type(await screen.findByTestId('login-email'), 'ada@example.com');
+      await user.type(screen.getByTestId('login-password'), 'senha-segura');
+      await user.click(screen.getByTestId('login-submit'));
+      expect(await screen.findByTestId('logout-button')).toBeInTheDocument();
+
+      const afterLogin = logoutPosts;
+      window.dispatchEvent(new Event('online'));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(logoutPosts).toBe(afterLogin);
     } finally {
       for (const item of saved) {
         if (item.desc) {
