@@ -603,6 +603,52 @@ describe('lease único do refresh', () => {
     }
   });
 
+  it('sem locks e sem storage, a aba que chega depois do anúncio não faz POST', async () => {
+    const restore = blockStorage();
+    try {
+      const bus = createBus();
+      let posts = 0;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = tab(
+        null,
+        async () => {
+          posts += 1;
+          await gate;
+          return { accessToken: 'jwt-degradado', expiresIn: 30 };
+        },
+        bus,
+      );
+      const pending = first.refresh();
+      await vi.waitFor(() => {
+        expect(posts).toBe(1);
+      });
+      const late = tab(
+        null,
+        async () => {
+          posts += 1;
+          return { accessToken: 'jwt-tarde', expiresIn: 30 };
+        },
+        bus,
+      );
+      const result = await late.refresh().then(
+        (grant) => grant.accessToken,
+        (error: unknown) => error,
+      );
+      expect(posts).toBe(1);
+      expect(result).toBeInstanceOf(SessionExpiredError);
+      expect((result as SessionExpiredError).confirmed).toBe(false);
+      release();
+      expect((await pending).accessToken).toBe('jwt-degradado');
+      first.reset();
+      late.reset();
+    } finally {
+      restore();
+    }
+  });
+
   it.each([
     ['com locks', true],
     ['sem locks', false],

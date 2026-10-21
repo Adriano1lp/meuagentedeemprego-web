@@ -16,16 +16,21 @@
  *
  * Invariantes:
  * - No máximo um POST por lease.
- * - done com dono vivo: o ping devolve o grant e não há POST.
- * - done sem resposta no ping: o cookie antigo já foi rotacionado, então
- *   este leaseId fica consumido e um epoch novo faz um POST.
+ * - done com dono vivo: o ping devolve o grant e não há POST. Enquanto o
+ *   done for nosso, o grant é republicado para a aba que abre o canal depois.
+ * - done sem resposta no ping: o cookie antigo já foi rotacionado. Só a
+ *   primeira aba que esperou esse leaseId abre um epoch novo e faz um POST.
+ *   As outras seguem o lease novo, sem POST.
  * - No pagehide o dono apaga só o próprio done. sending não é apagado.
  * - Nada é gravado nem publicado com loggedOut ou com leaseId velho.
  * - O token não entra no storage.
  * - Sem canal, quem não é dona falha fechado, inclusive num done.
  * - sending nunca é retomado; só um open expirado libera epoch novo.
  * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal.
- * - Sem lock e sem storage: quem não coordena falha fechado, sem POST.
+ * - Sem lock e sem storage: a primeira aba que anuncia no canal coordena e
+ *   faz um POST. Qualquer outra falha fechado, com 0 POST. Se duas se
+ *   comprometem ao mesmo tempo, as duas falham fechado: o pior caso é
+ *   /entrar, nunca um segundo POST.
  */
 
 import {
@@ -89,7 +94,9 @@ type WireMessage =
       expiresIn: number | null;
     }
   | { v: 1; type: 'grant-please'; id: string; leaseId: string }
-  | { v: 1; type: 'degraded-claim'; tabId: string }
+  | { v: 1; type: 'degraded-claim'; tabId: string; at: number }
+  | { v: 1; type: 'degraded-commit'; tabId: string; at: number }
+  | { v: 1; type: 'done-wait'; tabId: string; at: number; leaseId: string }
   | { v: 1; type: 'logout' }
   | { v: 1; type: 'session-expired' };
 
@@ -219,7 +226,12 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let postingLeaseId: string | null = null;
   let life = 0;
   let beatTimer: ReturnType<typeof setInterval> | null = null;
+  let grantPulse: ReturnType<typeof setInterval> | null = null;
+  let degradedReplyTimer: ReturnType<typeof setTimeout> | null = null;
   let announced: Announced | null = null;
+  let degradedAt = 0;
+  let degradedCoordinator = false;
+  let degradedCommitted = false;
   const memoryGrants = new Map<string, { token: string; expiresIn: number | null }>();
   const consumed = new Set<string>();
   const answeredPlease = new Set<string>();
@@ -229,7 +241,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let storageBound = false;
   let pageHideBound = false;
   let degradedInbox: { token: string; expiresIn: number | null } | null = null;
-  const degradedPeers = new Set<string>();
+  const degradedPeers = new Map<string, { at: number; commit: boolean }>();
+  const doneWaiters = new Map<string, { tabId: string; at: number }>();
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -244,17 +257,109 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
+  function stopGrantPulse(): void {
+    if (grantPulse != null) {
+      clearInterval(grantPulse);
+      grantPulse = null;
+    }
+  }
+
+  function stopDegradedReply(): void {
+    if (degradedReplyTimer != null) {
+      clearTimeout(degradedReplyTimer);
+      degradedReplyTimer = null;
+    }
+  }
+
+  function scheduleDegradedReply(): void {
+    if (degradedReplyTimer != null || !degradedCoordinator || degradedAt === 0) {
+      return;
+    }
+    degradedReplyTimer = setTimeout(() => {
+      degradedReplyTimer = null;
+      if (!degradedCoordinator || degradedAt === 0 || isLoggedOutFlag()) {
+        return;
+      }
+      publish({ v: 1, type: 'degraded-claim', tabId, at: degradedAt });
+    }, 0);
+  }
+
+  function startGrantPulse(leaseId: string, myLife: number): void {
+    stopGrantPulse();
+    const tick = () => {
+      if (myLife !== life || isLoggedOutFlag() || !announced || announced.leaseId !== leaseId) {
+        stopGrantPulse();
+        return;
+      }
+      const current = readLease();
+      if (
+        !current ||
+        current.leaseId !== leaseId ||
+        current.owner !== tabId ||
+        current.phase !== 'done' ||
+        current.until <= now()
+      ) {
+        stopGrantPulse();
+        return;
+      }
+      publishGrant(announced);
+    };
+    grantPulse = setInterval(tick, 50);
+  }
+
+  function lostDegradedRace(): boolean {
+    for (const [peerId, peer] of degradedPeers) {
+      if (peerId === tabId) {
+        continue;
+      }
+      const earlier = peer.at < degradedAt || (peer.at === degradedAt && peerId < tabId);
+      if (earlier) {
+        return true;
+      }
+      if (peer.commit && degradedCommitted) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function amFirstDoneWaiter(leaseId: string, at: number): boolean {
+    let bestAt = at;
+    let bestId = tabId;
+    const prefix = `${leaseId}:`;
+    for (const [key, waiter] of doneWaiters) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      if (waiter.at < bestAt || (waiter.at === bestAt && waiter.tabId < bestId)) {
+        bestAt = waiter.at;
+        bestId = waiter.tabId;
+      }
+    }
+    return bestId === tabId;
+  }
+
+  function resetDegraded(): void {
+    stopDegradedReply();
+    degradedAt = 0;
+    degradedCoordinator = false;
+    degradedCommitted = false;
+    degradedInbox = null;
+    degradedPeers.clear();
+    doneWaiters.clear();
+  }
+
   function discardMemory(): void {
     life += 1;
     stopHeartbeat();
+    stopGrantPulse();
     announced = null;
     memoryGrants.clear();
     queuedPlease.clear();
     answeredPlease.clear();
     pleaseIds.clear();
     consumed.clear();
-    degradedInbox = null;
-    degradedPeers.clear();
+    resetDegraded();
     wakeAll();
   }
 
@@ -401,8 +506,34 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         wakeAll();
         return;
       }
-      if (data.type === 'degraded-claim' && typeof data.tabId === 'string' && data.tabId) {
-        degradedPeers.add(data.tabId);
+      if (
+        (data.type === 'degraded-claim' || data.type === 'degraded-commit') &&
+        typeof data.tabId === 'string' &&
+        data.tabId &&
+        typeof data.at === 'number' &&
+        Number.isFinite(data.at)
+      ) {
+        const previous = degradedPeers.get(data.tabId);
+        degradedPeers.set(data.tabId, {
+          at: data.at,
+          commit: data.type === 'degraded-commit' || previous?.commit === true,
+        });
+        if (degradedCoordinator && data.tabId !== tabId) {
+          scheduleDegradedReply();
+        }
+        wakeAll();
+        return;
+      }
+      if (
+        data.type === 'done-wait' &&
+        typeof data.tabId === 'string' &&
+        data.tabId &&
+        typeof data.leaseId === 'string' &&
+        data.leaseId &&
+        typeof data.at === 'number' &&
+        Number.isFinite(data.at)
+      ) {
+        doneWaiters.set(`${data.leaseId}:${data.tabId}`, { tabId: data.tabId, at: data.at });
         wakeAll();
         return;
       }
@@ -417,16 +548,16 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (data.type === 'logout') {
         announced = null;
         memoryGrants.clear();
-        degradedInbox = null;
-        degradedPeers.clear();
+        stopGrantPulse();
+        resetDegraded();
         emit({ type: 'logout' });
         return;
       }
       if (data.type === 'session-expired') {
         announced = null;
         memoryGrants.clear();
-        degradedInbox = null;
-        degradedPeers.clear();
+        stopGrantPulse();
+        resetDegraded();
         emit({ type: 'session-expired' });
       }
     };
@@ -584,6 +715,19 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     });
   }
 
+  async function waitLeaseMove(lease: SessionLease, myLife: number): Promise<void> {
+    while (myLife === life) {
+      const current = readLease();
+      if (!current || current.leaseId !== lease.leaseId || current.phase !== lease.phase) {
+        return;
+      }
+      if (current.until <= now()) {
+        return;
+      }
+      await interruptible(Math.min(50, current.until - now()));
+    }
+  }
+
   async function waitOpen(lease: SessionLease, myLife: number): Promise<void> {
     while (myLife === life) {
       const current = readLease();
@@ -603,12 +747,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       return null;
     }
     const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
-    publish({
-      v: 1,
-      type: 'grant-please',
-      id: pleaseIdFor(lease.leaseId),
-      leaseId: lease.leaseId,
-    });
+    const waitedAt = now();
+    if (pingMs != null) {
+      doneWaiters.set(`${lease.leaseId}:${tabId}`, { tabId, at: waitedAt });
+    } else {
+      publish({
+        v: 1,
+        type: 'grant-please',
+        id: pleaseIdFor(lease.leaseId),
+        leaseId: lease.leaseId,
+      });
+    }
+    let nextAnnounce = 0;
     while (myLife === life) {
       if (isLoggedOutFlag()) {
         return null;
@@ -621,18 +771,29 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (!current || current.leaseId !== lease.leaseId || current.phase === 'open') {
         return null;
       }
+      if (pingMs != null && now() >= nextAnnounce) {
+        publish({ v: 1, type: 'done-wait', tabId, at: waitedAt, leaseId: lease.leaseId });
+        publish({
+          v: 1,
+          type: 'grant-please',
+          id: newLeaseId(),
+          leaseId: lease.leaseId,
+        });
+        nextAnnounce = now() + 50;
+      }
       const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
       const remaining = cap - now();
       if (remaining <= 0) {
         return null;
       }
-      await interruptible(remaining);
+      await interruptible(pingMs == null ? remaining : Math.min(remaining, 50));
     }
     return null;
   }
 
   function failPost(): void {
     stopHeartbeat();
+    stopGrantPulse();
     announced = null;
   }
 
@@ -673,6 +834,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     };
     publishGrant(announced);
     flushPlease();
+    startGrantPulse(leaseId, myLife);
     return grant;
   }
 
@@ -744,17 +906,28 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   async function electDegradedCoordinator(myLife: number): Promise<boolean> {
-    degradedPeers.add(tabId);
-    const deadline = now() + GRANT_OWNER_PING_MS;
+    degradedAt = now();
+    degradedCommitted = false;
+    degradedPeers.set(tabId, { at: degradedAt, commit: false });
+    const deadline = degradedAt + GRANT_OWNER_PING_MS;
+    const commitAt = deadline - 50;
     while (now() < deadline) {
       if (myLife !== life || isLoggedOutFlag()) {
         throw new SessionExpiredError(false);
       }
-      publish({ v: 1, type: 'degraded-claim', tabId });
+      if (lostDegradedRace()) {
+        return false;
+      }
+      if (!degradedCommitted && now() >= commitAt) {
+        degradedCommitted = true;
+        degradedPeers.set(tabId, { at: degradedAt, commit: true });
+        publish({ v: 1, type: 'degraded-commit', tabId, at: degradedAt });
+      } else {
+        publish({ v: 1, type: 'degraded-claim', tabId, at: degradedAt });
+      }
       await sleep(Math.min(50, Math.max(0, deadline - now())));
     }
-    const winner = [...degradedPeers].sort()[0];
-    return winner === tabId;
+    return !lostDegradedRace();
   }
 
   /**
@@ -792,9 +965,10 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       return { kind: 'grant', grant };
     }
     const coordinates = await electDegradedCoordinator(myLife);
-    if (!coordinates) {
+    if (!coordinates || lostDegradedRace()) {
       throw new SessionExpiredError(false);
     }
+    degradedCoordinator = true;
     const grant = await beginPost(null, myLife);
     publishDegradedGrant(grant);
     return { kind: 'grant', grant };
@@ -853,6 +1027,17 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         }
         if (grant) {
           return { kind: 'grant', grant };
+        }
+        const waited = doneWaiters.get(`${found.lease.leaseId}:${tabId}`);
+        const waitedAt = waited?.at ?? now();
+        if (!amFirstDoneWaiter(found.lease.leaseId, waitedAt)) {
+          consumed.add(found.lease.leaseId);
+          await waitLeaseMove(found.lease, myLife);
+          const moved = readLease();
+          if (!moved || moved.leaseId === found.lease.leaseId) {
+            throw new SessionExpiredError(false);
+          }
+          continue;
         }
         consumed.add(found.lease.leaseId);
         continue;
@@ -942,11 +1127,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (event.key === LOGGED_OUT_KEY) {
       if (event.newValue === LOGGED_OUT_VALUE) {
         stopHeartbeat();
+        stopGrantPulse();
         announced = null;
         memoryGrants.clear();
         queuedPlease.clear();
-        degradedInbox = null;
-        degradedPeers.clear();
+        resetDegraded();
       }
       wakeAll();
       return;
