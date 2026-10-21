@@ -245,9 +245,13 @@ async function analyzeUntilQuota(user: ReturnType<typeof userEvent.setup>) {
 }
 
 function expectNoBillingPersistence() {
-  expect(window.localStorage.length).toBe(0);
   expect(window.sessionStorage.length).toBe(0);
-  const dump = `${window.localStorage} ${window.sessionStorage} ${window.location.href}`;
+  const lease = window.localStorage.getItem('mae.sessionLease') ?? '';
+  expect(lease).not.toMatch(/cs_test|session_id|jwt-login|access_token|jwt|eyJ/i);
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    expect(window.localStorage.key(index)).toBe('mae.sessionLease');
+  }
+  const dump = `${lease} ${window.sessionStorage} ${window.location.href}`;
   expect(dump).not.toMatch(/cs_test|session_id|jwt-login|access_token/);
 }
 

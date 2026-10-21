@@ -131,6 +131,8 @@ export function AuthProvider({
   locationRef.current = location;
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loggingOut = useRef(false);
+  /** Sobe no login, no cadastro e no logout para o refresh antigo não entrar na sessão nova. */
+  const sessionGeneration = useRef(0);
   /** Logout desta aba ou de outra: um refresh que ainda resolve não manda para /entrar. */
   const suppressExpire = useRef(false);
   /** O POST /auth/refresh desta aba respondeu 401. */
@@ -227,19 +229,24 @@ export function AuthProvider({
       refreshConfirmed.current = false;
       return false;
     }
+    const seen = sessionGeneration.current;
     try {
       const grant = await getSessionCoordinator().refresh();
-      if (isLoggedOutFlag()) {
+      if (seen !== sessionGeneration.current || isLoggedOutFlag()) {
         refreshConfirmed.current = false;
-        return false;
+        return tokenStore.get() != null && !isLoggedOutFlag();
       }
       rememberGrant(grant);
       return true;
     } catch (error) {
+      if (seen !== sessionGeneration.current) {
+        refreshConfirmed.current = false;
+        return tokenStore.get() != null && !isLoggedOutFlag();
+      }
       refreshConfirmed.current = error instanceof SessionExpiredError && error.confirmed;
       return false;
     }
-  }, [rememberGrant]);
+  }, [rememberGrant, tokenStore]);
 
   const api = useMemo(
     () =>
@@ -285,12 +292,17 @@ export function AuthProvider({
   const login = useCallback(
     async (email: string, password: string) => {
       setAccountDeleted(false);
-      suppressExpire.current = false;
-      getSessionCoordinator().reset();
-      clearSessionRefreshMark();
-      const response = await api.login({ email, password });
-      clearLoggedOutFlag();
-      await applySession(response.access_token, response.user, response.expires_in);
+      sessionGeneration.current += 1;
+      suppressExpire.current = true;
+      try {
+        getSessionCoordinator().reset();
+        clearSessionRefreshMark();
+        const response = await api.login({ email, password });
+        clearLoggedOutFlag();
+        await applySession(response.access_token, response.user, response.expires_in);
+      } finally {
+        suppressExpire.current = false;
+      }
     },
     [api, applySession],
   );
@@ -304,11 +316,17 @@ export function AuthProvider({
       privacyAccepted: boolean;
     }) => {
       setAccountDeleted(false);
-      suppressExpire.current = false;
-      getSessionCoordinator().reset();
-      const response = await api.register(input);
-      clearLoggedOutFlag();
-      await applySession(response.access_token, response.user, response.expires_in);
+      sessionGeneration.current += 1;
+      suppressExpire.current = true;
+      try {
+        getSessionCoordinator().reset();
+        clearSessionRefreshMark();
+        const response = await api.register(input);
+        clearLoggedOutFlag();
+        await applySession(response.access_token, response.user, response.expires_in);
+      } finally {
+        suppressExpire.current = false;
+      }
     },
     [api, applySession],
   );
@@ -319,6 +337,7 @@ export function AuthProvider({
         return;
       }
       loggingOut.current = true;
+      sessionGeneration.current += 1;
       suppressExpire.current = true;
       markLoggedOut();
       clearSessionRefreshMark();

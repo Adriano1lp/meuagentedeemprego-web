@@ -203,8 +203,12 @@ function readBlobText(blob: Blob): Promise<string> {
 function expectTokenOnlyInMemory() {
   expect(window.localStorage.getItem('access_token')).toBeNull();
   expect(window.sessionStorage.getItem('access_token')).toBeNull();
-  expect(window.localStorage.length).toBe(0);
   expect(window.sessionStorage.length).toBe(0);
+  const lease = window.localStorage.getItem('mae.sessionLease') ?? '';
+  expect(lease).not.toMatch(/jwt|eyJ|access_token/i);
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    expect(window.localStorage.key(index)).toBe('mae.sessionLease');
+  }
 }
 
 describe('Feature: Perfil leve na web', () => {

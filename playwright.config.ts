@@ -6,11 +6,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: 'list',
+  preserveOutput: 'always',
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'on-first-retry',
     serviceWorkers: 'block',
     locale: 'pt-BR',
+    timezoneId: 'America/Sao_Paulo',
   },
   projects: [
     {
@@ -22,7 +24,7 @@ export default defineConfig({
     },
     {
       name: 'webkit',
-      testMatch: /session-locks\.spec\.ts/,
+      testMatch: /session.*\.spec\.ts/,
       use: {
         ...devices['Desktop Safari'],
       },
