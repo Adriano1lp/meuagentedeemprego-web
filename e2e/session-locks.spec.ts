@@ -327,6 +327,7 @@ async function ownerDeadAfterFetch(browser: Browser, withLocks: boolean, counter
   }
 }
 
+/** Primeiro carregamento simultâneo. Não recarrega a página. */
 async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCount: number): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
@@ -500,21 +501,27 @@ async function wrongGrant(browser: Browser, withLocks: boolean, counter: Counter
       }, 200);
       window.setTimeout(() => window.clearInterval(timer), 3_600);
     });
+    let seen = 0;
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
         return;
       }
-      await fulfillDenied(route);
+      seen += 1;
+      if (seen > 1) {
+        await fulfillDenied(route);
+        return;
+      }
+      await fulfillOk(route, 'jwt-epoch-novo');
     });
     const page = await context.newPage();
     await prepare(page);
     await page.goto('/app/perfil');
-    await expect(page).toHaveURL(/\/entrar\?/, { timeout: 12_000 });
-    expectExpiredLogin(page, '/app/perfil');
-    expect(counter.posts).toBe(0);
+    await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+    expect(counter.posts).toBe(1);
     const raw = await page.evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
     expect(raw).not.toMatch(/jwt-errado|jwt|eyJ|access_token/i);
+    expect((JSON.parse(raw) as { phase: string }).phase).toBe('done');
   } finally {
     await context.close();
   }
@@ -584,6 +591,173 @@ async function tabsWithoutChannel(browser: Browser, withLocks: boolean, counter:
   }
 }
 
+async function blockStorage(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    const deny = () => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    };
+    const names = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+    const targets = [window.localStorage, Object.getPrototypeOf(window.localStorage)];
+    for (const target of targets) {
+      for (const name of names) {
+        try {
+          Object.defineProperty(target, name, {
+            configurable: true,
+            value: deny,
+          });
+        } catch {
+          // No WebKit o método da instância pode não ser configurável.
+        }
+      }
+    }
+  });
+}
+
+async function reloadWithinDone(
+  browser: Browser,
+  withLocks: boolean,
+  counter: Counter,
+  tabCount: number,
+): Promise<void> {
+  const context = await openContext(browser, withLocks, counter);
+  try {
+    let seen = 0;
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      seen += 1;
+      if (withLocks && seen > 2) {
+        await fulfillDenied(route);
+        return;
+      }
+      await fulfillOk(route, seen === 1 ? 'jwt-boot' : `jwt-reload-${seen}`);
+    });
+    const pages: Page[] = [];
+    for (let index = 0; index < tabCount; index += 1) {
+      const page = await context.newPage();
+      await prepare(page);
+      pages.push(page);
+    }
+    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    for (const page of pages) {
+      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+    }
+    expect(counter.posts).toBe(1);
+    const before = await pages[0].evaluate(() => {
+      const raw = localStorage.getItem('mae.sessionLease');
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw) as { phase?: string; until?: number };
+      return {
+        phase: parsed.phase ?? '',
+        remaining: (parsed.until ?? 0) - Date.now(),
+      };
+    });
+    expect(before?.phase).toBe('done');
+    expect(before?.remaining ?? 0).toBeGreaterThan(0);
+    expect(before?.remaining ?? 99999).toBeLessThanOrEqual(5_000);
+    await Promise.all(pages.map((page) => page.reload()));
+    for (const page of pages) {
+      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+      await expect(page).toHaveURL(/\/app\/perfil$/);
+    }
+    if (withLocks || tabCount === 1) {
+      expect(counter.posts).toBe(2);
+    } else {
+      expect(counter.posts).toBeGreaterThanOrEqual(2);
+    }
+    const raw = await pages[0].evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
+    expect(raw).not.toMatch(/jwt|eyJ|access_token/i);
+  } finally {
+    await context.close();
+  }
+}
+
+async function storageBlocked(
+  browser: Browser,
+  withLocks: boolean,
+  counter: Counter,
+  tabCount: number,
+): Promise<void> {
+  const context = await openContext(browser, withLocks, counter);
+  try {
+    await blockStorage(context);
+    let seen = 0;
+    await context.route('**/auth/refresh', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      seen += 1;
+      if (withLocks && seen > 1) {
+        await fulfillDenied(route);
+        return;
+      }
+      await fulfillOk(route, 'jwt-degradado');
+    });
+    const pages: Page[] = [];
+    for (let index = 0; index < tabCount; index += 1) {
+      const page = await context.newPage();
+      await prepare(page);
+      pages.push(page);
+    }
+    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    expect(
+      await pages[0].evaluate(() => {
+        try {
+          localStorage.setItem('mae.probe', '1');
+          return 'open';
+        } catch (error) {
+          return error instanceof DOMException ? error.name : 'other';
+        }
+      }),
+    ).toBe('SecurityError');
+    const settled = async (page: Page): Promise<'app' | 'entrar' | 'espera'> => {
+      if (page.url().includes('/entrar')) {
+        return 'entrar';
+      }
+      if ((await page.getByTestId('profile-name').count()) > 0) {
+        return 'app';
+      }
+      return 'espera';
+    };
+    await expect
+      .poll(async () => {
+        const states = await Promise.all(pages.map((page) => settled(page)));
+        return states.every((state) => state !== 'espera');
+      }, { timeout: 15_000 })
+      .toBe(true);
+    if (withLocks) {
+      expect(counter.posts).toBe(1);
+      for (const page of pages) {
+        await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+        await expect(page).toHaveURL(/\/app\/perfil$/);
+      }
+      return;
+    }
+    expect(counter.posts).toBeGreaterThanOrEqual(1);
+    expect(counter.posts).toBeLessThanOrEqual(tabCount);
+    if (counter.posts === 1) {
+      let onApp = 0;
+      for (const page of pages) {
+        const state = await settled(page);
+        if (state === 'app') {
+          await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+          onApp += 1;
+        } else {
+          expectExpiredLogin(page, '/app/perfil');
+        }
+      }
+      expect(onApp).toBe(1);
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function matrix(browser: Browser, withLocks: boolean, rows: Row[]): Promise<void> {
   await scenario(rows, 'marca orfa no boot', (counter) => orphan(browser, withLocks, counter));
   await scenario(rows, 'lider morto antes do envio', (counter) =>
@@ -593,6 +767,15 @@ async function matrix(browser: Browser, withLocks: boolean, rows: Row[]): Promis
   await scenario(rows, 'F5 2 abas', (counter) => f5(browser, withLocks, counter, 2));
   await scenario(rows, 'F5 3 abas', (counter) => f5(browser, withLocks, counter, 3));
   await scenario(rows, 'F5 4 abas', (counter) => f5(browser, withLocks, counter, 4));
+  await scenario(rows, 'reload real 1 aba', (counter) => reloadWithinDone(browser, withLocks, counter, 1));
+  await scenario(rows, 'reload real 2 abas', (counter) => reloadWithinDone(browser, withLocks, counter, 2));
+  await scenario(rows, 'reload real 3 abas', (counter) => reloadWithinDone(browser, withLocks, counter, 3));
+  await scenario(rows, 'storage bloqueado 2 abas', (counter) =>
+    storageBlocked(browser, withLocks, counter, 2),
+  );
+  await scenario(rows, 'storage bloqueado 3 abas', (counter) =>
+    storageBlocked(browser, withLocks, counter, 3),
+  );
   await scenario(rows, 'POST acima de 5s', (counter) => slowPost(browser, withLocks, counter));
   await scenario(rows, 'logout e login durante POST lento', (counter) =>
     logoutDuringSlowPost(browser, withLocks, counter),
@@ -602,7 +785,7 @@ async function matrix(browser: Browser, withLocks: boolean, rows: Row[]): Promis
 }
 
 test('com Web Locks, a matriz do lease registra o POST de cada cenário', async ({ browser }, testInfo) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   const rows: Row[] = [];
   try {
     await matrix(browser, true, rows);
@@ -612,7 +795,7 @@ test('com Web Locks, a matriz do lease registra o POST de cada cenário', async 
 });
 
 test('sem Web Locks, a matriz do lease registra o POST de cada cenário', async ({ browser }, testInfo) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   const rows: Row[] = [];
   try {
     await matrix(browser, false, rows);

@@ -213,7 +213,7 @@ describe('single-flight do refresh', () => {
     coordinator.reset();
   });
 
-  it('storage ilegível faz um POST degradado e não publica o token', async () => {
+  it('storage ilegível faz um POST degradado, publica o grant no canal e não grava o token', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage bloqueado');
     });
@@ -241,7 +241,11 @@ describe('single-flight do refresh', () => {
       const grant = await coordinator.refresh();
       expect(grant.accessToken).toBe('jwt-degradado');
       expect(posts).toBe(1);
-      expect(published.join('')).not.toContain('jwt-degradado');
+      expect(published.join('')).toContain('jwt-degradado');
+      expect(published.join('')).toContain('"leaseId":"degradado"');
+      expect(setItem.mock.calls.every((call) => !String(call[1]).includes('jwt-degradado'))).toBe(
+        true,
+      );
     } finally {
       coordinator.reset();
       setItem.mockRestore();

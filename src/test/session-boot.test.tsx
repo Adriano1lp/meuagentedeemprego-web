@@ -8,6 +8,7 @@ import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
 import { LOGGED_OUT_KEY } from '../auth/loggedOut';
 import {
+  GRANT_OWNER_PING_MS,
   LEASE_JITTER_MAX_MS,
   LEASE_OPEN_MS,
   resetSessionRuntimeForTests,
@@ -345,9 +346,10 @@ describe('boot da sessão', () => {
     expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument();
   });
 
-  it('sem locks, o grant em 3s é reaproveitado e não há outro POST', async () => {
+  it('sem locks, o grant dentro do ping é reaproveitado e não há outro POST', async () => {
     vi.useFakeTimers();
-    const restoreLocks = installSessionChannel({ grantAfterMs: 3_000 });
+    const grantAt = GRANT_OWNER_PING_MS - 100;
+    const restoreLocks = installSessionChannel({ grantAfterMs: grantAt });
     window.localStorage.setItem(
       SESSION_LEASE_KEY,
       JSON.stringify({
@@ -392,7 +394,7 @@ describe('boot da sessão', () => {
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_999);
+      await vi.advanceTimersByTimeAsync(grantAt - 1);
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     expect(refreshPosts).toBe(0);

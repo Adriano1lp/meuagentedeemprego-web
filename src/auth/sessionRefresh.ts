@@ -16,11 +16,16 @@
  *
  * Invariantes:
  * - No máximo um POST por lease.
- * - Quem chega com done válido não faz POST.
+ * - done com dono vivo: o ping devolve o grant e não há POST.
+ * - done sem resposta no ping: o cookie antigo já foi rotacionado, então
+ *   este leaseId fica consumido e um epoch novo faz um POST.
+ * - No pagehide o dono apaga só o próprio done. sending não é apagado.
  * - Nada é gravado nem publicado com loggedOut ou com leaseId velho.
  * - O token não entra no storage.
- * - Sem canal, quem não é dono falha fechado.
+ * - Sem canal, quem não é dona falha fechado, inclusive num done.
  * - sending nunca é retomado; só um open expirado libera epoch novo.
+ * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal.
+ * - Sem lock e sem storage: quem não coordena falha fechado, sem POST.
  */
 
 import {
@@ -41,8 +46,17 @@ const LEGACY_MARK_KEY = 'mae.sessionRefresh';
 /** L: open e renovação do until durante o POST. Não aumentar. */
 export const LEASE_OPEN_MS = 5_000;
 
-/** G: done para a seguidora pedir o grant. Não aumentar. */
+/** G: janela em que o done ainda pode ser lido. Não aumentar. */
 export const LEASE_DONE_MS = 5_000;
+
+/**
+ * Ping ao dono de um done. Se o grant não volta neste prazo, o done
+ * está sem dono vivo. Não é L nem G: esses continuam em 5s.
+ */
+export const GRANT_OWNER_PING_MS = 400;
+
+/** Grant de storage bloqueado. Não é um leaseId e não entra no storage. */
+const DEGRADED_LEASE_ID = 'degradado';
 
 export const LEASE_JITTER_MIN_MS = 30;
 export const LEASE_JITTER_MAX_MS = 80;
@@ -75,6 +89,7 @@ type WireMessage =
       expiresIn: number | null;
     }
   | { v: 1; type: 'grant-please'; id: string; leaseId: string }
+  | { v: 1; type: 'degraded-claim'; tabId: string }
   | { v: 1; type: 'logout' }
   | { v: 1; type: 'session-expired' };
 
@@ -212,6 +227,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   const pleaseIds = new Map<string, string>();
   const tabId = nextTabId();
   let storageBound = false;
+  let pageHideBound = false;
+  let degradedInbox: { token: string; expiresIn: number | null } | null = null;
+  const degradedPeers = new Set<string>();
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -235,6 +253,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     answeredPlease.clear();
     pleaseIds.clear();
     consumed.clear();
+    degradedInbox = null;
+    degradedPeers.clear();
     wakeAll();
   }
 
@@ -361,15 +381,28 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         if (isLoggedOutFlag() || !data.token.trim()) {
           return;
         }
-        const current = readLease();
-        if (!current || current.leaseId !== data.leaseId) {
-          return;
-        }
         const expiresIn =
           typeof data.expiresIn === 'number' && Number.isFinite(data.expiresIn)
             ? data.expiresIn
             : null;
+        if (data.leaseId === DEGRADED_LEASE_ID) {
+          if (inspect().kind !== 'broken') {
+            return;
+          }
+          degradedInbox = { token: data.token, expiresIn };
+          wakeAll();
+          return;
+        }
+        const current = readLease();
+        if (!current || current.leaseId !== data.leaseId) {
+          return;
+        }
         memoryGrants.set(data.leaseId, { token: data.token, expiresIn });
+        wakeAll();
+        return;
+      }
+      if (data.type === 'degraded-claim' && typeof data.tabId === 'string' && data.tabId) {
+        degradedPeers.add(data.tabId);
         wakeAll();
         return;
       }
@@ -384,12 +417,16 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (data.type === 'logout') {
         announced = null;
         memoryGrants.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
         emit({ type: 'logout' });
         return;
       }
       if (data.type === 'session-expired') {
         announced = null;
         memoryGrants.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
         emit({ type: 'session-expired' });
       }
     };
@@ -485,6 +522,32 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return id;
   }
 
+  function takeDegradedGrant(): AccessGrant | null {
+    if (!degradedInbox) {
+      return null;
+    }
+    if (isLoggedOutFlag() || inspect().kind !== 'broken') {
+      degradedInbox = null;
+      return null;
+    }
+    const found = degradedInbox;
+    degradedInbox = null;
+    return { accessToken: found.token, expiresIn: found.expiresIn };
+  }
+
+  function publishDegradedGrant(grant: AccessGrant): void {
+    if (isLoggedOutFlag()) {
+      return;
+    }
+    publish({
+      v: 1,
+      type: 'grant',
+      leaseId: DEGRADED_LEASE_ID,
+      token: grant.accessToken,
+      expiresIn: grant.expiresIn,
+    });
+  }
+
   function takeGrant(leaseId: string): AccessGrant | null {
     const found = memoryGrants.get(leaseId);
     if (!found) {
@@ -531,10 +594,15 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
-  async function waitGrant(lease: SessionLease, myLife: number): Promise<AccessGrant | null> {
+  async function waitGrant(
+    lease: SessionLease,
+    myLife: number,
+    pingMs?: number,
+  ): Promise<AccessGrant | null> {
     if (!channel) {
       return null;
     }
+    const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
     publish({
       v: 1,
       type: 'grant-please',
@@ -553,10 +621,12 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (!current || current.leaseId !== lease.leaseId || current.phase === 'open') {
         return null;
       }
-      if (current.until <= now()) {
+      const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
+      const remaining = cap - now();
+      if (remaining <= 0) {
         return null;
       }
-      await interruptible(current.until - now());
+      await interruptible(remaining);
     }
     return null;
   }
@@ -673,14 +743,61 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return { pending: promote(lease, myLife) };
   }
 
-  function degradedPost(myLife: number): Outcome {
+  async function electDegradedCoordinator(myLife: number): Promise<boolean> {
+    degradedPeers.add(tabId);
+    const deadline = now() + GRANT_OWNER_PING_MS;
+    while (now() < deadline) {
+      if (myLife !== life || isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      publish({ v: 1, type: 'degraded-claim', tabId });
+      await sleep(Math.min(50, Math.max(0, deadline - now())));
+    }
+    const winner = [...degradedPeers].sort()[0];
+    return winner === tabId;
+  }
+
+  /**
+   * Storage ilegível. Com Web Lock o POST termina antes de soltar o lock.
+   * O grant é republicado durante o ping para a aba que ainda está abrindo
+   * o canal. Sem lock, uma aba coordena e as outras falham fechado.
+   */
+  async function runDegraded(myLife: number): Promise<Outcome> {
     if (myLife !== life || isLoggedOutFlag()) {
       throw new SessionExpiredError(false);
     }
-    if (postInFlight) {
-      return { kind: 'detached', pending: postInFlight };
+    if (locks) {
+      for (let turn = 0; turn < 10; turn += 1) {
+        const reused = takeDegradedGrant();
+        if (reused) {
+          return { kind: 'grant', grant: reused };
+        }
+        await sleep(0);
+        if (myLife !== life || isLoggedOutFlag()) {
+          throw new SessionExpiredError(false);
+        }
+      }
+      const grant = await beginPost(null, myLife);
+      const deadline = now() + GRANT_OWNER_PING_MS;
+      while (now() < deadline) {
+        if (myLife !== life || isLoggedOutFlag()) {
+          break;
+        }
+        publishDegradedGrant(grant);
+        await sleep(Math.min(50, Math.max(0, deadline - now())));
+      }
+      if (myLife !== life || isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      return { kind: 'grant', grant };
     }
-    return { kind: 'detached', pending: beginPost(null, myLife) };
+    const coordinates = await electDegradedCoordinator(myLife);
+    if (!coordinates) {
+      throw new SessionExpiredError(false);
+    }
+    const grant = await beginPost(null, myLife);
+    publishDegradedGrant(grant);
+    return { kind: 'grant', grant };
   }
 
   async function acquire(myLife: number): Promise<Outcome> {
@@ -695,7 +812,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       }
       const found = inspect();
       if (found.kind === 'broken') {
-        return degradedPost(myLife);
+        return runDegraded(myLife);
       }
       if (found.kind === 'lease' && found.lease.phase === 'sending') {
         if (
@@ -723,17 +840,22 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         found.lease.until > now() &&
         !consumed.has(found.lease.leaseId)
       ) {
+        // done só existe depois de um POST bem-sucedido: o cookie antigo
+        // já foi rotacionado e a aba nova tem o cookie novo. O ping confirma
+        // se o dono ainda está vivo. Sem canal não há ping: falha fechado.
+        // Sem resposta, este leaseId não gera POST; o epoch seguinte gera um.
         if (!channel) {
           throw new SessionExpiredError(false);
         }
-        const grant = await waitGrant(found.lease, myLife);
+        const grant = await waitGrant(found.lease, myLife, GRANT_OWNER_PING_MS);
         if (myLife !== life || isLoggedOutFlag()) {
           throw new SessionExpiredError(false);
         }
-        if (!grant) {
-          throw new SessionExpiredError(false);
+        if (grant) {
+          return { kind: 'grant', grant };
         }
-        return { kind: 'grant', grant };
+        consumed.add(found.lease.leaseId);
+        continue;
       }
       if (
         found.kind === 'lease' &&
@@ -774,7 +896,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       }
       if (!writeLease(minted)) {
         if (inspect().kind === 'broken') {
-          return degradedPost(myLife);
+          return runDegraded(myLife);
         }
         throw new SessionExpiredError(false);
       }
@@ -823,6 +945,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         announced = null;
         memoryGrants.clear();
         queuedPlease.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
       }
       wakeAll();
       return;
@@ -830,6 +954,52 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (event.key === SESSION_LEASE_KEY || event.key === null) {
       wakeAll();
     }
+  }
+
+  function releaseOwnDone(): void {
+    const current = readLease();
+    if (!current || current.phase !== 'done' || current.owner !== tabId) {
+      return;
+    }
+    const owns =
+      (announced != null && announced.leaseId === current.leaseId) ||
+      consumed.has(current.leaseId);
+    if (!owns) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(SESSION_LEASE_KEY);
+      if (!raw) {
+        return;
+      }
+      const again = JSON.parse(raw) as Partial<SessionLease>;
+      if (again.phase !== 'done' || again.owner !== tabId || again.leaseId !== current.leaseId) {
+        return;
+      }
+      window.localStorage.removeItem(SESSION_LEASE_KEY);
+    } catch {
+      // Storage bloqueado: não há done para apagar.
+    }
+  }
+
+  function onPageHide(): void {
+    releaseOwnDone();
+  }
+
+  function bindPageHide(): void {
+    if (pageHideBound || typeof window === 'undefined') {
+      return;
+    }
+    pageHideBound = true;
+    window.addEventListener('pagehide', onPageHide);
+  }
+
+  function unbindPageHide(): void {
+    if (!pageHideBound || typeof window === 'undefined') {
+      return;
+    }
+    window.removeEventListener('pagehide', onPageHide);
+    pageHideBound = false;
   }
 
   function ensureStorageListener(): void {
@@ -847,6 +1017,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     window.removeEventListener('storage', onStorage);
     storageBound = false;
   }
+
+  bindPageHide();
 
   const cleaner = () => {
     discardMemory();
@@ -885,6 +1057,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       discardMemory();
       inflight = null;
       unbindStorage();
+      unbindPageHide();
       try {
         channel?.close();
       } catch {

@@ -5,6 +5,7 @@ import { clearLoggedOutFlag, markLoggedOut } from '../auth/loggedOut';
 import {
   clearSessionRefreshMark,
   createSessionCoordinator,
+  GRANT_OWNER_PING_MS,
   LEASE_DONE_MS,
   LEASE_JITTER_MAX_MS,
   LEASE_OPEN_MS,
@@ -62,6 +63,23 @@ function sharedLocks() {
       );
       return run;
     },
+  };
+}
+
+function blockStorage(): () => void {
+  const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('The operation is insecure.', 'SecurityError');
+  });
+  const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new DOMException('The operation is insecure.', 'SecurityError');
+  });
+  const removeItem = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+    throw new DOMException('The operation is insecure.', 'SecurityError');
+  });
+  return () => {
+    setItem.mockRestore();
+    getItem.mockRestore();
+    removeItem.mockRestore();
   };
 }
 
@@ -328,7 +346,7 @@ describe('lease único do refresh', () => {
     ]);
   });
 
-  it('rejeita grant com leaseId errado e não faz POST', async () => {
+  it('rejeita grant com leaseId errado e abre um epoch novo com 1 POST', async () => {
     vi.useFakeTimers();
     const leaseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     seed({
@@ -344,6 +362,9 @@ describe('lease único do refresh', () => {
       sharedLocks() as unknown as LockManager,
       async () => {
         posts += 1;
+        const during = window.localStorage.getItem(SESSION_LEASE_KEY) ?? '';
+        expect(during).not.toContain(leaseId);
+        expect(during).not.toMatch(/jwt/);
         return { accessToken: 'jwt-nao', expiresIn: 30 };
       },
       bus,
@@ -360,13 +381,226 @@ describe('lease único do refresh', () => {
       token: 'jwt-errado',
       expiresIn: 30,
     });
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(0);
-    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS);
+    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 30);
     const result = await pending;
+    expect(result).toBe('jwt-nao');
+    expect(posts).toBe(1);
+    expect(readLease()?.epoch).toBe(3);
+    expect(readLease()?.phase).toBe('done');
+    expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt-errado|jwt-nao/);
+    follower.reset();
+  });
+
+  it('pagehide apaga o done do dono e não apaga o de outra aba nem o sending', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    const owner = tab(null, async () => ({ accessToken: 'jwt-dono', expiresIn: 10 }), bus);
+    const ready = owner.refresh();
+    await flushJitter();
+    expect((await ready).accessToken).toBe('jwt-dono');
+    expect(readLease()?.phase).toBe('done');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()).toBeNull();
+    owner.reset();
+
+    seed({
+      leaseId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      epoch: 1,
+      owner: 'aba-alheia',
+      until: Date.now() + LEASE_DONE_MS,
+      phase: 'done',
+    });
+    const follower = tab(null, async () => ({ accessToken: 'jwt-nao', expiresIn: 10 }), bus);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()?.leaseId).toBe('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+    expect(readLease()?.phase).toBe('done');
+    follower.reset();
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sender = tab(
+      null,
+      async () => {
+        await gate;
+        return { accessToken: 'jwt-voo', expiresIn: 10 };
+      },
+      bus,
+    );
+    const pending = sender.refresh().then(
+      () => 'ok',
+      () => 'fail',
+    );
+    await flushJitter();
+    expect(readLease()?.phase).toBe('sending');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()?.phase).toBe('sending');
+    sender.reset();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await pending).toBe('fail');
+    expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt/);
+  });
+
+  it('done sem canal falha fechado e não faz POST', async () => {
+    vi.useFakeTimers();
+    seed({
+      leaseId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      epoch: 2,
+      owner: 'aba-alheia',
+      until: Date.now() + LEASE_DONE_MS,
+      phase: 'done',
+    });
+    let posts = 0;
+    const follower = tab(
+      sharedLocks() as unknown as LockManager,
+      async () => {
+        posts += 1;
+        return { accessToken: 'jwt-nao', expiresIn: 10 };
+      },
+      null,
+    );
+    const result = await follower.refresh().then(
+      () => 'ok',
+      (error: unknown) => error,
+    );
     expect(result).toBeInstanceOf(SessionExpiredError);
+    expect((result as SessionExpiredError).confirmed).toBe(false);
     expect(posts).toBe(0);
-    expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt-errado/);
+    expect(readLease()?.phase).toBe('done');
+    follower.reset();
+  });
+
+  it.each([
+    ['com locks', true],
+    ['sem locks', false],
+  ])('%s: done sem resposta no ping abre epoch novo e faz 1 POST', async (_label, withLocks) => {
+    vi.useFakeTimers();
+    const oldId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    seed({
+      leaseId: oldId,
+      epoch: 7,
+      owner: 'aba-morta',
+      until: Date.now() + LEASE_DONE_MS,
+      phase: 'done',
+    });
+    const locks = withLocks ? (sharedLocks() as unknown as LockManager) : null;
+    const bus = createBus();
+    let posts = 0;
+    const tabs = [0, 1].map(() =>
+      tab(locks, async () => {
+        posts += 1;
+        const during = window.localStorage.getItem(SESSION_LEASE_KEY) ?? '';
+        expect(during).not.toContain(oldId);
+        expect(during).toContain('"phase":"sending"');
+        expect(during).not.toMatch(/jwt/);
+        return { accessToken: 'jwt-epoch-novo', expiresIn: 40 };
+      }, bus),
+    );
+    const pending = Promise.all(tabs.map((item) => item.refresh()));
+    await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
+    expect(posts).toBe(0);
+    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 40);
+    const grants = await pending;
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-epoch-novo', 'jwt-epoch-novo']);
+    expect(readLease()?.epoch).toBe(8);
+    expect(readLease()?.phase).toBe('done');
+    expect(readLease()?.leaseId).not.toBe(oldId);
+    expect(JSON.stringify(readLease())).not.toMatch(/jwt/);
+    for (const item of tabs) {
+      item.reset();
+    }
+  });
+
+  it('com locks e storage bloqueado, 2 e 3 abas fazem 1 POST e recebem o grant', async () => {
+    const restore = blockStorage();
+    try {
+      for (const count of [2, 3]) {
+        const locks = sharedLocks() as unknown as LockManager;
+        const bus = createBus();
+        let posts = 0;
+        let release: (grant: { accessToken: string; expiresIn: number | null }) => void = () => {};
+        const gate = new Promise<{ accessToken: string; expiresIn: number | null }>((resolve) => {
+          release = resolve;
+        });
+        const coordinators = Array.from({ length: count }, () =>
+          tab(
+            locks,
+            () => {
+              posts += 1;
+              return gate;
+            },
+            bus,
+          ),
+        );
+        const pending = Promise.all(coordinators.map((item) => item.refresh()));
+        await vi.waitFor(() => {
+          expect(posts).toBe(1);
+        });
+        release({ accessToken: 'jwt-degradado', expiresIn: 30 });
+        const grants = await pending;
+        expect(posts, `${count} abas`).toBe(1);
+        expect(grants.every((grant) => grant.accessToken === 'jwt-degradado')).toBe(true);
+        for (const item of coordinators) {
+          item.reset();
+        }
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it('sem locks e sem storage, quem não coordena falha fechado', async () => {
+    const restore = blockStorage();
+    try {
+      for (const count of [2, 3]) {
+        const bus = createBus();
+        let posts = 0;
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const coordinators = Array.from({ length: count }, () =>
+          tab(
+            null,
+            async () => {
+              posts += 1;
+              await gate;
+              return { accessToken: 'jwt-degradado', expiresIn: 30 };
+            },
+            bus,
+          ),
+        );
+        const pending = Promise.all(
+          coordinators.map((item) =>
+            item.refresh().then(
+              (grant) => grant.accessToken,
+              (error: unknown) => error,
+            ),
+          ),
+        );
+        await vi.waitFor(() => {
+          expect(posts).toBe(1);
+        });
+        release();
+        const results = await pending;
+        expect(posts, `${count} abas`).toBe(1);
+        expect(results.filter((result) => result === 'jwt-degradado')).toHaveLength(1);
+        const closed = results.filter((result) => result instanceof SessionExpiredError);
+        expect(closed).toHaveLength(count - 1);
+        expect(closed.every((error) => (error as SessionExpiredError).confirmed === false)).toBe(true);
+        for (const item of coordinators) {
+          item.reset();
+        }
+      }
+    } finally {
+      restore();
+    }
   });
 
   it.each([
