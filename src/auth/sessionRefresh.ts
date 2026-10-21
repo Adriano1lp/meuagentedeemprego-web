@@ -18,18 +18,6 @@
  * recente espera de novo pelo canal e, se não chegar, falha fechado sem POST.
  * Sem localStorage, segue só o canal. O evento storage repete o refreshing.
  *
- * Marca expirada, inválida ou de um tabId sem dono vivo é descartada e esta
- * aba faz o próprio refresh. Dono vivo: o lock de presença (`mae-web-tab-`)
- * aparece em `locks.query`, ou a aba responde `tab-pong` no canal. Sem canal,
- * a marca com tabId só sai se o `startedAt` não andar no intervalo do
- * heartbeat. Quem viu o dono vivo antes de entrar no lock não manda outro
- * POST se ele morrer no meio — o reuso do cookie revoga a família. Boot e F5
- * que só encontram a marca órfã renovam uma vez.
- *
- * Enquanto o POST está no ar, o dono regrava `startedAt` abaixo do TTL. Quem
- * perdeu o grant no canal pede de novo (`claim`) em vez de esperar calado até
- * a marca parecer órfã.
- *
  * Sem Web Locks, quem não lidera nunca manda claim-ack: republica o
  * refreshing do líder que já conhece, ou fica calada. Refreshing só é
  * anunciado por quem está de fato no POST e vence qualquer id. Se ninguém
@@ -53,18 +41,7 @@ export const SESSION_REFRESH_MARK_KEY = 'mae.sessionRefresh';
 
 type RefreshMark = { tabId: string; startedAt: number } | { at: number };
 
-export const PEER_TTL_MS = 5_000;
-
-/** Abaixo do TTL, para a marca não parecer órfã no meio do POST. */
-export const REFRESH_MARK_HEARTBEAT_MS = 1_000;
-
-const STORAGE_OWNER_POLL_MS = 200;
-const STORAGE_OWNER_WAIT_MS = REFRESH_MARK_HEARTBEAT_MS + STORAGE_OWNER_POLL_MS;
-
-/** Quem perdeu o broadcast pede o grant de novo, ainda dentro do TTL. */
-const GRANT_REASK_MS = 250;
-
-const TAB_PRESENCE_PREFIX = 'mae-web-tab-';
+const PEER_TTL_MS = 5_000;
 
 /**
  * Sem `navigator.locks`, a aba que não liderou espera o grant ou a falha
@@ -106,10 +83,7 @@ type WireMessage =
   | { v: 1; type: 'session-expired' }
   | { v: 1; type: 'claim'; id: string }
   | { v: 1; type: 'claim-ack'; id: string; from: string }
-  | { v: 1; type: 'refreshing'; id: string }
-  | { v: 1; type: 'tab-ping'; tabId: string }
-  | { v: 1; type: 'tab-pong'; tabId: string }
-  | { v: 1; type: 'grant-please'; id: string };
+  | { v: 1; type: 'refreshing'; id: string };
 
 type ChannelLike = {
   postMessage: (message: WireMessage) => void;
@@ -229,12 +203,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   const tabId = nextTabId();
   let ownGrantAt: number | null = null;
   let storageBound = false;
-  let acceptingPings = true;
-  let tabLockReady: Promise<void> | null = null;
-  let releaseTabLock: (() => void) | null = null;
-  const alivePeers = new Set<string>();
-  const pendingPings = new Map<string, (alive: boolean) => void>();
-  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -431,11 +399,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     const timeOk = (value: unknown): value is number =>
       typeof value === 'number' && Number.isFinite(value) && value <= now() + 1_000;
     if (typeof record.tabId === 'string' && 'startedAt' in record) {
-      if (record.tabId.trim() === '' || !timeOk(record.startedAt)) {
-        removeRefreshMark();
-        return null;
-      }
-      if (now() - record.startedAt > PEER_TTL_MS) {
+      if (!timeOk(record.startedAt)) {
         removeRefreshMark();
         return null;
       }
@@ -443,10 +407,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
     if ('at' in record) {
       if (!timeOk(record.at)) {
-        removeRefreshMark();
-        return null;
-      }
-      if (now() - record.at > PEER_TTL_MS) {
         removeRefreshMark();
         return null;
       }
@@ -487,35 +447,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
-  function stopRefreshHeartbeat(): void {
-    if (heartbeatTimer != null) {
-      clearTimeout(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-  }
-
-  function beatRefreshMark(): void {
-    heartbeatTimer = null;
-    if (!posting) {
-      return;
-    }
-    const current = readRefreshMark();
-    if (current && !('tabId' in current)) {
-      return;
-    }
-    if (current && 'tabId' in current && current.tabId !== tabId) {
-      return;
-    }
-    writeRefreshMark({ tabId, startedAt: now() });
-    heartbeatTimer = setTimeout(beatRefreshMark, REFRESH_MARK_HEARTBEAT_MS);
-  }
-
-  function startRefreshHeartbeat(): void {
-    stopRefreshHeartbeat();
-    writeRefreshMark({ tabId, startedAt: now() });
-    heartbeatTimer = setTimeout(beatRefreshMark, REFRESH_MARK_HEARTBEAT_MS);
-  }
-
   function foreignRefreshingMark(): { tabId: string; startedAt: number } | null {
     const mark = readRefreshMark();
     if (!mark || !('tabId' in mark)) {
@@ -543,165 +474,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     peerRefreshingAt = mark.startedAt;
   }
 
-  function discardRefreshingMark(mark: { tabId: string; startedAt: number }): void {
-    const current = readRefreshMark();
-    if (
-      current &&
-      'tabId' in current &&
-      current.tabId === mark.tabId &&
-      current.startedAt === mark.startedAt
-    ) {
-      removeRefreshMark();
-    }
-  }
-
-  function tabPresenceName(ownerId: string): string {
-    return `${TAB_PRESENCE_PREFIX}${ownerId}`;
-  }
-
-  function releaseTabPresence(): void {
-    const release = releaseTabLock;
-    releaseTabLock = null;
-    tabLockReady = null;
-    release?.();
-  }
-
-  /** Segura o nome da aba até o pagehide, para as outras consultarem `locks.query`. */
-  function holdTabLock(): Promise<void> {
-    if (!locks || typeof locks.query !== 'function') {
-      return Promise.resolve();
-    }
-    if (tabLockReady) {
-      return tabLockReady;
-    }
-    acceptingPings = true;
-    tabLockReady = new Promise<void>((resolveHeld) => {
-      let release = () => {};
-      const untilClose = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      releaseTabLock = () => {
-        releaseTabLock = null;
-        release();
-      };
-      const requested = locks.request(tabPresenceName(tabId), { mode: 'shared' }, () => {
-        resolveHeld();
-        return untilClose;
-      });
-      void requested.catch(() => {
-        resolveHeld();
-      });
-    });
-    return tabLockReady;
-  }
-
-  async function tabOwnerAlive(ownerId: string): Promise<boolean> {
-    if (!locks || typeof locks.query !== 'function' || !ownerId) {
-      return false;
-    }
-    try {
-      const snapshot = await locks.query();
-      return (snapshot.held ?? []).some((info) => info.name === tabPresenceName(ownerId));
-    } catch {
-      return false;
-    }
-  }
-
-  /** Sem `query`, não dá para provar a morte: a marca continua valendo. */
-  async function refreshingOwnerAlive(ownerId: string): Promise<boolean> {
-    if (!locks || typeof locks.query !== 'function') {
-      return true;
-    }
-    return tabOwnerAlive(ownerId);
-  }
-
-  function ownerAnswers(ownerId: string): Promise<boolean> {
-    if (!ownerId || ownerId === tabId || alivePeers.has(ownerId)) {
-      return Promise.resolve(ownerId !== tabId && alivePeers.has(ownerId));
-    }
-    const current = ensureChannel();
-    if (!current) {
-      return Promise.resolve(false);
-    }
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (alive: boolean) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        pendingPings.delete(ownerId);
-        resolve(alive);
-      };
-      const timer = setTimeout(() => {
-        finish(alivePeers.has(ownerId));
-      }, CLAIM_CONFIRM_MS);
-      pendingPings.set(ownerId, finish);
-      publish({ v: 1, type: 'tab-ping', tabId: ownerId });
-    });
-  }
-
-  /**
-   * Sem BroadcastChannel o ping não existe. A marca morta fica parada; a do
-   * POST longo muda o `startedAt` a cada heartbeat.
-   */
-  async function storageOwnerVerdict(
-    mark: { tabId: string; startedAt: number },
-  ): Promise<'alive' | 'finished' | 'dead'> {
-    const startedAt = mark.startedAt;
-    const ownerId = mark.tabId;
-    const deadline = now() + STORAGE_OWNER_WAIT_MS;
-    while (now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, STORAGE_OWNER_POLL_MS));
-      const current = readRefreshMark();
-      if (!current) {
-        return 'dead';
-      }
-      if ('tabId' in current && 'startedAt' in current) {
-        const refreshing = current as { tabId: string; startedAt: number };
-        if (refreshing.tabId !== ownerId) {
-          return 'dead';
-        }
-        if (refreshing.startedAt !== startedAt) {
-          return 'alive';
-        }
-      } else if ('at' in current) {
-        return 'finished';
-      }
-    }
-    return 'dead';
-  }
-
-  async function claimMustFollowMark(): Promise<boolean> {
-    const mark = foreignRefreshingMark();
-    if (!mark) {
-      return false;
-    }
-    if (livePeerRefreshing() || (await ownerAnswers(mark.tabId))) {
-      noteForeignRefreshing(mark);
-      return true;
-    }
-    // Com canal, sem pong a marca é órfã mesmo que o startedAt esteja novo.
-    if (!channel) {
-      const verdict = await storageOwnerVerdict(mark);
-      if (verdict === 'alive') {
-        noteForeignRefreshing(mark);
-        return true;
-      }
-      if (verdict === 'finished') {
-        return true;
-      }
-      const again = foreignRefreshingMark();
-      if (again && again.tabId === mark.tabId && again.startedAt !== mark.startedAt) {
-        noteForeignRefreshing(again);
-        return true;
-      }
-    }
-    discardRefreshingMark(mark);
-    return false;
-  }
-
   function askForStoredGrant(): void {
     if (posting || isLoggedOutFlag()) {
       return;
@@ -709,8 +481,13 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (peerGrant && now() - peerGrant.at <= PEER_TTL_MS) {
       return;
     }
-    // Não entra na eleição: um claim aqui rouba o menor id e ninguém faz o POST.
-    publish({ v: 1, type: 'grant-please', id: randomId() });
+    const id = randomId();
+    const previous = attemptId;
+    attemptId = id;
+    publish({ v: 1, type: 'claim', id });
+    if (previous && previous !== id) {
+      attemptId = previous;
+    }
   }
 
   function onStorage(event: StorageEvent): void {
@@ -737,9 +514,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if ('persisted' in event && Boolean((event as PageTransitionEvent).persisted)) {
       return;
     }
-    acceptingPings = false;
-    releaseTabPresence();
-    stopRefreshHeartbeat();
     clearOwnGrantMark();
   }
 
@@ -843,17 +617,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         rememberFailure(data.at || now(), false);
         return;
       }
-      if (data.type === 'grant-please' && typeof data.id === 'string') {
-        if (posting) {
-          const activeId = refreshingId ?? attemptId;
-          if (activeId) {
-            publish({ v: 1, type: 'refreshing', id: activeId });
-          }
-          return;
-        }
-        republishAnnouncedGrant(data.id);
-        return;
-      }
       if (data.type === 'claim' && typeof data.id === 'string') {
         const known = claims.has(data.id);
         claims.set(data.id, now());
@@ -904,17 +667,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         notifyClaimWaiters();
         return;
       }
-      if (data.type === 'tab-ping' && typeof data.tabId === 'string') {
-        if (acceptingPings && data.tabId === tabId) {
-          publish({ v: 1, type: 'tab-pong', tabId });
-        }
-        return;
-      }
-      if (data.type === 'tab-pong' && typeof data.tabId === 'string') {
-        alivePeers.add(data.tabId);
-        pendingPings.get(data.tabId)?.(true);
-        return;
-      }
       if (data.type === 'logout') {
         clearAnnouncedGrant();
         emit({ type: 'logout' });
@@ -943,13 +695,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       refreshingId = activeId;
       publish({ v: 1, type: 'refreshing', id: activeId });
     }
-    startRefreshHeartbeat();
     try {
       const grant = await postRefresh();
-      stopRefreshHeartbeat();
       const at = now();
-      ownGrantAt = at;
-      writeRefreshMark({ at });
       holdAnnouncedGrant(grant, at);
       publish({
         v: 1,
@@ -960,17 +708,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       });
       return grant;
     } catch (error) {
-      stopRefreshHeartbeat();
-      clearOwnRefreshingMark();
       publish({ v: 1, type: 'refresh-failed', at: now() });
       throw error;
     } finally {
       posting = false;
-      stopRefreshHeartbeat();
     }
   }
 
-  async function refreshInsideLock(witnessedLiveOwner: boolean): Promise<AccessGrant> {
+  async function refreshInsideLock(): Promise<AccessGrant> {
     await drain();
     const shared = takePeerGrant();
     if (shared) {
@@ -980,33 +725,16 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (peerError) {
       throw peerError;
     }
-    // Grant já gravado vence um refreshing antigo visto no storage. Senão o
-    // F5 espera 5s e cai em /entrar, ou a próxima aba manda o segundo POST.
+    // Canal ou marca: refresh de outra aba ainda vale. Sem segundo POST.
     const markedRefreshing = foreignRefreshingMark();
-    if (!markedRefreshing && foreignGrantMark() != null) {
-      try {
-        return await followOrFail();
-      } finally {
-        if (!posting) {
-          attemptId = null;
-        }
-      }
-    }
     if (livePeerRefreshing() || markedRefreshing) {
-      const ownerAlive = markedRefreshing
-        ? await refreshingOwnerAlive(markedRefreshing.tabId)
-        : false;
-      if (livePeerRefreshing() || ownerAlive || witnessedLiveOwner) {
-        if (markedRefreshing) {
-          noteForeignRefreshing(markedRefreshing);
-        }
-        return followOrFail();
-      }
       if (markedRefreshing) {
-        discardRefreshingMark(markedRefreshing);
+        noteForeignRefreshing(markedRefreshing);
       }
+      return followOrFail();
     }
     if (foreignGrantMark() != null) {
+      askForStoredGrant();
       try {
         return await followOrFail();
       } finally {
@@ -1042,63 +770,25 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (!locks) {
       return refreshWithClaim();
     }
-    await holdTabLock();
-    let witnessedLiveOwner = livePeerRefreshing() != null;
-    if (!witnessedLiveOwner && typeof locks.query === 'function') {
-      const marked = foreignRefreshingMark();
-      if (marked) {
-        // `query` prova o dono. Se não aparecer, o ping cobre o WebKit
-        // que abre o canal tarde: sem pong, a marca é órfã.
-        witnessedLiveOwner = await tabOwnerAlive(marked.tabId);
-        if (!witnessedLiveOwner) {
-          witnessedLiveOwner = await ownerAnswers(marked.tabId);
-        }
-      }
-    }
-    const inner = await locks.request(REFRESH_LOCK_NAME, () =>
-      refreshInsideLock(witnessedLiveOwner),
-    );
+    const inner = await locks.request(REFRESH_LOCK_NAME, () => refreshInsideLock());
     return await inner;
   }
 
   async function followOrFail(): Promise<AccessGrant> {
-    askForStoredGrant();
-    let reask: ReturnType<typeof setTimeout> | null = null;
-    let reaskStopped = false;
-    const armReask = () => {
-      reask = setTimeout(() => {
-        if (reaskStopped) {
-          return;
-        }
-        askForStoredGrant();
-        if (reaskStopped) {
-          return;
-        }
-        armReask();
-      }, GRANT_REASK_MS);
-    };
-    armReask();
-    try {
-      const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
-      if (isLoggedOutFlag()) {
-        throw new SessionExpiredError(false);
-      }
-      if (outcome === 'grant') {
-        const grant = takePeerGrant();
-        if (grant) {
-          return grant;
-        }
-      }
-      if (outcome === 'failed') {
-        throw takePeerFailure() ?? new SessionExpiredError(false);
-      }
+    const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
+    if (isLoggedOutFlag()) {
       throw new SessionExpiredError(false);
-    } finally {
-      reaskStopped = true;
-      if (reask != null) {
-        clearTimeout(reask);
+    }
+    if (outcome === 'grant') {
+      const grant = takePeerGrant();
+      if (grant) {
+        return grant;
       }
     }
+    if (outcome === 'failed') {
+      throw takePeerFailure() ?? new SessionExpiredError(false);
+    }
+    throw new SessionExpiredError(false);
   }
 
   async function refreshWithClaim(): Promise<AccessGrant> {
@@ -1109,9 +799,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     const initialFailure = takePeerFailure();
     if (initialFailure) {
       throw initialFailure;
-    }
-    if (await claimMustFollowMark()) {
-      return followOrFail();
     }
 
     const id = randomId();
@@ -1204,14 +891,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       };
     },
     reset() {
-      acceptingPings = true;
-      stopRefreshHeartbeat();
-      releaseTabPresence();
-      for (const done of pendingPings.values()) {
-        done(false);
-      }
-      pendingPings.clear();
-      alivePeers.clear();
       inflight = null;
       peerGrant = null;
       clearAnnouncedGrant();
