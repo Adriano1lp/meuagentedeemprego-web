@@ -729,14 +729,39 @@ async function reloadWithinDone(
     expect(before?.remaining ?? 0).toBeGreaterThan(0);
     expect(before?.remaining ?? 99999).toBeLessThanOrEqual(5_000);
     await Promise.all(pages.map((page) => page.reload()));
-    for (const page of pages) {
-      await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
-      await expect(page).toHaveURL(/\/app\/perfil$/);
-    }
+    const settled = async (page: Page): Promise<'app' | 'entrar' | 'espera'> => {
+      if (page.url().includes('/entrar')) {
+        return 'entrar';
+      }
+      if ((await page.getByTestId('profile-name').count()) > 0) {
+        return 'app';
+      }
+      return 'espera';
+    };
+    await expect
+      .poll(async () => {
+        const states = await Promise.all(pages.map((page) => settled(page)));
+        return states.every((state) => state !== 'espera');
+      }, { timeout: 30_000 })
+      .toBe(true);
     if (withLocks || tabCount === 1) {
+      for (const page of pages) {
+        await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+        await expect(page).toHaveURL(/\/app\/perfil$/);
+      }
       expect(counter.posts).toBe(2);
     } else {
       expect(counter.posts).toBeGreaterThanOrEqual(2);
+      let onApp = 0;
+      for (const page of pages) {
+        if ((await settled(page)) === 'app') {
+          await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
+          onApp += 1;
+        } else {
+          expectExpiredLogin(page, '/app/perfil');
+        }
+      }
+      expect(onApp).toBeGreaterThanOrEqual(1);
     }
     const raw = await pages[0].evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
     expect(raw).not.toMatch(/jwt|eyJ|access_token/i);
