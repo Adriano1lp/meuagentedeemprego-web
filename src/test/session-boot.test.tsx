@@ -8,12 +8,12 @@ import { App } from '../App';
 import { AuthProvider } from '../auth/AuthContext';
 import { LOGGED_OUT_KEY, resetLoggedOutForTests } from '../auth/loggedOut';
 import {
-  CLAIM_COLLISION_MS,
-  CLAIM_CONFIRM_MS,
-  FOLLOWER_GRANT_WAIT_MS,
+  GRANT_OWNER_PING_MS,
+  LEASE_JITTER_MAX_MS,
+  LEASE_OPEN_MS,
   resetSessionRuntimeForTests,
   SESSION_CHANNEL_NAME,
-  SESSION_REFRESH_MARK_KEY,
+  SESSION_LEASE_KEY,
 } from '../auth/sessionRefresh';
 import { resetReturnToMemory } from '../auth/returnTo';
 
@@ -60,8 +60,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-let forceFollower = false;
-
 class FollowerChannel {
   static all = new Set<FollowerChannel>();
 
@@ -75,12 +73,6 @@ class FollowerChannel {
   }
 
   postMessage(data: unknown) {
-    const message = data as { type?: string };
-    if (forceFollower && message?.type === 'claim') {
-      for (const listener of this.listeners) {
-        listener({ data: { v: 1, type: 'claim', id: '' } } as MessageEvent);
-      }
-    }
     for (const other of FollowerChannel.all) {
       if (other === this || other.name !== this.name) {
         continue;
@@ -117,25 +109,25 @@ function hideNavigatorLocks(): () => void {
   };
 }
 
-function installSessionChannel(options?: { grantAfterMs?: number; forceFollower?: boolean }) {
-  forceFollower = options?.forceFollower === true;
+function installSessionChannel(options?: { grantAfterMs?: number }) {
   FollowerChannel.all.clear();
   let scheduled = false;
   const Original = FollowerChannel;
   class SchedulingChannel extends Original {
     postMessage(data: unknown) {
-      const message = data as { type?: string };
-      if (message?.type === 'claim' && options?.grantAfterMs != null && !scheduled) {
+      const message = data as { type?: string; leaseId?: string };
+      if (message?.type === 'grant-please' && options?.grantAfterMs != null && !scheduled) {
         scheduled = true;
         const delay = options.grantAfterMs;
+        const leaseId = message.leaseId;
         setTimeout(() => {
           const peer = new Original(SESSION_CHANNEL_NAME);
           peer.postMessage({
             v: 1,
             type: 'grant',
-            accessToken: 'jwt-seguidora',
+            leaseId,
+            token: 'jwt-seguidora',
             expiresIn: null,
-            at: Date.now(),
           });
         }, delay);
       }
@@ -354,9 +346,20 @@ describe('boot da sessão', () => {
     expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument();
   });
 
-  it('sem locks, o grant em 3s é reaproveitado e não há outro POST', async () => {
+  it('sem locks, o grant dentro do ping é reaproveitado e não há outro POST', async () => {
     vi.useFakeTimers();
-    const restoreLocks = installSessionChannel({ grantAfterMs: 3_000, forceFollower: true });
+    const grantAt = GRANT_OWNER_PING_MS - 100;
+    const restoreLocks = installSessionChannel({ grantAfterMs: grantAt });
+    window.localStorage.setItem(
+      SESSION_LEASE_KEY,
+      JSON.stringify({
+        leaseId: '11111111-1111-4111-8111-111111111111',
+        epoch: 1,
+        owner: 'outra-aba',
+        until: Date.now() + LEASE_OPEN_MS,
+        phase: 'done',
+      }),
+    );
     const localSet = vi.spyOn(window.localStorage, 'setItem');
     const sessionSet = vi.spyOn(window.sessionStorage, 'setItem');
     let refreshPosts = 0;
@@ -391,7 +394,7 @@ describe('boot da sessão', () => {
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_999);
+      await vi.advanceTimersByTimeAsync(grantAt - 1);
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     expect(refreshPosts).toBe(0);
@@ -412,7 +415,17 @@ describe('boot da sessão', () => {
 
   it('sem locks, sem grant em 5s vai para /entrar?next e não faz POST', async () => {
     vi.useFakeTimers();
-    const restoreLocks = installSessionChannel({ forceFollower: true });
+    const restoreLocks = installSessionChannel();
+    window.localStorage.setItem(
+      SESSION_LEASE_KEY,
+      JSON.stringify({
+        leaseId: '22222222-2222-4222-8222-222222222222',
+        epoch: 1,
+        owner: 'outra-aba',
+        until: Date.now() + LEASE_OPEN_MS,
+        phase: 'sending',
+      }),
+    );
     let refreshPosts = 0;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -429,7 +442,7 @@ describe('boot da sessão', () => {
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS - 1);
+      await vi.advanceTimersByTimeAsync(LEASE_OPEN_MS - 1);
     });
     expect(screen.getByTestId('session-boot')).toBeInTheDocument();
     expect(screen.queryByTestId('session-expired-notice')).not.toBeInTheDocument();
@@ -467,7 +480,7 @@ describe('boot da sessão', () => {
 
     renderAt('/app/perfil', fetchImpl);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+      await vi.advanceTimersByTimeAsync(LEASE_JITTER_MAX_MS + 50);
     });
 
     expect(screen.getByTestId('session-expired-notice')).toHaveTextContent(
@@ -514,7 +527,7 @@ describe('boot da sessão', () => {
     });
     renderAt('/app/perfil', fetchImpl);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+      await vi.advanceTimersByTimeAsync(LEASE_JITTER_MAX_MS + 50);
     });
     expect(screen.getByTestId('profile-panel')).toBeInTheDocument();
     return { refreshHits: () => refreshHits };
@@ -532,7 +545,7 @@ describe('boot da sessão', () => {
     expect(seen.some((message) => message.type === 'session-expired')).toBe(false);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000 + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+      await vi.advanceTimersByTimeAsync(30_000 + LEASE_JITTER_MAX_MS + 50);
     });
 
     expect(seen.some((message) => message.type === 'session-expired')).toBe(true);
@@ -559,7 +572,7 @@ describe('boot da sessão', () => {
     await bootLoggedIn(() => json({ detail: 'indisponivel' }, 500));
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000 + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
+      await vi.advanceTimersByTimeAsync(30_000 + LEASE_JITTER_MAX_MS + 50);
     });
 
     expect(screen.getByTestId('session-location').textContent).toContain('/entrar');
@@ -684,16 +697,22 @@ describe('logout com timeout ou erro', () => {
   });
 
   it('login e logout apagam a marca de refresh de outra aba', async () => {
-    const foreign = JSON.stringify({ tabId: 'outra-aba', startedAt: Date.now() });
-    window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, foreign);
+    const foreign = JSON.stringify({
+      leaseId: '33333333-3333-4333-8333-333333333333',
+      epoch: 4,
+      owner: 'outra-aba',
+      until: Date.now() - 1,
+      phase: 'open',
+    });
+    window.localStorage.setItem(SESSION_LEASE_KEY, foreign);
     const { fetchImpl } = authFetch('error');
     await loginToApp(fetchImpl);
-    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
+    expect(window.localStorage.getItem(SESSION_LEASE_KEY)).toBeNull();
 
-    window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, foreign);
+    window.localStorage.setItem(SESSION_LEASE_KEY, foreign);
     fireEvent.click(screen.getByTestId('logout-button'));
     expect(await screen.findByTestId('landing-page')).toBeInTheDocument();
-    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
+    expect(window.localStorage.getItem(SESSION_LEASE_KEY)).toBeNull();
     expect(window.localStorage.getItem('mae.loggedOut')).toBe('1');
   });
 });

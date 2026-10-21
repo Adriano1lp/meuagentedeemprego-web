@@ -181,12 +181,14 @@ test('volta sem sessão pede login e só então mostra o limite 30', async ({
   expect(href).not.toContain('cs_test');
 
   const storageBefore = await page.evaluate(async () => ({
-    local: localStorage.length,
     session: sessionStorage.length,
+    lease: localStorage.getItem('mae.sessionLease'),
+    keys: Object.keys(localStorage),
     databases: (await indexedDB.databases?.()) ?? [],
   }));
-  expect(storageBefore.local).toBe(0);
   expect(storageBefore.session).toBe(0);
+  expect(storageBefore.keys.every((key) => key === 'mae.sessionLease')).toBe(true);
+  expect(storageBefore.lease ?? '').not.toMatch(/cs_test|session_id|jwt|eyJ|access_token/i);
   expect(storageBefore.databases).toEqual([]);
 
   await login(page);

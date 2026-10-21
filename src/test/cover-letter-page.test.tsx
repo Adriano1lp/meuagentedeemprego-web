@@ -239,8 +239,11 @@ describe('Feature: Carta de apresentacao a partir do historico', () => {
     expect(text.className).toContain('whitespace-pre-wrap');
     expect(screen.getByTestId('cover-letter-generate')).toBeEnabled();
     expect(screen.queryByTestId('cover-letter-loading')).not.toBeInTheDocument();
-    expect(setItem).not.toHaveBeenCalled();
-    expect(window.localStorage.length).toBe(0);
+    expect(setItem.mock.calls.every((call) => call[0] === 'mae.sessionLease')).toBe(true);
+    for (const call of setItem.mock.calls) {
+      expect(String(call[1])).not.toMatch(/jwt|eyJ|access_token/i);
+    }
+    expect(window.localStorage.getItem('access_token')).toBeNull();
     expect(window.sessionStorage.length).toBe(0);
     // O foco do resultado é um task depois do commit: o loading desmonta com o foco
     // e o botão habilitado de novo. Sem este await a leitura pega o botão ou o body.

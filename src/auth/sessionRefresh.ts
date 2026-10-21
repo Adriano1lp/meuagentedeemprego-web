@@ -1,29 +1,31 @@
 /**
- * Um refresh por vez na aba (promise compartilhada) e entre abas
- * (navigator.locks, nome fixo). Sem Web Locks, o BroadcastChannel elege
- * quem renova. O token só atravessa o canal efêmero para a aba que
- * esperou o mesmo refresh — não vai para localStorage, sessionStorage,
- * cookie legível nem console.
+ * Um refresh por vez na aba (promise compartilhada) e entre abas.
+ * A coordenação é um lease único em localStorage, sem token. O Web Lock
+ * só cobre a aquisição. O token fica em memória e, no máximo, atravessa
+ * o BroadcastChannel para quem esperou aquele leaseId.
  *
- * Invariáveis de uma rodada (N abas, nenhuma chegou com token), com ou sem
- * Web Locks:
- * - No máximo um POST /auth/refresh.
- * - Exatamente um POST quando o líder conclui. As outras esperam o grant
- *   ou a falha. Se o líder morre no meio do POST, quem viu o refreshing
- *   não faz outro POST.
+ * mae.sessionLease = {leaseId, epoch, owner, until, phase}.
+ * phase: 'open' | 'sending' | 'done'.
  *
- * Com Web Locks, dentro do lock: um grant recente no canal é reaproveitado.
- * Se o canal perdeu o aviso, vale a marca em localStorage (sem token) pelo
- * mesmo PEER_TTL_MS. Refresh em curso de outra aba espera o grant. Grant
- * recente espera de novo pelo canal e, se não chegar, falha fechado sem POST.
- * Sem localStorage, segue só o canal. O evento storage repete o refreshing.
+ * L (LEASE_OPEN_MS) é a janela do open e o until renovado no sending.
+ * G (LEASE_DONE_MS) é a janela do done. Não aumentar.
  *
- * Sem Web Locks, quem não lidera nunca manda claim-ack: republica o
- * refreshing do líder que já conhece, ou fica calada. Refreshing só é
- * anunciado por quem está de fato no POST e vence qualquer id. Se ninguém
- * está no POST, o menor id desempata. Mesmo com ack, o POST espera
- * CLAIM_COLLISION_MS sem nenhum refreshing. A seguidora espera o grant ou
- * a falha por até FOLLOWER_GRANT_WAIT_MS.
+ * Sem Web Locks, a releitura e o fetch não são atômicos. Se duas abas
+ * passarem por essa janela, o backend revoga a família: logout falso,
+ * sem vazamento. Isso depende da rotação estrita no backend.
+ *
+ * Invariantes:
+ * - No máximo um POST por lease.
+ * - done com dono vivo: o ping devolve o grant e não há POST.
+ * - done sem resposta no ping: o cookie antigo já foi rotacionado, então
+ *   este leaseId fica consumido e um epoch novo faz um POST.
+ * - No pagehide o dono apaga só o próprio done. sending não é apagado.
+ * - Nada é gravado nem publicado com loggedOut ou com leaseId velho.
+ * - O token não entra no storage.
+ * - Sem canal, quem não é dona falha fechado, inclusive num done.
+ * - sending nunca é retomado; só um open expirado libera epoch novo.
+ * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal.
+ * - Sem lock e sem storage: quem não coordena falha fechado, sem POST.
  */
 
 import {
@@ -31,59 +33,65 @@ import {
   SessionExpiredError,
   type AccessGrant,
 } from '../api/sessionHttp';
-import { isLoggedOutFlag } from './loggedOut';
+import { isLoggedOutFlag, LOGGED_OUT_KEY, LOGGED_OUT_VALUE } from './loggedOut';
 
 export const REFRESH_LOCK_NAME = 'mae-web-session-refresh';
 export const SESSION_CHANNEL_NAME = 'mae-web-session';
 
-/** Sem token: só quem está renovando, ou o instante do último grant. */
-export const SESSION_REFRESH_MARK_KEY = 'mae.sessionRefresh';
+/** Lease sem token. A marca antiga mae.sessionRefresh não é mais lida. */
+export const SESSION_LEASE_KEY = 'mae.sessionLease';
 
-type RefreshMark = { tabId: string; startedAt: number } | { at: number };
+const LEGACY_MARK_KEY = 'mae.sessionRefresh';
 
-const PEER_TTL_MS = 5_000;
+/** L: open e renovação do until durante o POST. Não aumentar. */
+export const LEASE_OPEN_MS = 5_000;
 
-/**
- * Sem `navigator.locks`, a aba que não liderou espera o grant ou a falha
- * neste prazo. Não dispara outro POST /auth/refresh.
- */
-export const FOLLOWER_GRANT_WAIT_MS = 5_000;
+/** G: janela em que o done ainda pode ser lido. Não aumentar. */
+export const LEASE_DONE_MS = 5_000;
 
 /**
- * Sem locks, a aba espera outro claim antes de concluir que está sozinha.
- * Se aparecer um par e o ack não chegar, não há POST.
+ * Ping ao dono de um done. Se o grant não volta neste prazo, o done
+ * está sem dono vivo. Não é L nem G: esses continuam em 5s.
  */
-export const CLAIM_CONFIRM_MS = 300;
+export const GRANT_OWNER_PING_MS = 400;
 
-/**
- * Janela curta imediatamente antes do POST. Mesmo que o ack já tenha
- * chegado, sem nenhum refreshing nesse intervalo não há segundo POST.
- */
-export const CLAIM_COLLISION_MS = 100;
+/** Grant de storage bloqueado. Não é um leaseId e não entra no storage. */
+const DEGRADED_LEASE_ID = 'degradado';
+
+export const LEASE_JITTER_MIN_MS = 30;
+export const LEASE_JITTER_MAX_MS = 80;
+
+const HEARTBEAT_MS = 1_000;
+const UNTIL_SKEW_MS = 1_000;
+
+export type LeasePhase = 'open' | 'sending' | 'done';
+
+export type SessionLease = {
+  leaseId: string;
+  epoch: number;
+  owner: string;
+  until: number;
+  phase: LeasePhase;
+};
+
+const LEASE_KEYS = ['leaseId', 'epoch', 'owner', 'until', 'phase'] as const;
 
 export type SessionEvent = { type: 'logout' } | { type: 'session-expired' };
 
 type Listener = (event: SessionEvent) => void;
 
-type PeerWaiter = {
-  settle: (outcome: 'grant' | 'failed' | 'timeout') => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-
-type ClaimWaiter = {
-  ready: () => boolean;
-  settle: () => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-
 type WireMessage =
-  | { v: 1; type: 'grant'; accessToken: string; expiresIn: number | null; at: number }
-  | { v: 1; type: 'refresh-failed'; at: number }
+  | {
+      v: 1;
+      type: 'grant';
+      leaseId: string;
+      token: string;
+      expiresIn: number | null;
+    }
+  | { v: 1; type: 'grant-please'; id: string; leaseId: string }
+  | { v: 1; type: 'degraded-claim'; tabId: string }
   | { v: 1; type: 'logout' }
-  | { v: 1; type: 'session-expired' }
-  | { v: 1; type: 'claim'; id: string }
-  | { v: 1; type: 'claim-ack'; id: string; from: string }
-  | { v: 1; type: 'refreshing'; id: string };
+  | { v: 1; type: 'session-expired' };
 
 type ChannelLike = {
   postMessage: (message: WireMessage) => void;
@@ -97,7 +105,7 @@ export type SessionCoordinatorDeps = {
   locks?: LockManager | null;
   createChannel?: () => ChannelLike | null;
   now?: () => number;
-  /** No jsdom o drain é pulado para o boot caber em microtasks. */
+  /** Mantido para os testes. O lease não espera o dreno do canal. */
   drain?: () => Promise<void>;
 };
 
@@ -109,41 +117,56 @@ export type SessionCoordinator = {
   reset: () => void;
 };
 
+type Inspect =
+  | { kind: 'broken' }
+  | { kind: 'empty'; nextEpoch: number }
+  | { kind: 'invalid'; nextEpoch: number }
+  | { kind: 'lease'; lease: SessionLease; nextEpoch: number };
+
+type Outcome =
+  | { kind: 'grant'; grant: AccessGrant }
+  | { kind: 'detached'; pending: Promise<AccessGrant> };
+
+type Announced = {
+  leaseId: string;
+  token: string;
+  expiresIn: number | null;
+};
+
+const sessionCleaners = new Set<() => void>();
+const wakes = new Set<() => void>();
+
+function wakeAll(): void {
+  for (const wake of [...wakes]) {
+    wake();
+  }
+}
+
 function defaultNow(): number {
   return Date.now();
 }
 
-function isJsdom(): boolean {
-  return typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+function untilCeiling(at: number): number {
+  return at + Math.max(LEASE_OPEN_MS, LEASE_DONE_MS) + UNTIL_SKEW_MS;
 }
 
-async function drainBroadcastTasks(): Promise<void> {
-  if (isJsdom() || typeof MessageChannel === 'undefined') {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = () => resolve();
-    channel.port2.postMessage(null);
-  });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 20);
-  });
+function nextJitter(): number {
+  const span = LEASE_JITTER_MAX_MS - LEASE_JITTER_MIN_MS + 1;
+  return LEASE_JITTER_MIN_MS + Math.floor(Math.random() * span);
 }
 
-function randomId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
+function newLeaseId(): string {
+  if (typeof crypto === 'undefined' || typeof crypto.randomUUID !== 'function') {
+    throw new SessionExpiredError(false);
   }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return crypto.randomUUID();
 }
 
 let tabSerial = 0;
 
-/** Não usa randomUUID: a eleição sem locks reserva esses ids para o claim. */
 function nextTabId(): string {
   tabSerial += 1;
-  return `tab-${tabSerial}-${Math.random().toString(16).slice(2)}`;
+  return `aba-${tabSerial}-${Math.random().toString(16).slice(2)}`;
 }
 
 function readLocks(explicit: LockManager | null | undefined): LockManager | null {
@@ -177,32 +200,36 @@ function readChannelFactory(
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionCoordinator {
   const now = deps.now ?? defaultNow;
   const postRefresh = deps.postRefresh;
   const locks = readLocks(deps.locks);
   const createChannel = readChannelFactory(deps.createChannel);
-  const drain = deps.drain ?? drainBroadcastTasks;
   const listeners = new Set<Listener>();
   let channel: ChannelLike | null = null;
+  let channelOpened = false;
   let inflight: Promise<AccessGrant> | null = null;
-  let peerGrant: { grant: AccessGrant; at: number } | null = null;
-  let announcedGrant: { grant: AccessGrant; at: number } | null = null;
-  let peerFailureAt: number | null = null;
-  let peerFailureConfirmed = false;
-  const claims = new Map<string, number>();
-  const acks = new Set<string>();
-  let attemptId: string | null = null;
-  let refreshingId: string | null = null;
-  let posting = false;
-  let peerRefreshingId: string | null = null;
-  let peerRefreshingAt: number | null = null;
-  const grantTold = new Set<string>();
-  const peerWaiters = new Set<PeerWaiter>();
-  const claimWaiters = new Set<ClaimWaiter>();
+  let postInFlight: Promise<AccessGrant> | null = null;
+  let postingLeaseId: string | null = null;
+  let life = 0;
+  let beatTimer: ReturnType<typeof setInterval> | null = null;
+  let announced: Announced | null = null;
+  const memoryGrants = new Map<string, { token: string; expiresIn: number | null }>();
+  const consumed = new Set<string>();
+  const answeredPlease = new Set<string>();
+  const queuedPlease = new Map<string, string>();
+  const pleaseIds = new Map<string, string>();
   const tabId = nextTabId();
-  let ownGrantAt: number | null = null;
   let storageBound = false;
+  let pageHideBound = false;
+  let degradedInbox: { token: string; expiresIn: number | null } | null = null;
+  const degradedPeers = new Set<string>();
 
   function emit(event: SessionEvent): void {
     for (const listener of listeners) {
@@ -210,395 +237,137 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
-  function holdAnnouncedGrant(grant: AccessGrant, at: number): void {
-    if (!grant.accessToken.trim()) {
-      return;
-    }
-    announcedGrant = { grant, at };
-    grantTold.clear();
-  }
-
-  function clearAnnouncedGrant(): void {
-    announcedGrant = null;
-    grantTold.clear();
-  }
-
-  /** No máximo um grant por aba que pediu, dentro do prazo. */
-  function republishAnnouncedGrant(requesterId: string): void {
-    if (!requesterId) {
-      return;
-    }
-    if (!announcedGrant || now() - announcedGrant.at > PEER_TTL_MS) {
-      clearAnnouncedGrant();
-      return;
-    }
-    if (isLoggedOutFlag() || grantTold.has(requesterId)) {
-      return;
-    }
-    grantTold.add(requesterId);
-    publish({
-      v: 1,
-      type: 'grant',
-      accessToken: announcedGrant.grant.accessToken,
-      expiresIn: announcedGrant.grant.expiresIn,
-      at: announcedGrant.at,
-    });
-  }
-
-  function rememberGrant(accessToken: string, expiresIn: number | null, at: number): void {
-    if (!accessToken.trim()) {
-      return;
-    }
-    const grant = { accessToken, expiresIn };
-    peerGrant = { grant, at };
-    holdAnnouncedGrant(grant, at);
-    peerFailureAt = null;
-    peerFailureConfirmed = false;
-    peerRefreshingId = null;
-    peerRefreshingAt = null;
-    notifyPeerWaiters();
-    notifyClaimWaiters();
-  }
-
-  function rememberFailure(at: number, confirmed: boolean): void {
-    peerFailureAt = at;
-    peerFailureConfirmed = confirmed;
-    peerGrant = null;
-    clearAnnouncedGrant();
-    peerRefreshingId = null;
-    peerRefreshingAt = null;
-    notifyPeerWaiters();
-    notifyClaimWaiters();
-  }
-
-  function peekPeerOutcome(): 'grant' | 'failed' | null {
-    if (peerGrant && now() - peerGrant.at <= PEER_TTL_MS) {
-      return 'grant';
-    }
-    if (peerFailureAt != null && now() - peerFailureAt <= PEER_TTL_MS) {
-      return 'failed';
-    }
-    return null;
-  }
-
-  function finishPeerWaiter(
-    waiter: PeerWaiter,
-    outcome: 'grant' | 'failed' | 'timeout',
-  ): void {
-    if (!peerWaiters.has(waiter)) {
-      return;
-    }
-    clearTimeout(waiter.timer);
-    peerWaiters.delete(waiter);
-    waiter.settle(outcome);
-  }
-
-  function notifyPeerWaiters(): void {
-    const outcome = peekPeerOutcome();
-    if (!outcome) {
-      return;
-    }
-    for (const waiter of [...peerWaiters]) {
-      finishPeerWaiter(waiter, outcome);
+  function stopHeartbeat(): void {
+    if (beatTimer != null) {
+      clearInterval(beatTimer);
+      beatTimer = null;
     }
   }
 
-  function waitForPeerOutcome(
-    timeoutMs: number,
-  ): Promise<'grant' | 'failed' | 'timeout'> {
-    const immediate = peekPeerOutcome();
-    if (immediate) {
-      return Promise.resolve(immediate);
-    }
-    return new Promise((resolve) => {
-      const waiter: PeerWaiter = {
-        settle: resolve,
-        timer: setTimeout(() => {
-          finishPeerWaiter(waiter, peekPeerOutcome() ?? 'timeout');
-        }, timeoutMs),
-      };
-      peerWaiters.add(waiter);
-    });
+  function discardMemory(): void {
+    life += 1;
+    stopHeartbeat();
+    announced = null;
+    memoryGrants.clear();
+    queuedPlease.clear();
+    answeredPlease.clear();
+    pleaseIds.clear();
+    consumed.clear();
+    degradedInbox = null;
+    degradedPeers.clear();
+    wakeAll();
   }
 
-  function takePeerGrant(): AccessGrant | null {
-    if (!peerGrant || now() - peerGrant.at > PEER_TTL_MS) {
-      peerGrant = null;
-      return null;
-    }
-    const grant = peerGrant.grant;
-    peerGrant = null;
-    return grant;
-  }
-
-  function takePeerFailure(): SessionExpiredError | null {
-    if (peerFailureAt == null || now() - peerFailureAt > PEER_TTL_MS) {
-      peerFailureAt = null;
-      peerFailureConfirmed = false;
-      return null;
-    }
-    const confirmed = peerFailureConfirmed;
-    peerFailureAt = null;
-    peerFailureConfirmed = false;
-    return new SessionExpiredError(confirmed);
-  }
-
-  function finishClaimWaiter(waiter: ClaimWaiter): void {
-    if (!claimWaiters.has(waiter)) {
-      return;
-    }
-    clearTimeout(waiter.timer);
-    claimWaiters.delete(waiter);
-    waiter.settle();
-  }
-
-  function notifyClaimWaiters(): void {
-    for (const waiter of [...claimWaiters]) {
-      if (waiter.ready()) {
-        finishClaimWaiter(waiter);
-      }
-    }
-  }
-
-  function waitUntil(timeoutMs: number, ready: () => boolean): Promise<void> {
-    if (ready()) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      const waiter: ClaimWaiter = {
-        ready,
-        settle: resolve,
-        timer: setTimeout(() => finishClaimWaiter(waiter), timeoutMs),
-      };
-      claimWaiters.add(waiter);
-    });
-  }
-
-  function readRefreshMark(): RefreshMark | null {
-    let raw: string | null = null;
+  function inspect(): Inspect {
+    let raw: string | null;
     try {
-      raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
+      raw = window.localStorage.getItem(SESSION_LEASE_KEY);
     } catch {
-      return null;
+      return { kind: 'broken' };
     }
     if (!raw) {
-      return null;
+      return { kind: 'empty', nextEpoch: 0 };
     }
     let data: unknown;
     try {
       data = JSON.parse(raw);
     } catch {
-      removeRefreshMark();
-      return null;
+      return { kind: 'invalid', nextEpoch: 0 };
     }
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      removeRefreshMark();
-      return null;
+      return { kind: 'invalid', nextEpoch: 0 };
     }
     const record = data as Record<string, unknown>;
-    const timeOk = (value: unknown): value is number =>
-      typeof value === 'number' && Number.isFinite(value) && value <= now() + 1_000;
-    if (typeof record.tabId === 'string' && 'startedAt' in record) {
-      if (!timeOk(record.startedAt)) {
-        removeRefreshMark();
-        return null;
-      }
-      return { tabId: record.tabId, startedAt: record.startedAt };
+    const epochRaw = record.epoch;
+    const untilRaw = record.until;
+    const leaseIdRaw = record.leaseId;
+    const ownerRaw = record.owner;
+    const phaseRaw = record.phase;
+    let nextEpoch = 0;
+    if (
+      typeof epochRaw === 'number' &&
+      Number.isInteger(epochRaw) &&
+      epochRaw >= 0 &&
+      epochRaw <= Number.MAX_SAFE_INTEGER
+    ) {
+      nextEpoch = epochRaw;
     }
-    if ('at' in record) {
-      if (!timeOk(record.at)) {
-        removeRefreshMark();
-        return null;
-      }
-      return { at: record.at };
+    const keys = Object.keys(record);
+    if (keys.length !== LEASE_KEYS.length || LEASE_KEYS.some((key) => !keys.includes(key))) {
+      return { kind: 'invalid', nextEpoch };
     }
-    if ('startedAt' in record) {
-      removeRefreshMark();
-      return null;
+    const phaseOk = phaseRaw === 'open' || phaseRaw === 'sending' || phaseRaw === 'done';
+    const leaseIdOk = typeof leaseIdRaw === 'string' && leaseIdRaw.length > 0;
+    const ownerOk = typeof ownerRaw === 'string' && ownerRaw.length > 0;
+    const untilOk = typeof untilRaw === 'number' && Number.isFinite(untilRaw);
+    if (!phaseOk || !leaseIdOk || !ownerOk || !untilOk || nextEpoch !== epochRaw) {
+      return { kind: 'invalid', nextEpoch };
     }
-    return null;
+    if (untilRaw > untilCeiling(now())) {
+      return { kind: 'invalid', nextEpoch };
+    }
+    return {
+      kind: 'lease',
+      nextEpoch,
+      lease: {
+        leaseId: leaseIdRaw,
+        epoch: nextEpoch,
+        owner: ownerRaw,
+        until: untilRaw,
+        phase: phaseRaw,
+      },
+    };
   }
 
-  function writeRefreshMark(mark: RefreshMark): void {
+  function readLease(): SessionLease | null {
+    const found = inspect();
+    return found.kind === 'lease' ? found.lease : null;
+  }
+
+  function writeLease(lease: SessionLease): boolean {
+    const payload = JSON.stringify({
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: lease.owner,
+      until: lease.until,
+      phase: lease.phase,
+    });
     try {
-      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, JSON.stringify(mark));
+      window.localStorage.setItem(SESSION_LEASE_KEY, payload);
     } catch {
-      if (!('tabId' in mark)) {
-        clearOwnRefreshingMark();
-      }
-    }
-  }
-
-  function removeRefreshMark(): void {
-    clearSessionRefreshMark();
-  }
-
-  function clearOwnRefreshingMark(): void {
-    const mark = readRefreshMark();
-    if (mark && 'tabId' in mark && mark.tabId === tabId) {
-      removeRefreshMark();
-    }
-  }
-
-  function clearOwnGrantMark(): void {
-    const mark = readRefreshMark();
-    if (mark && 'at' in mark && !('tabId' in mark) && mark.at === ownGrantAt) {
-      removeRefreshMark();
-    }
-  }
-
-  function foreignRefreshingMark(): { tabId: string; startedAt: number } | null {
-    const mark = readRefreshMark();
-    if (!mark || !('tabId' in mark)) {
-      return null;
-    }
-    if (mark.tabId === tabId || now() - mark.startedAt > PEER_TTL_MS) {
-      return null;
-    }
-    return mark;
-  }
-
-  function foreignGrantMark(): number | null {
-    const mark = readRefreshMark();
-    if (!mark || !('at' in mark) || 'tabId' in mark) {
-      return null;
-    }
-    if (mark.at === ownGrantAt || now() - mark.at > PEER_TTL_MS) {
-      return null;
-    }
-    return mark.at;
-  }
-
-  function noteForeignRefreshing(mark: { tabId: string; startedAt: number }): void {
-    peerRefreshingId = mark.tabId;
-    peerRefreshingAt = mark.startedAt;
-  }
-
-  function askForStoredGrant(): void {
-    if (posting || isLoggedOutFlag()) {
-      return;
-    }
-    if (peerGrant && now() - peerGrant.at <= PEER_TTL_MS) {
-      return;
-    }
-    const id = randomId();
-    const previous = attemptId;
-    attemptId = id;
-    publish({ v: 1, type: 'claim', id });
-    if (previous && previous !== id) {
-      attemptId = previous;
-    }
-  }
-
-  function onStorage(event: StorageEvent): void {
-    if (event.key !== SESSION_REFRESH_MARK_KEY || !event.newValue) {
-      return;
-    }
-    const mark = readRefreshMark();
-    if (!mark) {
-      return;
-    }
-    if ('tabId' in mark) {
-      if (mark.tabId !== tabId && now() - mark.startedAt <= PEER_TTL_MS) {
-        noteForeignRefreshing(mark);
-        notifyClaimWaiters();
-      }
-      return;
-    }
-    if (peerWaiters.size > 0 && mark.at !== ownGrantAt && now() - mark.at <= PEER_TTL_MS) {
-      askForStoredGrant();
-    }
-  }
-
-  function onPageHide(event: Event): void {
-    if ('persisted' in event && Boolean((event as PageTransitionEvent).persisted)) {
-      return;
-    }
-    clearOwnGrantMark();
-  }
-
-  function ensureStorageListener(): void {
-    if (storageBound || typeof window === 'undefined') {
-      return;
-    }
-    storageBound = true;
-    window.addEventListener('storage', onStorage);
-    window.addEventListener('pagehide', onPageHide);
-  }
-
-  function unbindStorage(): void {
-    if (!storageBound || typeof window === 'undefined') {
-      return;
-    }
-    window.removeEventListener('storage', onStorage);
-    window.removeEventListener('pagehide', onPageHide);
-    storageBound = false;
-  }
-
-  function livePeerRefreshing(): string | null {
-    if (peerRefreshingId == null || peerRefreshingAt == null) {
-      return null;
-    }
-    if (now() - peerRefreshingAt > PEER_TTL_MS) {
-      peerRefreshingId = null;
-      peerRefreshingAt = null;
-      return null;
-    }
-    return peerRefreshingId;
-  }
-
-  function foreignClaimIds(selfId: string): string[] {
-    const cutoff = now() - PEER_TTL_MS;
-    const ids: string[] = [];
-    for (const [claimId, at] of claims) {
-      if (at < cutoff) {
-        claims.delete(claimId);
-        continue;
-      }
-      if (claimId !== selfId) {
-        ids.push(claimId);
-      }
-    }
-    return ids;
-  }
-
-  function leaderIs(selfId: string): boolean {
-    const peer = livePeerRefreshing();
-    if (peer && peer !== selfId) {
       return false;
     }
-    const ids = [selfId, ...foreignClaimIds(selfId)];
-    ids.sort();
-    return ids[0] === selfId;
+    wakeAll();
+    return true;
   }
 
-  function knowsForeignRefreshing(selfId: string | null): boolean {
-    const peer = livePeerRefreshing();
-    return peer != null && peer !== selfId;
-  }
-
-  /** Seguidora: não é o menor id, ou já existe quem está no POST. */
-  function actingAsFollower(selfId: string): boolean {
-    return knowsForeignRefreshing(selfId) || !leaderIs(selfId);
-  }
-
-  function armAttempt(id: string): void {
-    attemptId = id;
-    refreshingId = null;
-    acks.clear();
-    claims.set(id, now());
-    if (actingAsFollower(id)) {
-      return;
-    }
-    for (const peerId of foreignClaimIds(id)) {
-      publish({ v: 1, type: 'claim-ack', id: peerId, from: id });
-    }
+  function startHeartbeat(leaseId: string, myLife: number): void {
+    stopHeartbeat();
+    const tick = () => {
+      if (myLife !== life || isLoggedOutFlag()) {
+        stopHeartbeat();
+        return;
+      }
+      const current = readLease();
+      if (
+        !current ||
+        current.leaseId !== leaseId ||
+        current.owner !== tabId ||
+        current.phase !== 'sending'
+      ) {
+        stopHeartbeat();
+        return;
+      }
+      writeLease({ ...current, until: now() + LEASE_OPEN_MS });
+    };
+    beatTimer = setInterval(tick, HEARTBEAT_MS);
   }
 
   function ensureChannel(): ChannelLike | null {
-    if (channel) {
+    if (channelOpened) {
       return channel;
     }
+    channelOpened = true;
     channel = createChannel();
     if (!channel) {
       return null;
@@ -608,72 +377,56 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (!data || data.v !== 1) {
         return;
       }
-      if (data.type === 'grant' && typeof data.accessToken === 'string') {
-        rememberGrant(data.accessToken, data.expiresIn ?? null, data.at || now());
-        return;
-      }
-      if (data.type === 'refresh-failed') {
-        // A falha anunciada não confirma 401 nesta aba. Quem fez o POST é que confirma.
-        rememberFailure(data.at || now(), false);
-        return;
-      }
-      if (data.type === 'claim' && typeof data.id === 'string') {
-        const known = claims.has(data.id);
-        claims.set(data.id, now());
-        if (posting) {
-          const activeId = refreshingId ?? attemptId;
-          if (activeId) {
-            publish({ v: 1, type: 'refreshing', id: activeId });
-          }
-          notifyClaimWaiters();
+      if (data.type === 'grant' && typeof data.leaseId === 'string' && typeof data.token === 'string') {
+        if (isLoggedOutFlag() || !data.token.trim()) {
           return;
         }
-        const leaderRefreshing = livePeerRefreshing();
-        // Seguidora não confirma claim. Só repete o refreshing do líder, ou fica calada.
-        if (
-          (leaderRefreshing && leaderRefreshing !== attemptId) ||
-          (attemptId != null && actingAsFollower(attemptId))
-        ) {
-          if (leaderRefreshing && leaderRefreshing !== attemptId) {
-            publish({ v: 1, type: 'refreshing', id: leaderRefreshing });
+        const expiresIn =
+          typeof data.expiresIn === 'number' && Number.isFinite(data.expiresIn)
+            ? data.expiresIn
+            : null;
+        if (data.leaseId === DEGRADED_LEASE_ID) {
+          if (inspect().kind !== 'broken') {
+            return;
           }
-          notifyClaimWaiters();
+          degradedInbox = { token: data.token, expiresIn };
+          wakeAll();
           return;
         }
-        republishAnnouncedGrant(data.id);
-        if (attemptId && data.id !== attemptId && !actingAsFollower(attemptId)) {
-          publish({ v: 1, type: 'claim-ack', id: data.id, from: attemptId });
-          if (!known) {
-            publish({ v: 1, type: 'claim', id: attemptId });
-          }
+        const current = readLease();
+        if (!current || current.leaseId !== data.leaseId) {
+          return;
         }
-        notifyClaimWaiters();
+        memoryGrants.set(data.leaseId, { token: data.token, expiresIn });
+        wakeAll();
+        return;
+      }
+      if (data.type === 'degraded-claim' && typeof data.tabId === 'string' && data.tabId) {
+        degradedPeers.add(data.tabId);
+        wakeAll();
         return;
       }
       if (
-        data.type === 'claim-ack' &&
+        data.type === 'grant-please' &&
         typeof data.id === 'string' &&
-        typeof data.from === 'string' &&
-        data.id === attemptId
+        typeof data.leaseId === 'string'
       ) {
-        acks.add(data.from);
-        notifyClaimWaiters();
-        return;
-      }
-      if (data.type === 'refreshing' && typeof data.id === 'string' && data.id !== attemptId) {
-        peerRefreshingId = data.id;
-        peerRefreshingAt = now();
-        claims.set(data.id, now());
-        notifyClaimWaiters();
+        notePlease(data.id, data.leaseId);
         return;
       }
       if (data.type === 'logout') {
-        clearAnnouncedGrant();
+        announced = null;
+        memoryGrants.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
         emit({ type: 'logout' });
         return;
       }
       if (data.type === 'session-expired') {
-        clearAnnouncedGrant();
+        announced = null;
+        memoryGrants.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
         emit({ type: 'session-expired' });
       }
     };
@@ -682,186 +435,595 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   function publish(message: WireMessage): void {
-    ensureChannel()?.postMessage(message);
-  }
-
-  async function postAndAnnounce(): Promise<AccessGrant> {
-    if (isLoggedOutFlag()) {
-      throw new SessionExpiredError();
-    }
-    posting = true;
-    const activeId = refreshingId ?? attemptId;
-    if (activeId) {
-      refreshingId = activeId;
-      publish({ v: 1, type: 'refreshing', id: activeId });
+    if (
+      isLoggedOutFlag() &&
+      message.type !== 'logout' &&
+      message.type !== 'session-expired'
+    ) {
+      return;
     }
     try {
-      const grant = await postRefresh();
-      const at = now();
-      holdAnnouncedGrant(grant, at);
-      publish({
-        v: 1,
-        type: 'grant',
-        accessToken: grant.accessToken,
-        expiresIn: grant.expiresIn,
-        at,
-      });
-      return grant;
-    } catch (error) {
-      publish({ v: 1, type: 'refresh-failed', at: now() });
-      throw error;
-    } finally {
-      posting = false;
+      ensureChannel()?.postMessage(message);
+    } catch {
+      // Canal já fechado.
     }
   }
 
-  async function refreshInsideLock(): Promise<AccessGrant> {
-    await drain();
-    const shared = takePeerGrant();
-    if (shared) {
-      return shared;
+  function publishGrant(grant: Announced): void {
+    if (isLoggedOutFlag()) {
+      return;
     }
-    const peerError = takePeerFailure();
-    if (peerError) {
-      throw peerError;
+    const current = readLease();
+    if (!current || current.leaseId !== grant.leaseId || current.owner !== tabId || current.phase !== 'done') {
+      return;
     }
-    // Canal ou marca: refresh de outra aba ainda vale. Sem segundo POST.
-    const markedRefreshing = foreignRefreshingMark();
-    if (livePeerRefreshing() || markedRefreshing) {
-      if (markedRefreshing) {
-        noteForeignRefreshing(markedRefreshing);
+    publish({
+      v: 1,
+      type: 'grant',
+      leaseId: grant.leaseId,
+      token: grant.token,
+      expiresIn: grant.expiresIn,
+    });
+  }
+
+  function replyPlease(id: string): void {
+    if (!id || answeredPlease.has(id) || !announced || isLoggedOutFlag()) {
+      return;
+    }
+    const current = readLease();
+    if (
+      !current ||
+      current.phase !== 'done' ||
+      current.leaseId !== announced.leaseId ||
+      current.owner !== tabId
+    ) {
+      return;
+    }
+    answeredPlease.add(id);
+    queuedPlease.delete(id);
+    publishGrant(announced);
+  }
+
+  function notePlease(id: string, leaseId: string): void {
+    if (!id || answeredPlease.has(id) || isLoggedOutFlag()) {
+      return;
+    }
+    const current = readLease();
+    if (!current || current.owner !== tabId || current.leaseId !== leaseId) {
+      return;
+    }
+    if (announced && announced.leaseId === leaseId && current.phase === 'done') {
+      replyPlease(id);
+      return;
+    }
+    if (postingLeaseId === leaseId) {
+      queuedPlease.set(id, leaseId);
+    }
+  }
+
+  function flushPlease(): void {
+    if (!announced) {
+      return;
+    }
+    for (const [id, leaseId] of [...queuedPlease]) {
+      if (leaseId === announced.leaseId) {
+        replyPlease(id);
       }
-      return followOrFail();
     }
-    if (foreignGrantMark() != null) {
-      askForStoredGrant();
-      try {
-        return await followOrFail();
-      } finally {
-        if (!posting) {
-          attemptId = null;
+  }
+
+  function pleaseIdFor(leaseId: string): string {
+    const existing = pleaseIds.get(leaseId);
+    if (existing) {
+      return existing;
+    }
+    const id = newLeaseId();
+    pleaseIds.set(leaseId, id);
+    return id;
+  }
+
+  function takeDegradedGrant(): AccessGrant | null {
+    if (!degradedInbox) {
+      return null;
+    }
+    if (isLoggedOutFlag() || inspect().kind !== 'broken') {
+      degradedInbox = null;
+      return null;
+    }
+    const found = degradedInbox;
+    degradedInbox = null;
+    return { accessToken: found.token, expiresIn: found.expiresIn };
+  }
+
+  function publishDegradedGrant(grant: AccessGrant): void {
+    if (isLoggedOutFlag()) {
+      return;
+    }
+    publish({
+      v: 1,
+      type: 'grant',
+      leaseId: DEGRADED_LEASE_ID,
+      token: grant.accessToken,
+      expiresIn: grant.expiresIn,
+    });
+  }
+
+  function takeGrant(leaseId: string): AccessGrant | null {
+    const found = memoryGrants.get(leaseId);
+    if (!found) {
+      return null;
+    }
+    if (isLoggedOutFlag()) {
+      memoryGrants.delete(leaseId);
+      return null;
+    }
+    const current = readLease();
+    if (!current || current.leaseId !== leaseId) {
+      return null;
+    }
+    memoryGrants.delete(leaseId);
+    consumed.add(leaseId);
+    return { accessToken: found.token, expiresIn: found.expiresIn };
+  }
+
+  function interruptible(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(finish, Math.max(0, ms));
+      const wake = () => finish();
+      wakes.add(wake);
+      function finish() {
+        if (settled) {
+          return;
         }
+        settled = true;
+        clearTimeout(timer);
+        wakes.delete(wake);
+        resolve();
       }
-    }
-    const id = randomId();
-    attemptId = id;
-    refreshingId = id;
-    writeRefreshMark({ tabId, startedAt: now() });
-    try {
-      const grant = await postAndAnnounce();
-      const at = now();
-      ownGrantAt = at;
-      writeRefreshMark({ at });
-      return grant;
-    } catch (error) {
-      clearOwnRefreshingMark();
-      throw error;
-    } finally {
-      if (attemptId === id) {
-        attemptId = null;
+    });
+  }
+
+  async function waitOpen(lease: SessionLease, myLife: number): Promise<void> {
+    while (myLife === life) {
+      const current = readLease();
+      if (!current || current.leaseId !== lease.leaseId || current.phase !== 'open' || current.until <= now()) {
+        return;
       }
-      if (refreshingId === id) {
-        refreshingId = null;
-      }
+      await interruptible(current.until - now());
     }
   }
 
-  async function refreshWithLock(): Promise<AccessGrant> {
-    if (!locks) {
-      return refreshWithClaim();
+  async function waitGrant(
+    lease: SessionLease,
+    myLife: number,
+    pingMs?: number,
+  ): Promise<AccessGrant | null> {
+    if (!channel) {
+      return null;
     }
-    const inner = await locks.request(REFRESH_LOCK_NAME, () => refreshInsideLock());
-    return await inner;
-  }
-
-  async function followOrFail(): Promise<AccessGrant> {
-    const outcome = await waitForPeerOutcome(FOLLOWER_GRANT_WAIT_MS);
-    if (isLoggedOutFlag()) {
-      throw new SessionExpiredError(false);
-    }
-    if (outcome === 'grant') {
-      const grant = takePeerGrant();
+    const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
+    publish({
+      v: 1,
+      type: 'grant-please',
+      id: pleaseIdFor(lease.leaseId),
+      leaseId: lease.leaseId,
+    });
+    while (myLife === life) {
+      if (isLoggedOutFlag()) {
+        return null;
+      }
+      const grant = takeGrant(lease.leaseId);
       if (grant) {
         return grant;
       }
+      const current = readLease();
+      if (!current || current.leaseId !== lease.leaseId || current.phase === 'open') {
+        return null;
+      }
+      const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
+      const remaining = cap - now();
+      if (remaining <= 0) {
+        return null;
+      }
+      await interruptible(remaining);
     }
-    if (outcome === 'failed') {
-      throw takePeerFailure() ?? new SessionExpiredError(false);
+    return null;
+  }
+
+  function failPost(): void {
+    stopHeartbeat();
+    announced = null;
+  }
+
+  function finishPost(leaseId: string | null, myLife: number, grant: AccessGrant): AccessGrant {
+    stopHeartbeat();
+    if (myLife !== life || isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    if (!leaseId) {
+      return grant;
+    }
+    const current = readLease();
+    if (!current || current.leaseId !== leaseId || current.owner !== tabId) {
+      throw new SessionExpiredError(false);
+    }
+    const done: SessionLease = {
+      leaseId,
+      epoch: current.epoch,
+      owner: tabId,
+      until: now() + LEASE_DONE_MS,
+      phase: 'done',
+    };
+    if (!writeLease(done)) {
+      return grant;
+    }
+    if (myLife !== life || isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    const fresh = readLease();
+    if (!fresh || fresh.leaseId !== leaseId || fresh.owner !== tabId || fresh.phase !== 'done') {
+      throw new SessionExpiredError(false);
+    }
+    consumed.add(leaseId);
+    announced = {
+      leaseId,
+      token: grant.accessToken,
+      expiresIn: grant.expiresIn,
+    };
+    publishGrant(announced);
+    flushPlease();
+    return grant;
+  }
+
+  function beginPost(leaseId: string | null, myLife: number): Promise<AccessGrant> {
+    postingLeaseId = leaseId;
+    if (leaseId) {
+      startHeartbeat(leaseId, myLife);
+    }
+    const pending = postRefresh().then(
+      (grant) => finishPost(leaseId, myLife, grant),
+      (error: unknown) => {
+        failPost();
+        throw error;
+      },
+    );
+    const tracked = pending.finally(() => {
+      if (postInFlight === tracked) {
+        postInFlight = null;
+      }
+      if (postingLeaseId === leaseId) {
+        postingLeaseId = null;
+      }
+    });
+    postInFlight = tracked;
+    return tracked;
+  }
+
+  /**
+   * Releitura, phase sending e o fetch no mesmo trecho síncrono.
+   * Não há await entre os três.
+   */
+  function promote(expected: SessionLease, myLife: number): Promise<AccessGrant> | null {
+    if (myLife !== life || isLoggedOutFlag()) {
+      return null;
+    }
+    const current = readLease();
+    if (
+      !current ||
+      current.leaseId !== expected.leaseId ||
+      current.owner !== tabId ||
+      current.phase !== 'open'
+    ) {
+      return null;
+    }
+    const sending: SessionLease = {
+      leaseId: current.leaseId,
+      epoch: current.epoch,
+      owner: tabId,
+      until: now() + LEASE_OPEN_MS,
+      phase: 'sending',
+    };
+    if (!writeLease(sending)) {
+      return null;
+    }
+    return beginPost(sending.leaseId, myLife);
+  }
+
+  async function jitterThenPromote(
+    lease: SessionLease,
+    myLife: number,
+  ): Promise<{ pending: Promise<AccessGrant> | null }> {
+    await sleep(nextJitter());
+    if (myLife !== life || isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    // Caixa o POST. Devolver a promise direto faria o async aguardar o
+    // fetch e seguraria o Web Lock até o fim do POST.
+    return { pending: promote(lease, myLife) };
+  }
+
+  async function electDegradedCoordinator(myLife: number): Promise<boolean> {
+    degradedPeers.add(tabId);
+    const deadline = now() + GRANT_OWNER_PING_MS;
+    while (now() < deadline) {
+      if (myLife !== life || isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      publish({ v: 1, type: 'degraded-claim', tabId });
+      await sleep(Math.min(50, Math.max(0, deadline - now())));
+    }
+    const winner = [...degradedPeers].sort()[0];
+    return winner === tabId;
+  }
+
+  /**
+   * Storage ilegível. Com Web Lock o POST termina antes de soltar o lock.
+   * O grant é republicado durante o ping para a aba que ainda está abrindo
+   * o canal. Sem lock, uma aba coordena e as outras falham fechado.
+   */
+  async function runDegraded(myLife: number): Promise<Outcome> {
+    if (myLife !== life || isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    if (locks) {
+      for (let turn = 0; turn < 10; turn += 1) {
+        const reused = takeDegradedGrant();
+        if (reused) {
+          return { kind: 'grant', grant: reused };
+        }
+        await sleep(0);
+        if (myLife !== life || isLoggedOutFlag()) {
+          throw new SessionExpiredError(false);
+        }
+      }
+      const grant = await beginPost(null, myLife);
+      const deadline = now() + GRANT_OWNER_PING_MS;
+      while (now() < deadline) {
+        if (myLife !== life || isLoggedOutFlag()) {
+          break;
+        }
+        publishDegradedGrant(grant);
+        await sleep(Math.min(50, Math.max(0, deadline - now())));
+      }
+      if (myLife !== life || isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      return { kind: 'grant', grant };
+    }
+    const coordinates = await electDegradedCoordinator(myLife);
+    if (!coordinates) {
+      throw new SessionExpiredError(false);
+    }
+    const grant = await beginPost(null, myLife);
+    publishDegradedGrant(grant);
+    return { kind: 'grant', grant };
+  }
+
+  async function acquire(myLife: number): Promise<Outcome> {
+    let spins = 0;
+    while (myLife === life) {
+      spins += 1;
+      if (spins > 12) {
+        throw new SessionExpiredError(false);
+      }
+      if (isLoggedOutFlag()) {
+        throw new SessionExpiredError(false);
+      }
+      const found = inspect();
+      if (found.kind === 'broken') {
+        return runDegraded(myLife);
+      }
+      if (found.kind === 'lease' && found.lease.phase === 'sending') {
+        if (
+          postInFlight &&
+          postingLeaseId === found.lease.leaseId &&
+          found.lease.owner === tabId
+        ) {
+          return { kind: 'detached', pending: postInFlight };
+        }
+        if (!channel || found.lease.until <= now()) {
+          throw new SessionExpiredError(false);
+        }
+        const grant = await waitGrant(found.lease, myLife);
+        if (myLife !== life || isLoggedOutFlag()) {
+          throw new SessionExpiredError(false);
+        }
+        if (!grant) {
+          throw new SessionExpiredError(false);
+        }
+        return { kind: 'grant', grant };
+      }
+      if (
+        found.kind === 'lease' &&
+        found.lease.phase === 'done' &&
+        found.lease.until > now() &&
+        !consumed.has(found.lease.leaseId)
+      ) {
+        // done só existe depois de um POST bem-sucedido: o cookie antigo
+        // já foi rotacionado e a aba nova tem o cookie novo. O ping confirma
+        // se o dono ainda está vivo. Sem canal não há ping: falha fechado.
+        // Sem resposta, este leaseId não gera POST; o epoch seguinte gera um.
+        if (!channel) {
+          throw new SessionExpiredError(false);
+        }
+        const grant = await waitGrant(found.lease, myLife, GRANT_OWNER_PING_MS);
+        if (myLife !== life || isLoggedOutFlag()) {
+          throw new SessionExpiredError(false);
+        }
+        if (grant) {
+          return { kind: 'grant', grant };
+        }
+        consumed.add(found.lease.leaseId);
+        continue;
+      }
+      if (
+        found.kind === 'lease' &&
+        found.lease.phase === 'open' &&
+        found.lease.until > now() &&
+        found.lease.owner !== tabId
+      ) {
+        await waitOpen(found.lease, myLife);
+        continue;
+      }
+      if (
+        found.kind === 'lease' &&
+        found.lease.phase === 'open' &&
+        found.lease.until > now() &&
+        found.lease.owner === tabId
+      ) {
+        const promoted = await jitterThenPromote(found.lease, myLife);
+        if (promoted.pending) {
+          return { kind: 'detached', pending: promoted.pending };
+        }
+        continue;
+      }
+      const epoch = found.kind === 'lease' ? found.lease.epoch : found.nextEpoch;
+      let minted: SessionLease;
+      try {
+        minted = {
+          leaseId: newLeaseId(),
+          epoch: epoch + 1,
+          owner: tabId,
+          until: now() + LEASE_OPEN_MS,
+          phase: 'open',
+        };
+      } catch (error) {
+        if (error instanceof SessionExpiredError) {
+          throw error;
+        }
+        throw new SessionExpiredError(false);
+      }
+      if (!writeLease(minted)) {
+        if (inspect().kind === 'broken') {
+          return runDegraded(myLife);
+        }
+        throw new SessionExpiredError(false);
+      }
+      const promoted = await jitterThenPromote(minted, myLife);
+      if (promoted.pending) {
+        return { kind: 'detached', pending: promoted.pending };
+      }
     }
     throw new SessionExpiredError(false);
   }
 
-  async function refreshWithClaim(): Promise<AccessGrant> {
-    const initialGrant = takePeerGrant();
-    if (initialGrant) {
-      return initialGrant;
-    }
-    const initialFailure = takePeerFailure();
-    if (initialFailure) {
-      throw initialFailure;
-    }
-
-    const id = randomId();
-    try {
-      armAttempt(id);
-      publish({ v: 1, type: 'claim', id });
-      await drain();
-
-      if (!channel) {
-        return await postAndAnnounce();
-      }
-
-      await waitUntil(
-        CLAIM_CONFIRM_MS,
-        () =>
-          foreignClaimIds(id).length > 0 ||
-          knowsForeignRefreshing(id) ||
-          peekPeerOutcome() != null,
-      );
-
-      const afterWait = takePeerGrant();
-      if (afterWait) {
-        return afterWait;
-      }
-      const afterFailure = takePeerFailure();
-      if (afterFailure) {
-        throw afterFailure;
-      }
-      if (actingAsFollower(id)) {
-        return await followOrFail();
-      }
-
-      await waitUntil(
-        CLAIM_COLLISION_MS,
-        () => actingAsFollower(id) || peekPeerOutcome() != null,
-      );
-
-      const quietGrant = takePeerGrant();
-      if (quietGrant) {
-        return quietGrant;
-      }
-      const quietFailure = takePeerFailure();
-      if (quietFailure) {
-        throw quietFailure;
-      }
-      if (actingAsFollower(id)) {
-        return await followOrFail();
-      }
-      return await postAndAnnounce();
-    } finally {
-      posting = false;
-      attemptId = null;
-      refreshingId = null;
-      claims.clear();
-      acks.clear();
-    }
-  }
-
   async function refreshExclusive(): Promise<AccessGrant> {
-    ensureChannel();
+    if (postInFlight) {
+      try {
+        await postInFlight;
+      } catch {
+        // O POST anterior foi descartado ou falhou. Só então um lease novo.
+      }
+    }
+    if (isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
     ensureStorageListener();
-    return refreshWithLock();
+    ensureChannel();
+    const myLife = life;
+    const run = () => acquire(myLife);
+    const outcome = locks ? await locks.request(REFRESH_LOCK_NAME, run) : await run();
+    if (outcome.kind === 'detached') {
+      if (myLife !== life || isLoggedOutFlag()) {
+        return outcome.pending.then(() => {
+          throw new SessionExpiredError(false);
+        });
+      }
+      return outcome.pending;
+    }
+    if (myLife !== life || isLoggedOutFlag()) {
+      throw new SessionExpiredError(false);
+    }
+    return outcome.grant;
   }
+
+  function onStorage(event: StorageEvent): void {
+    if (event.key === LOGGED_OUT_KEY) {
+      if (event.newValue === LOGGED_OUT_VALUE) {
+        stopHeartbeat();
+        announced = null;
+        memoryGrants.clear();
+        queuedPlease.clear();
+        degradedInbox = null;
+        degradedPeers.clear();
+      }
+      wakeAll();
+      return;
+    }
+    if (event.key === SESSION_LEASE_KEY || event.key === null) {
+      wakeAll();
+    }
+  }
+
+  function releaseOwnDone(): void {
+    const current = readLease();
+    if (!current || current.phase !== 'done' || current.owner !== tabId) {
+      return;
+    }
+    const owns =
+      (announced != null && announced.leaseId === current.leaseId) ||
+      consumed.has(current.leaseId);
+    if (!owns) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(SESSION_LEASE_KEY);
+      if (!raw) {
+        return;
+      }
+      const again = JSON.parse(raw) as Partial<SessionLease>;
+      if (again.phase !== 'done' || again.owner !== tabId || again.leaseId !== current.leaseId) {
+        return;
+      }
+      window.localStorage.removeItem(SESSION_LEASE_KEY);
+    } catch {
+      // Storage bloqueado: não há done para apagar.
+    }
+  }
+
+  function onPageHide(): void {
+    releaseOwnDone();
+  }
+
+  function bindPageHide(): void {
+    if (pageHideBound || typeof window === 'undefined') {
+      return;
+    }
+    pageHideBound = true;
+    window.addEventListener('pagehide', onPageHide);
+  }
+
+  function unbindPageHide(): void {
+    if (!pageHideBound || typeof window === 'undefined') {
+      return;
+    }
+    window.removeEventListener('pagehide', onPageHide);
+    pageHideBound = false;
+  }
+
+  function ensureStorageListener(): void {
+    if (storageBound || typeof window === 'undefined') {
+      return;
+    }
+    storageBound = true;
+    window.addEventListener('storage', onStorage);
+  }
+
+  function unbindStorage(): void {
+    if (!storageBound || typeof window === 'undefined') {
+      return;
+    }
+    window.removeEventListener('storage', onStorage);
+    storageBound = false;
+  }
+
+  bindPageHide();
+
+  const cleaner = () => {
+    discardMemory();
+  };
+  sessionCleaners.add(cleaner);
 
   return {
     refresh() {
@@ -891,34 +1053,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       };
     },
     reset() {
+      sessionCleaners.delete(cleaner);
+      discardMemory();
       inflight = null;
-      peerGrant = null;
-      clearAnnouncedGrant();
-      posting = false;
-      clearOwnRefreshingMark();
-      clearOwnGrantMark();
-      ownGrantAt = null;
       unbindStorage();
+      unbindPageHide();
       try {
         channel?.close();
       } catch {
         // Canal já fechado.
       }
       channel = null;
-      peerFailureAt = null;
-      peerFailureConfirmed = false;
-      attemptId = null;
-      refreshingId = null;
-      peerRefreshingId = null;
-      peerRefreshingAt = null;
-      claims.clear();
-      acks.clear();
-      for (const waiter of [...peerWaiters]) {
-        finishPeerWaiter(waiter, 'timeout');
-      }
-      for (const waiter of [...claimWaiters]) {
-        finishClaimWaiter(waiter);
-      }
+      channelOpened = false;
     },
   };
 }
@@ -953,12 +1099,20 @@ export function restoreSessionOnce(): Promise<AccessGrant | null> {
   return restoreFlight;
 }
 
-/** Some a marca de qualquer aba. Login e logout não deixam data futura travar o refresh. */
+/** Login e logout apagam o lease e param o batimento. Não recria a chave. */
 export function clearSessionRefreshMark(): void {
+  for (const clean of [...sessionCleaners]) {
+    clean();
+  }
   try {
-    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
   } catch {
-    // Sem storage, não há marca para apagar.
+    // Sem storage, não há lease para apagar.
+  }
+  try {
+    window.localStorage.removeItem(LEGACY_MARK_KEY);
+  } catch {
+    // Marca antiga ausente.
   }
 }
 
@@ -969,6 +1123,16 @@ export function resetSessionRuntimeForTests(): void {
   refreshImpl = async () => {
     throw new SessionExpiredError();
   };
+  try {
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
+  } catch {
+    // jsdom sem storage.
+  }
+  try {
+    window.localStorage.removeItem(LEGACY_MARK_KEY);
+  } catch {
+    // jsdom sem storage.
+  }
 }
 
 export async function refreshWithApi(

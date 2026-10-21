@@ -22,15 +22,11 @@ import {
   retryLoggedOut,
 } from '../auth/loggedOut';
 import {
-  CLAIM_COLLISION_MS,
-  CLAIM_CONFIRM_MS,
   createSessionCoordinator,
-  FOLLOWER_GRANT_WAIT_MS,
   getSessionCoordinator,
   REFRESH_LOCK_NAME,
-  SESSION_REFRESH_MARK_KEY,
+  SESSION_LEASE_KEY,
   setRefreshImplementation,
-  type SessionCoordinator,
 } from '../auth/sessionRefresh';
 import {
   APP_HOME,
@@ -38,98 +34,6 @@ import {
   isSafeAppPath,
   SESSION_EXPIRED_NOTICE,
 } from '../auth/returnTo';
-
-type Wire = { v: 1; type: string; accessToken?: string; id?: string; at?: number; from?: string };
-
-function createBus(drop: (data: Wire) => boolean = () => false) {
-  const handlers = new Set<(data: Wire) => void>();
-  return {
-    channel() {
-      const mine = new Set<(data: Wire) => void>();
-      return {
-        postMessage(data: Wire) {
-          if (drop(data)) {
-            return;
-          }
-          for (const handler of handlers) {
-            if (!mine.has(handler)) {
-              handler(data);
-            }
-          }
-        },
-        addEventListener(_type: 'message', listener: (event: MessageEvent) => void) {
-          const handler = (data: Wire) => listener({ data } as MessageEvent);
-          mine.add(handler);
-          handlers.add(handler);
-        },
-        removeEventListener() {},
-        close() {
-          for (const handler of mine) {
-            handlers.delete(handler);
-          }
-        },
-      };
-    },
-  };
-}
-
-function sharedLocks() {
-  let tail: Promise<unknown> = Promise.resolve();
-  const names: string[] = [];
-  return {
-    names,
-    request(name: string, callback: () => Promise<unknown>) {
-      names.push(name);
-      const run = tail.then(() => callback());
-      tail = run.then(
-        () => undefined,
-        () => undefined,
-      );
-      return run;
-    },
-  };
-}
-
-/** Solta o lock sem o callback resolver, como a aba que fecha no meio do POST. */
-function stealableLocks() {
-  let current: { release: () => void } | null = null;
-  const queue: Array<() => void> = [];
-  return {
-    request(_name: string, callback: () => Promise<unknown>) {
-      return new Promise((resolve, reject) => {
-        const run = () => {
-          let settled = false;
-          const finish = (fn: () => void) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            current = null;
-            fn();
-            queue.shift()?.();
-          };
-          current = {
-            release: () => finish(() => reject(new Error('aba fechada'))),
-          };
-          void Promise.resolve()
-            .then(() => callback())
-            .then(
-              (value) => finish(() => resolve(value)),
-              (error: unknown) => finish(() => reject(error)),
-            );
-        };
-        if (current) {
-          queue.push(run);
-          return;
-        }
-        run();
-      });
-    },
-    killHolder() {
-      current?.release();
-    },
-  };
-}
 
 function grantResponse(token: string, expiresIn = 600): Response {
   return new Response(
@@ -263,354 +167,88 @@ describe('opt-in da sessão e origem', () => {
   });
 });
 
+
 describe('single-flight do refresh', () => {
   afterEach(() => {
     vi.useRealTimers();
-    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
   });
 
   it('N chamadas concorrentes na mesma aba geram 1 refresh', async () => {
     let posts = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const coordinator = createSessionCoordinator({
       locks: null,
       createChannel: () => null,
-      drain: async () => {},
       postRefresh: async () => {
         posts += 1;
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await gate;
         return { accessToken: 'jwt-unico', expiresIn: 90 };
       },
     });
 
-    const results = await Promise.all([
-      coordinator.refresh(),
+    const pending = Promise.all([
       coordinator.refresh(),
       coordinator.refresh(),
       coordinator.refresh(),
       coordinator.refresh(),
     ]);
-
-    expect(posts).toBe(1);
-    expect(results.map((item) => item.accessToken)).toEqual([
-      'jwt-unico',
-      'jwt-unico',
-      'jwt-unico',
-      'jwt-unico',
-      'jwt-unico',
-    ]);
-  });
-
-  it('duas abas compartilham um único POST e reaproveitam o access', async () => {
-    const bus = createBus();
-    const locks = sharedLocks();
-    let posts = 0;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    function makeTab(): SessionCoordinator {
-      return createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          if (posts === 1) {
-            await gate;
-          }
-          return { accessToken: 'jwt-compartilhado', expiresIn: 300 };
-        },
-      });
-    }
-
-    const tabA = makeTab();
-    const tabB = makeTab();
-    const pending = Promise.all([tabA.refresh(), tabB.refresh()]);
     await vi.waitFor(() => {
       expect(posts).toBe(1);
     });
     release();
-    const [fromA, fromB] = await pending;
+    const results = await pending;
     expect(posts).toBe(1);
-    expect(fromA.accessToken).toBe('jwt-compartilhado');
-    expect(fromB.accessToken).toBe('jwt-compartilhado');
-    expect(locks.names.every((name) => name === REFRESH_LOCK_NAME)).toBe(true);
+    expect(results.map((grant) => grant.accessToken)).toEqual([
+      'jwt-unico',
+      'jwt-unico',
+      'jwt-unico',
+      'jwt-unico',
+    ]);
+    const raw = window.localStorage.getItem(SESSION_LEASE_KEY) ?? '';
+    expect(raw).not.toMatch(/jwt|access_token/i);
+    expect(raw).toContain('"phase":"done"');
+    coordinator.reset();
   });
 
-  it('com locks, se o líder morre no POST a outra aba não renova de novo', async () => {
-    vi.useFakeTimers();
-    const bus = createBus();
-    const locks = stealableLocks();
-    let posts = 0;
-
-    function makeTab(): SessionCoordinator {
-      return createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          if (posts > 1) {
-            throw new SessionExpiredError(true);
-          }
-          return new Promise(() => {});
-        },
-      });
-    }
-
-    const leader = makeTab();
-    const survivor = makeTab();
-    leader.subscribe(() => {});
-    survivor.subscribe(() => {});
-
-    const leaderResult = leader.refresh().then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(posts).toBe(1);
-
-    const survivorResult = survivor.refresh().then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(posts).toBe(1);
-
-    locks.killHolder();
-    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS);
-
-    const leaderError = await leaderResult;
-    expect(leaderError).toBeInstanceOf(Error);
-    const error = await survivorResult;
-    expect(error).toBeInstanceOf(SessionExpiredError);
-    expect((error as SessionExpiredError).confirmed).toBe(false);
-    expect(posts).toBe(1);
-
-    leader.reset();
-    survivor.reset();
-  });
-
-  it('com locks, a marca segura o POST quando o canal perde o refreshing', async () => {
-    vi.useFakeTimers();
-    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
-    const bus = createBus((data) => data.type === 'refreshing' || data.type === 'grant');
-    const locks = stealableLocks();
-    let posts = 0;
-
-    function makeTab(): SessionCoordinator {
-      return createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          if (posts > 1) {
-            throw new SessionExpiredError(true);
-          }
-          return new Promise(() => {});
-        },
-      });
-    }
-
-    const leader = makeTab();
-    const survivor = makeTab();
-    leader.subscribe(() => {});
-    survivor.subscribe(() => {});
-
-    const leaderResult = leader.refresh().then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    expect(posts).toBe(1);
-    const raw = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY);
-    expect(raw).toBeTruthy();
-    expect(raw).not.toMatch(/jwt|eyJ|accessToken|access_token/i);
-    expect(JSON.parse(raw ?? '{}')).toEqual({
-      tabId: expect.any(String),
-      startedAt: expect.any(Number),
-    });
-
-    window.dispatchEvent(new Event('pagehide'));
-    expect(JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}')).toEqual({
-      tabId: expect.any(String),
-      startedAt: expect.any(Number),
-    });
-
-    const survivorResult = survivor.refresh().then(
-      () => null,
-      (error: unknown) => error,
-    );
-    locks.killHolder();
-    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS);
-
-    await leaderResult;
-    const error = await survivorResult;
-    expect(error).toBeInstanceOf(SessionExpiredError);
-    expect((error as SessionExpiredError).confirmed).toBe(false);
-    expect(posts).toBe(1);
-    leader.reset();
-    survivor.reset();
-  });
-
-  it('com locks, canal atrasado e grant na marca não geram outro POST', async () => {
-    vi.useFakeTimers();
-    window.localStorage.removeItem(SESSION_REFRESH_MARK_KEY);
-    const bus = createDelayedBus(400);
-    const locks = sharedLocks();
-    let posts = 0;
-
-    function makeTab(): SessionCoordinator {
-      return createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          if (posts > 1) {
-            throw new SessionExpiredError(true);
-          }
-          return { accessToken: 'jwt-marca', expiresIn: 90 };
-        },
-      });
-    }
-
-    const leader = makeTab();
-    const survivor = makeTab();
-    leader.subscribe(() => {});
-    survivor.subscribe(() => {});
-
-    const pending = Promise.all([leader.refresh(), survivor.refresh()]);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(posts).toBe(1);
-    const mark = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
-      at?: number;
-      tabId?: string;
-    };
-    expect(mark.tabId).toBeUndefined();
-    expect(typeof mark.at).toBe('number');
-    expect(JSON.stringify(mark)).not.toMatch(/jwt|eyJ|access/i);
-
-    await vi.advanceTimersByTimeAsync(400);
-    const grants = await pending;
-    expect(posts).toBe(1);
-    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-marca', 'jwt-marca']);
-
-    window.dispatchEvent(new Event('pagehide'));
-    expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).toBeNull();
-    leader.reset();
-    survivor.reset();
-  });
-
-  it('com locks, marca no futuro não trava o refresh e a sessão fica', async () => {
-    const locks = sharedLocks();
-    const future = Date.now() + 1e9;
-    const shapes = [{ tabId: 'outra', startedAt: future }, { at: future }];
-
-    for (const stale of shapes) {
-      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, JSON.stringify(stale));
-      let posts = 0;
-      const coordinator = createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => null,
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          const during = JSON.parse(
-            window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}',
-          ) as { at?: number; startedAt?: number };
-          expect(during.startedAt).not.toBe(future);
-          expect(during.at).not.toBe(future);
-          return { accessToken: 'jwt-futuro', expiresIn: 90 };
-        },
-      });
-
-      const grant = await coordinator.refresh();
-      expect(posts).toBe(1);
-      expect(grant.accessToken).toBe('jwt-futuro');
-      const stored = JSON.parse(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '{}') as {
-        at?: number;
-      };
-      expect(stored.at).toBeLessThanOrEqual(Date.now() + 1_000);
-      coordinator.reset();
-    }
-  });
-
-  it('com locks, JSON malformado ou valor não numérico na marca é ignorado', async () => {
-    const locks = sharedLocks();
-    const raws = ['{', JSON.stringify({ at: 'amanha' }), JSON.stringify({ startedAt: 'amanha' })];
-
-    for (const raw of raws) {
-      window.localStorage.setItem(SESSION_REFRESH_MARK_KEY, raw);
-      let posts = 0;
-      const coordinator = createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => null,
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          const during = window.localStorage.getItem(SESSION_REFRESH_MARK_KEY) ?? '';
-          expect(during).not.toBe(raw);
-          expect(during).not.toMatch(/amanha/);
-          return { accessToken: 'jwt-marca-ruim', expiresIn: 90 };
-        },
-      });
-
-      const grant = await coordinator.refresh();
-      expect(posts).toBe(1);
-      expect(grant.accessToken).toBe('jwt-marca-ruim');
-      expect(window.localStorage.getItem(SESSION_REFRESH_MARK_KEY)).not.toBe(raw);
-      coordinator.reset();
-    }
-  });
-
-  it('com locks e storage bloqueado, o canal sozinho continua com um POST', async () => {
-    const bus = createBus();
-    const locks = sharedLocks();
-    let posts = 0;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+  it('storage ilegível faz um POST degradado, publica o grant no canal e não grava o token', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage bloqueado');
     });
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage bloqueado');
     });
-
-    function makeTab(): SessionCoordinator {
-      return createSessionCoordinator({
-        locks: locks as unknown as LockManager,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          if (posts === 1) {
-            await gate;
-          }
-          return { accessToken: 'jwt-sem-storage', expiresIn: 30 };
+    const published: string[] = [];
+    let posts = 0;
+    const coordinator = createSessionCoordinator({
+      locks: null,
+      createChannel: () => ({
+        postMessage(data: unknown) {
+          published.push(JSON.stringify(data));
         },
-      });
-    }
-
+        addEventListener() {},
+        removeEventListener() {},
+        close() {},
+      }),
+      postRefresh: async () => {
+        posts += 1;
+        return { accessToken: 'jwt-degradado', expiresIn: 30 };
+      },
+    });
     try {
-      const tabA = makeTab();
-      const tabB = makeTab();
-      const pending = Promise.all([tabA.refresh(), tabB.refresh()]);
-      await vi.waitFor(() => {
-        expect(posts).toBe(1);
-      });
-      release();
-      const grants = await pending;
+      const grant = await coordinator.refresh();
+      expect(grant.accessToken).toBe('jwt-degradado');
       expect(posts).toBe(1);
-      expect(grants.map((grant) => grant.accessToken)).toEqual([
-        'jwt-sem-storage',
-        'jwt-sem-storage',
-      ]);
+      expect(published.join('')).toContain('jwt-degradado');
+      expect(published.join('')).toContain('"leaseId":"degradado"');
+      expect(setItem.mock.calls.every((call) => !String(call[1]).includes('jwt-degradado'))).toBe(
+        true,
+      );
     } finally {
+      coordinator.reset();
       setItem.mockRestore();
       getItem.mockRestore();
     }
@@ -761,109 +399,6 @@ describe('retry único no 401', () => {
   });
 });
 
-describe('seguidora sem navigator.locks', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function makePair(postRefresh: () => Promise<{ accessToken: string; expiresIn: number | null }>) {
-    const bus = createBus();
-    let posts = 0;
-    const coordinators = [0, 1].map(() =>
-      createSessionCoordinator({
-        locks: null,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          posts += 1;
-          return postRefresh();
-        },
-      }),
-    );
-    for (const tab of coordinators) {
-      tab.subscribe(() => {});
-    }
-    return {
-      coordinators,
-      posts: () => posts,
-    };
-  }
-
-  it('reaproveita o grant que chega em 3s e faz um único POST', async () => {
-    vi.useFakeTimers();
-    expect(FOLLOWER_GRANT_WAIT_MS).toBe(5_000);
-    const pair = makePair(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-      return { accessToken: 'jwt-3s', expiresIn: 90 };
-    });
-    const pending = Promise.all(pair.coordinators.map((tab) => tab.refresh()));
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS);
-    expect(pair.posts()).toBe(1);
-    await vi.advanceTimersByTimeAsync(2_999);
-    expect(pair.posts()).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    const grants = await pending;
-    expect(pair.posts()).toBe(1);
-    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-3s', 'jwt-3s']);
-  });
-
-  it('sem grant nem falha em 5s a seguidora falha fechado e não faz outro POST', async () => {
-    vi.useFakeTimers();
-    let releaseLeader: () => void = () => {};
-    const pair = makePair(
-      () =>
-        new Promise((resolve) => {
-          releaseLeader = () => resolve({ accessToken: 'jwt-lider', expiresIn: 30 });
-        }),
-    );
-    const states: Array<'pending' | 'ok' | 'fail'> = ['pending', 'pending'];
-    const errors: unknown[] = [];
-    const tasks = pair.coordinators.map((tab, index) =>
-      tab.refresh().then(
-        () => {
-          states[index] = 'ok';
-        },
-        (error: unknown) => {
-          states[index] = 'fail';
-          errors.push(error);
-        },
-      ),
-    );
-
-    await vi.advanceTimersByTimeAsync(FOLLOWER_GRANT_WAIT_MS - 1);
-    expect(states).toEqual(['pending', 'pending']);
-    expect(pair.posts()).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(states.filter((state) => state === 'fail')).toHaveLength(1);
-    expect(states.filter((state) => state === 'pending')).toHaveLength(1);
-    expect(errors[0]).toBeInstanceOf(SessionExpiredError);
-    expect(pair.posts()).toBe(1);
-
-    releaseLeader();
-    await Promise.all(tasks);
-    expect(pair.posts()).toBe(1);
-    expect(states.filter((state) => state === 'ok')).toHaveLength(1);
-  });
-
-  it('a falha do líder chega pelo canal e a seguidora não repete o POST', async () => {
-    vi.useFakeTimers();
-    const pair = makePair(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-      throw new SessionExpiredError();
-    });
-    const tasks = pair.coordinators.map((tab) =>
-      tab.refresh().then(
-        () => 'ok' as const,
-        (error: unknown) => error,
-      ),
-    );
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 3_000);
-    const results = await Promise.all(tasks);
-    expect(pair.posts()).toBe(1);
-    expect(results.every((result) => result instanceof SessionExpiredError)).toBe(true);
-  });
-});
 
 describe('timeout do logout', () => {
   afterEach(() => {
@@ -1051,184 +586,6 @@ function gatingLocks() {
   };
 }
 
-function createDelayedBus(delayMs: number) {
-  const handlers = new Set<(data: Wire) => void>();
-  return {
-    channel() {
-      const mine = new Set<(data: Wire) => void>();
-      return {
-        postMessage(data: Wire) {
-          setTimeout(() => {
-            for (const handler of handlers) {
-              if (!mine.has(handler)) {
-                handler(data);
-              }
-            }
-          }, delayMs);
-        },
-        addEventListener(_type: 'message', listener: (event: MessageEvent) => void) {
-          const handler = (data: Wire) => listener({ data } as MessageEvent);
-          mine.add(handler);
-          handlers.add(handler);
-        },
-        removeEventListener() {},
-        close() {
-          for (const handler of mine) {
-            handlers.delete(handler);
-          }
-        },
-      };
-    },
-  };
-}
-
-const LEADER_ATTEMPT_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
-const LATE_ATTEMPT_ID = '00000000-0000-4000-8000-000000000000';
-
-function installAttemptIds(ids: string[]): () => void {
-  const queue = [...ids];
-  const spy = vi.spyOn(crypto, 'randomUUID').mockImplementation(() => {
-    const next = queue.shift() ?? LATE_ATTEMPT_ID;
-    return next as ReturnType<Crypto['randomUUID']>;
-  });
-  return () => spy.mockRestore();
-}
-
-function watchBus(delayMs: number) {
-  const inner = delayMs > 0 ? createDelayedBus(delayMs) : createBus();
-  const seen: Wire[] = [];
-  return {
-    seen,
-    channel() {
-      const raw = inner.channel();
-      return {
-        postMessage(data: Wire) {
-          seen.push(data);
-          raw.postMessage(data);
-        },
-        addEventListener: raw.addEventListener.bind(raw),
-        removeEventListener: raw.removeEventListener.bind(raw),
-        close() {
-          raw.close();
-        },
-      };
-    },
-  };
-}
-
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-async function electTabs(input: {
-  delays: number[];
-  ids: string[];
-  busDelayMs: number;
-  slowMs: number;
-}) {
-  const order = input.delays
-    .map((delay, index) => ({ delay, index }))
-    .sort((left, right) => left.delay - right.delay || left.index - right.index);
-  const restoreIds = installAttemptIds(order.map((item) => input.ids[item.index]));
-  try {
-    const watched = watchBus(input.busDelayMs);
-    let calls = 0;
-    let revoked = false;
-    const postRefresh = async () => {
-      calls += 1;
-      if (calls > 1) {
-        revoked = true;
-        throw new SessionExpiredError(true);
-      }
-      await new Promise((resolve) => setTimeout(resolve, input.slowMs));
-      if (revoked) {
-        throw new SessionExpiredError(true);
-      }
-      return { accessToken: 'jwt-lento', expiresIn: 90 };
-    };
-    const tabs = input.ids.map(() =>
-      createSessionCoordinator({
-        locks: null,
-        createChannel: () => watched.channel(),
-        drain: async () => {},
-        postRefresh,
-      }),
-    );
-    const started: Promise<{ accessToken: string; expiresIn: number | null }>[] = [];
-    let elapsed = 0;
-    for (const item of order) {
-      if (item.delay > elapsed) {
-        await vi.advanceTimersByTimeAsync(item.delay - elapsed);
-        elapsed = item.delay;
-      }
-      tabs[item.index].subscribe(() => {});
-      started.push(tabs[item.index].refresh());
-    }
-    const resultsPromise = Promise.allSettled(started);
-    await vi.advanceTimersByTimeAsync(
-      input.slowMs + CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + FOLLOWER_GRANT_WAIT_MS,
-    );
-    const results = await resultsPromise;
-    for (const tab of tabs) {
-      tab.reset();
-    }
-    return { calls, revoked, results, seen: watched.seen };
-  } finally {
-    restoreIds();
-  }
-}
-
-async function lateSmallerRefresh(input: { delayMs: number; busDelayMs: number; slowMs: number }) {
-  const restoreIds = installAttemptIds([LEADER_ATTEMPT_ID, LATE_ATTEMPT_ID]);
-  try {
-    const watched = watchBus(input.busDelayMs);
-    let calls = 0;
-    let revoked = false;
-    const postRefresh = async () => {
-      calls += 1;
-      if (calls > 1) {
-        revoked = true;
-        throw new SessionExpiredError(true);
-      }
-      await new Promise((resolve) => setTimeout(resolve, input.slowMs));
-      if (revoked) {
-        throw new SessionExpiredError(true);
-      }
-      return { accessToken: 'jwt-lento', expiresIn: 90 };
-    };
-    const first = createSessionCoordinator({
-      locks: null,
-      createChannel: () => watched.channel(),
-      drain: async () => {},
-      postRefresh,
-    });
-    const second = createSessionCoordinator({
-      locks: null,
-      createChannel: () => watched.channel(),
-      drain: async () => {},
-      postRefresh,
-    });
-    first.subscribe(() => {});
-    const pendingA = first.refresh();
-    await vi.advanceTimersByTimeAsync(input.delayMs);
-    second.subscribe(() => {});
-    const pendingB = second.refresh();
-    const resultsPromise = Promise.allSettled([pendingA, pendingB]);
-    await vi.advanceTimersByTimeAsync(input.slowMs + FOLLOWER_GRANT_WAIT_MS);
-    const results = await resultsPromise;
-    first.reset();
-    second.reset();
-    return { calls, revoked, results, seen: watched.seen };
-  } finally {
-    restoreIds();
-  }
-}
 
 describe('401 do refresh', () => {
   it('confirma só quando o POST responde 401', async () => {
@@ -1243,316 +600,6 @@ describe('401 do refresh', () => {
   });
 });
 
-describe('eleição sem navigator.locks', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('cinco rodadas com F5 simultâneo não revogam a família', async () => {
-    vi.useFakeTimers();
-    expect(CLAIM_CONFIRM_MS).toBeGreaterThan(0);
-    for (let round = 0; round < 5; round += 1) {
-      let used = false;
-      let revoked = false;
-      let posts = 0;
-      const bus = createDelayedBus(40);
-      const coordinators = [0, 1].map(() =>
-        createSessionCoordinator({
-          locks: null,
-          createChannel: () => bus.channel(),
-          drain: async () => {},
-          postRefresh: async () => {
-            if (revoked || used) {
-              revoked = true;
-              throw new SessionExpiredError(true);
-            }
-            posts += 1;
-            used = true;
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            return { accessToken: `jwt-rodada-${round}`, expiresIn: 90 };
-          },
-        }),
-      );
-      for (const tab of coordinators) {
-        tab.subscribe(() => {});
-      }
-      const pending = Promise.allSettled(coordinators.map((tab) => tab.refresh()));
-      await vi.advanceTimersByTimeAsync(2_000);
-      const results = await pending;
-      expect(revoked, `rodada ${round + 1}`).toBe(false);
-      expect(posts, `rodada ${round + 1}`).toBe(1);
-      expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
-      if (results.every((result) => result.status === 'fulfilled')) {
-        const tokens = results.map((result) =>
-          result.status === 'fulfilled' ? result.value.accessToken : '',
-        );
-        expect(tokens).toEqual([`jwt-rodada-${round}`, `jwt-rodada-${round}`]);
-      }
-    }
-  });
-
-  it('uma aba que abre depois reaproveita o grant e não faz outro POST', async () => {
-    vi.useFakeTimers();
-    const bus = createBus();
-    let posts = 0;
-    let revoked = false;
-    const postRefresh = async () => {
-      if (posts > 0) {
-        revoked = true;
-        throw new SessionExpiredError(true);
-      }
-      posts += 1;
-      return { accessToken: 'jwt-tarde', expiresIn: 90 };
-    };
-    const first = createSessionCoordinator({
-      locks: null,
-      createChannel: () => bus.channel(),
-      drain: async () => {},
-      postRefresh,
-    });
-    first.subscribe(() => {});
-    const pending = first.refresh();
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 20);
-    const grant = await pending;
-    expect(grant.accessToken).toBe('jwt-tarde');
-    expect(posts).toBe(1);
-
-    const second = createSessionCoordinator({
-      locks: null,
-      createChannel: () => bus.channel(),
-      drain: async () => {},
-      postRefresh,
-    });
-    second.subscribe(() => {});
-    const shared = await second.refresh();
-    expect(shared.accessToken).toBe('jwt-tarde');
-    expect(posts).toBe(1);
-    expect(revoked).toBe(false);
-  });
-
-  it('não republica o grant a cada claim da mesma aba', async () => {
-    vi.useFakeTimers();
-    const bus = createBus();
-    let grants = 0;
-    const tap = bus.channel();
-    tap.addEventListener('message', (event) => {
-      if ((event.data as Wire).type === 'grant') {
-        grants += 1;
-      }
-    });
-    const first = createSessionCoordinator({
-      locks: null,
-      createChannel: () => bus.channel(),
-      drain: async () => {},
-      postRefresh: async () => ({ accessToken: 'jwt-uma-vez', expiresIn: 90 }),
-    });
-    first.subscribe(() => {});
-    const pending = first.refresh();
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 20);
-    await pending;
-    expect(grants).toBe(1);
-
-    const asker = bus.channel();
-    const claim = (id: string) => {
-      asker.postMessage({ v: 1, type: 'claim', id });
-    };
-    claim('aba-1');
-    claim('aba-1');
-    claim('aba-1');
-    expect(grants).toBe(2);
-    claim('aba-2');
-    claim('aba-2');
-    expect(grants).toBe(3);
-  });
-
-  it('refreshing em andamento vence id menor e não faz o segundo POST', async () => {
-    vi.useFakeTimers();
-    const slowMs = 1_500;
-    const cases: Array<{ delay: number; rounds: number; busDelay: number; duringPost: boolean }> = [
-      { delay: 600, rounds: 20, busDelay: 0, duringPost: true },
-      { delay: 600, rounds: 20, busDelay: 40, duringPost: true },
-      { delay: 80, rounds: 5, busDelay: 0, duringPost: false },
-      { delay: 200, rounds: 5, busDelay: 15, duringPost: false },
-      { delay: 350, rounds: 5, busDelay: 0, duringPost: false },
-      { delay: 450, rounds: 5, busDelay: 20, duringPost: true },
-      { delay: 900, rounds: 5, busDelay: 0, duringPost: true },
-      { delay: 1_200, rounds: 5, busDelay: 30, duringPost: true },
-      { delay: 2_200, rounds: 5, busDelay: 0, duringPost: false },
-    ];
-    let doubles = 0;
-
-    for (const spec of cases) {
-      for (let round = 0; round < spec.rounds; round += 1) {
-        const outcome = await lateSmallerRefresh({
-          delayMs: spec.delay,
-          busDelayMs: spec.busDelay,
-          slowMs,
-        });
-        const label = `atraso ${spec.delay}ms canal ${spec.busDelay}ms rodada ${round + 1}`;
-        if (outcome.calls >= 2 || outcome.revoked) {
-          doubles += 1;
-        }
-        expect(outcome.calls, label).toBe(1);
-        expect(outcome.revoked, label).toBe(false);
-        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
-        if (outcome.results.every((result) => result.status === 'fulfilled')) {
-          const tokens = outcome.results.map((result) =>
-            result.status === 'fulfilled' ? result.value.accessToken : '',
-          );
-          expect(tokens, label).toEqual(['jwt-lento', 'jwt-lento']);
-        }
-        if (spec.duringPost) {
-          const acks = outcome.seen.filter((message) => message.type === 'claim-ack');
-          expect(acks, label).toEqual([]);
-          expect(
-            outcome.seen.some((message) => message.type === 'refreshing'),
-            label,
-          ).toBe(true);
-        }
-      }
-    }
-    expect(doubles).toBe(0);
-  });
-
-  it('sem ack do claim ainda sai exatamente um POST', async () => {
-    vi.useFakeTimers();
-    let posts = 0;
-    let revoked = false;
-    const bus = createBus((data) => data.type === 'claim-ack');
-    const coordinators = [0, 1].map(() =>
-      createSessionCoordinator({
-        locks: null,
-        createChannel: () => bus.channel(),
-        drain: async () => {},
-        postRefresh: async () => {
-          if (posts > 0) {
-            revoked = true;
-            throw new SessionExpiredError(true);
-          }
-          posts += 1;
-          return { accessToken: 'jwt-nao', expiresIn: 30 };
-        },
-      }),
-    );
-    for (const tab of coordinators) {
-      tab.subscribe(() => {});
-    }
-    const pending = Promise.allSettled(coordinators.map((tab) => tab.refresh()));
-    await vi.advanceTimersByTimeAsync(CLAIM_CONFIRM_MS + CLAIM_COLLISION_MS + 50);
-    const results = await pending;
-    expect(posts).toBe(1);
-    expect(revoked).toBe(false);
-    expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
-  });
-
-  it('A em 0, B em 100ms e C em 1200ms não geram o segundo POST', async () => {
-    vi.useFakeTimers();
-    const slowMs = 1_500;
-    const traces = [
-      {
-        label: 'C entre A e B',
-        ids: [
-          'cccccccc-0000-4000-8000-000000000000',
-          'aaaaaaaa-0000-4000-8000-000000000000',
-          'bbbbbbbb-0000-4000-8000-000000000000',
-        ],
-      },
-      {
-        label: 'C menor que quem está no POST',
-        ids: [
-          'cccccccc-0000-4000-8000-000000000000',
-          'bbbbbbbb-0000-4000-8000-000000000000',
-          '00000000-0000-4000-8000-000000000000',
-        ],
-      },
-    ];
-    for (const trace of traces) {
-      for (let round = 0; round < 20; round += 1) {
-        const outcome = await electTabs({
-          delays: [0, 100, 1_200],
-          ids: trace.ids,
-          busDelayMs: 40,
-          slowMs,
-        });
-        const label = `${trace.label} rodada ${round + 1}`;
-        expect(outcome.calls, label).toBe(1);
-        expect(outcome.revoked, label).toBe(false);
-        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
-        expect(
-          outcome.seen.filter(
-            (message) => message.type === 'claim-ack' && message.id === trace.ids[2],
-          ),
-          label,
-        ).toEqual([]);
-      }
-    }
-  });
-
-  it('aba tardia em 300ms desempata pelo menor id e as duas permanecem', async () => {
-    vi.useFakeTimers();
-    const larger = 'ffffffff-0000-4000-8000-000000000000';
-    const smaller = '00000000-0000-4000-8000-000000000000';
-    const layouts = [
-      [larger, smaller],
-      [smaller, larger],
-    ];
-    for (const ids of layouts) {
-      for (const busDelayMs of [0, 40]) {
-        for (let round = 0; round < 20; round += 1) {
-          const outcome = await electTabs({
-            delays: [0, 300],
-            ids,
-            busDelayMs,
-            slowMs: 1_500,
-          });
-          const label = `ids ${ids[0].slice(0, 4)}/${ids[1].slice(0, 4)} canal ${busDelayMs}ms rodada ${round + 1}`;
-          expect(outcome.calls, label).toBe(1);
-          expect(outcome.revoked, label).toBe(false);
-          expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(
-            true,
-          );
-        }
-      }
-    }
-  });
-
-  it('estresse com 2, 3 e 4 abas não repete o POST nem derruba sessão válida', async () => {
-    vi.useFakeTimers();
-    const seed = 20_261_020;
-    for (const tabCount of [2, 3, 4]) {
-      const rand = mulberry32(seed + tabCount);
-      let doubles = 0;
-      let falseLogouts = 0;
-      for (let round = 0; round < 50; round += 1) {
-        const delays = Array.from({ length: tabCount }, () => Math.floor(rand() * 1_501));
-        const ids = Array.from({ length: tabCount }, (_, index) => {
-          const hex = Math.floor(rand() * 0xffffffff)
-            .toString(16)
-            .padStart(8, '0');
-          return `${hex}-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
-        });
-        const outcome = await electTabs({
-          delays,
-          ids,
-          busDelayMs: 40,
-          slowMs: 1_500,
-        });
-        const label = `${tabCount} abas rodada ${round + 1}`;
-        if (outcome.calls >= 2 || outcome.revoked) {
-          doubles += 1;
-        }
-        if (outcome.calls !== 1 || outcome.results.some((result) => result.status !== 'fulfilled')) {
-          falseLogouts += 1;
-        }
-        expect(outcome.calls, label).toBe(1);
-        expect(outcome.revoked, label).toBe(false);
-        expect(outcome.results.every((result) => result.status === 'fulfilled'), label).toBe(true);
-      }
-      expect(doubles, `${tabCount} abas`).toBe(0);
-      expect(falseLogouts, `${tabCount} abas`).toBe(0);
-    }
-  });
-});
 
 describe('backoff do reenvio de logout', () => {
   afterEach(() => {

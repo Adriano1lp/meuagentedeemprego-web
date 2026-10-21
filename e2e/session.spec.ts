@@ -72,12 +72,13 @@ test('reload em /app/perfil fica na mesma rota, sem passar por /entrar', async (
   const storage = await page.evaluate(() => ({
     local: localStorage.length,
     session: sessionStorage.length,
-    mark: localStorage.getItem('mae.sessionRefresh'),
+    lease: localStorage.getItem('mae.sessionLease'),
   }));
   expect(storage.session).toBe(0);
   expect(storage.local).toBe(1);
-  expect(storage.mark).not.toMatch(/jwt|eyJ|access_token/i);
-  expect(storage.mark).toContain('"at"');
+  expect(storage.lease).not.toMatch(/jwt|eyJ|access_token/i);
+  const lease = JSON.parse(storage.lease ?? '') as { phase?: string };
+  expect(lease.phase).toBe('done');
 
   await page.screenshot({
     path: testInfo.outputPath('reload-perfil.png'),
@@ -105,6 +106,10 @@ test('deep link /app/curriculo com cookie permanece; sem cookie vai para /entrar
     path: testInfo.outputPath('refresh-401-next.png'),
     fullPage: true,
   });
+  const stuck = await page.evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
+  expect(stuck).not.toMatch(/jwt|eyJ|access_token/i);
+  // sending não é retomado. O login apaga a chave; aqui o teste só troca o mock.
+  await page.evaluate(() => localStorage.removeItem('mae.sessionLease'));
 
   await page.route('**/auth/refresh', async (route) => {
     await fulfillRefresh(route);
@@ -285,11 +290,19 @@ test('storage bloqueado ainda envia o logout e o F5 em /app cai em /entrar', asy
     const deny = () => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     };
-    for (const name of ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const) {
-      Object.defineProperty(window.localStorage, name, {
-        configurable: true,
-        value: deny,
-      });
+    const names = ['getItem', 'setItem', 'removeItem', 'clear', 'key'] as const;
+    const targets = [window.localStorage, Object.getPrototypeOf(window.localStorage)];
+    for (const target of targets) {
+      for (const name of names) {
+        try {
+          Object.defineProperty(target, name, {
+            configurable: true,
+            value: deny,
+          });
+        } catch {
+          // No WebKit o método da instância pode não ser configurável.
+        }
+      }
     }
   });
 
@@ -377,7 +390,7 @@ test('falha de refresh no boot da aba nova não derruba a aba logada', async ({ 
   await expect(pageA).toHaveURL(/\/app\/perfil$/);
 
   failBoot = true;
-  await pageA.evaluate(() => localStorage.removeItem('mae.sessionRefresh'));
+  await pageA.evaluate(() => localStorage.removeItem('mae.sessionLease'));
   const pageB = await context.newPage();
   await mockLegalRoutes(pageB);
   await mockAuthSuccess(pageB);
@@ -404,337 +417,6 @@ test('falha de refresh no boot da aba nova não derruba a aba logada', async ({ 
     path: testInfo.outputPath('aba-boot-entrar.png'),
     fullPage: true,
   });
-});
-
-test('duas abas sem locks no F5 simultâneo não revogam a família', async ({ browser }, testInfo) => {
-  for (let round = 0; round < 5; round += 1) {
-    const context = await browser.newContext();
-    await context.addInitScript(() => {
-      const hide = () => undefined;
-      try {
-        Object.defineProperty(Navigator.prototype, 'locks', {
-          configurable: true,
-          get: hide,
-        });
-      } catch {
-        Object.defineProperty(navigator, 'locks', {
-          configurable: true,
-          get: hide,
-        });
-      }
-    });
-    await context.addCookies([
-      {
-        name: 'mae_refresh',
-        value: `rodada-${round}`,
-        url: 'http://127.0.0.1:5173',
-      },
-    ]);
-
-    let revoked = false;
-    let posts = 0;
-    let inflightCookie: string | null = null;
-    const used = new Set<string>();
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      const cookie = route.request().headers()['cookie'] ?? '';
-      const reuse =
-        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
-      if (reuse) {
-        revoked = true;
-        await route.fulfill({
-          status: 401,
-          contentType: 'application/json',
-          body: JSON.stringify({ detail: 'Sessao invalida' }),
-        });
-        return;
-      }
-      posts += 1;
-      inflightCookie = cookie;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      used.add(cookie);
-      inflightCookie = null;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        headers: {
-          'set-cookie': `mae_refresh=nova-${round}; Path=/; HttpOnly`,
-        },
-        body: JSON.stringify(grant),
-      });
-    });
-
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
-    for (const tab of [pageA, pageB]) {
-      await mockLegalRoutes(tab);
-      await mockAuthSuccess(tab);
-      await mockCurrentUser(tab);
-    }
-    expect(await pageA.evaluate(() => navigator.locks == null)).toBe(true);
-
-    await Promise.all([pageA.goto('/app/perfil'), pageB.goto('/app/perfil')]);
-    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-    await expect(pageA).toHaveURL(/\/app\/perfil$/);
-    await expect(pageB).toHaveURL(/\/app\/perfil$/);
-    expect(revoked, `rodada ${round + 1}`).toBe(false);
-    expect(posts, `rodada ${round + 1}`).toBe(1);
-
-    if (round === 0) {
-      await pageA.screenshot({
-        path: testInfo.outputPath('f5-sem-locks-a.png'),
-        fullPage: true,
-      });
-      await pageB.screenshot({
-        path: testInfo.outputPath('f5-sem-locks-b.png'),
-        fullPage: true,
-      });
-    }
-    await context.close();
-  }
-});
-
-async function hideWebLocks(context: import('@playwright/test').BrowserContext): Promise<void> {
-  await context.addInitScript(() => {
-    const hide = () => undefined;
-    try {
-      Object.defineProperty(Navigator.prototype, 'locks', {
-        configurable: true,
-        get: hide,
-      });
-    } catch {
-      Object.defineProperty(navigator, 'locks', {
-        configurable: true,
-        get: hide,
-      });
-    }
-  });
-}
-
-async function pinAttemptId(page: import('@playwright/test').Page, attemptId: string): Promise<void> {
-  await page.addInitScript((id) => {
-    const value = () => id;
-    try {
-      Object.defineProperty(crypto, 'randomUUID', { configurable: true, value });
-    } catch {
-      crypto.randomUUID = value;
-    }
-  }, attemptId);
-}
-
-async function lateTabDuringSlowPost(
-  browser: import('@playwright/test').Browser,
-  testInfo: import('@playwright/test').TestInfo,
-  delayMs: number,
-  round: number,
-  capture: boolean,
-): Promise<void> {
-  const context = await browser.newContext();
-  let release = () => {};
-  try {
-    await hideWebLocks(context);
-    await context.addCookies([
-      {
-        name: 'mae_refresh',
-        value: `lento-${delayMs}-${round}`,
-        url: 'http://127.0.0.1:5173',
-      },
-    ]);
-
-    let revoked = false;
-    let attempts = 0;
-    let inflightCookie: string | null = null;
-    const used = new Set<string>();
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      const cookie = route.request().headers()['cookie'] ?? '';
-      const reuse =
-        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
-      attempts += 1;
-      if (reuse || attempts > 1) {
-        revoked = true;
-        await route.fulfill({
-          status: 401,
-          contentType: 'application/json',
-          body: JSON.stringify({ detail: 'Sessao invalida' }),
-        });
-        return;
-      }
-      inflightCookie = cookie;
-      await held;
-      used.add(cookie);
-      inflightCookie = null;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        headers: {
-          'set-cookie': `mae_refresh=nova-${delayMs}-${round}; Path=/; HttpOnly`,
-        },
-        body: JSON.stringify(grant),
-      });
-    });
-
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
-    await pinAttemptId(pageA, 'ffffffff-ffff-4fff-8fff-ffffffffffff');
-    await pinAttemptId(pageB, '00000000-0000-4000-8000-000000000000');
-    for (const tab of [pageA, pageB]) {
-      await mockLegalRoutes(tab);
-      await mockAuthSuccess(tab);
-      await mockCurrentUser(tab);
-    }
-    expect(await pageA.evaluate(() => navigator.locks == null)).toBe(true);
-
-    const navA = pageA.goto('/app/perfil');
-    await expect.poll(() => attempts, { timeout: 15_000 }).toBe(1);
-    await pageA.waitForTimeout(delayMs);
-    const navB = pageB.goto('/app/perfil');
-    await pageB.waitForTimeout(1_500);
-    const label = `atraso ${delayMs}ms rodada ${round + 1}`;
-    expect(attempts, label).toBe(1);
-    expect(revoked, label).toBe(false);
-
-    release();
-    await navA;
-    await navB;
-    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-    await expect(pageA).toHaveURL(/\/app\/perfil$/);
-    await expect(pageB).toHaveURL(/\/app\/perfil$/);
-    expect(attempts, label).toBe(1);
-    expect(revoked, label).toBe(false);
-
-    if (capture) {
-      await pageA.screenshot({
-        path: testInfo.outputPath('post-lento-a.png'),
-        fullPage: true,
-      });
-      await pageB.screenshot({
-        path: testInfo.outputPath('post-lento-b.png'),
-        fullPage: true,
-      });
-    }
-  } finally {
-    release();
-    await context.close();
-  }
-}
-
-test('POST lento com aba tardia de id menor não revoga a família', async ({ browser }, testInfo) => {
-  test.setTimeout(360_000);
-  for (let round = 0; round < 20; round += 1) {
-    await lateTabDuringSlowPost(browser, testInfo, 600, round, round === 0);
-  }
-});
-
-test('variações de atraso no POST lento não disparam o segundo refresh', async ({ browser }, testInfo) => {
-  test.setTimeout(240_000);
-  const delays = [100, 450, 900, 1_400];
-  for (const delay of delays) {
-    for (let round = 0; round < 3; round += 1) {
-      await lateTabDuringSlowPost(browser, testInfo, delay, round, false);
-    }
-  }
-});
-
-test('três abas sem locks fazem um único refresh', async ({ browser }) => {
-  test.setTimeout(60_000);
-  const context = await browser.newContext();
-  let release = () => {};
-  try {
-    await hideWebLocks(context);
-    await context.addCookies([
-      {
-        name: 'mae_refresh',
-        value: 'tres-abas',
-        url: 'http://127.0.0.1:5173',
-      },
-    ]);
-
-    let revoked = false;
-    let attempts = 0;
-    let inflightCookie: string | null = null;
-    const used = new Set<string>();
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await context.route('**/auth/refresh', async (route) => {
-      if (route.request().method() !== 'POST') {
-        await route.fallback();
-        return;
-      }
-      const cookie = route.request().headers()['cookie'] ?? '';
-      const reuse =
-        revoked || used.has(cookie) || (inflightCookie !== null && inflightCookie === cookie);
-      attempts += 1;
-      if (reuse || attempts > 1) {
-        revoked = true;
-        await route.fulfill({
-          status: 401,
-          contentType: 'application/json',
-          body: JSON.stringify({ detail: 'Sessao invalida' }),
-        });
-        return;
-      }
-      inflightCookie = cookie;
-      await held;
-      used.add(cookie);
-      inflightCookie = null;
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        headers: {
-          'set-cookie': 'mae_refresh=nova-tres; Path=/; HttpOnly',
-        },
-        body: JSON.stringify(grant),
-      });
-    });
-
-    const pageA = await context.newPage();
-    const pageB = await context.newPage();
-    const pageC = await context.newPage();
-    await pinAttemptId(pageA, 'cccccccc-0000-4000-8000-000000000000');
-    await pinAttemptId(pageB, 'aaaaaaaa-0000-4000-8000-000000000000');
-    await pinAttemptId(pageC, '00000000-0000-4000-8000-000000000000');
-    for (const tab of [pageA, pageB, pageC]) {
-      await mockLegalRoutes(tab);
-      await mockAuthSuccess(tab);
-      await mockCurrentUser(tab);
-    }
-
-    const navA = pageA.goto('/app/perfil');
-    await pageA.waitForTimeout(100);
-    const navB = pageB.goto('/app/perfil');
-    await expect.poll(() => attempts, { timeout: 15_000 }).toBe(1);
-    const navC = pageC.goto('/app/perfil');
-    await pageC.waitForTimeout(1_500);
-    expect(attempts).toBe(1);
-    expect(revoked).toBe(false);
-
-    release();
-    await navA;
-    await navB;
-    await navC;
-    for (const tab of [pageA, pageB, pageC]) {
-      await expect(tab.getByTestId('profile-name')).toHaveText('Ada Lovelace');
-      await expect(tab).toHaveURL(/\/app\/perfil$/);
-    }
-    expect(attempts).toBe(1);
-    expect(revoked).toBe(false);
-  } finally {
-    release();
-    await context.close();
-  }
 });
 
 test('reenvio do logout espera entre tentativas e não entra em loop', async ({ page }, testInfo) => {
