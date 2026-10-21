@@ -327,11 +327,41 @@ async function ownerDeadAfterFetch(browser: Browser, withLocks: boolean, counter
   }
 }
 
+/**
+ * Segura a primeira resposta até as outras abas entrarem no Web Lock.
+ * Sem isso, um POST local instantâneo termina antes da aba lenta abrir
+ * o canal e ela trata o done como sem dono.
+ */
+async function releaseWhenQueued(pages: Page[], release: () => void): Promise<void> {
+  await Promise.all(
+    pages.map((page) => expect(page.getByTestId('session-boot')).toBeVisible({ timeout: 15_000 })),
+  );
+  const queued = await pages[0]
+    .evaluate(async () => {
+      if (!navigator.locks?.query) {
+        return 0;
+      }
+      const state = await navigator.locks.query();
+      return [...(state.held ?? []), ...(state.pending ?? [])].filter(
+        (lock) => lock.name === 'mae-web-session-refresh',
+      ).length;
+    })
+    .catch(() => 0);
+  if (queued < pages.length) {
+    await pages[0].waitForTimeout(400);
+  }
+  release();
+}
+
 /** Primeiro carregamento simultâneo. Não recarrega a página. */
 async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCount: number): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
   try {
     let seen = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
@@ -342,6 +372,9 @@ async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCou
         await fulfillDenied(route);
         return;
       }
+      if (withLocks && seen === 1) {
+        await gate;
+      }
       await fulfillOk(route);
     });
     const pages: Page[] = [];
@@ -350,7 +383,13 @@ async function f5(browser: Browser, withLocks: boolean, counter: Counter, tabCou
       await prepare(page);
       pages.push(page);
     }
-    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    const navigations = pages.map((page) => page.goto('/app/perfil'));
+    if (withLocks) {
+      await releaseWhenQueued(pages, release);
+    } else {
+      release();
+    }
+    await Promise.all(navigations);
     for (const page of pages) {
       await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
       await expect(page).toHaveURL(/\/app\/perfil$/);
@@ -372,6 +411,10 @@ async function slowPost(browser: Browser, withLocks: boolean, counter: Counter):
   const context = await openContext(browser, withLocks, counter);
   try {
     let seen = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
@@ -382,6 +425,9 @@ async function slowPost(browser: Browser, withLocks: boolean, counter: Counter):
         await fulfillDenied(route);
         return;
       }
+      if (withLocks && seen === 1) {
+        await gate;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5_500));
       await fulfillOk(route, 'jwt-lento');
     });
@@ -389,9 +435,15 @@ async function slowPost(browser: Browser, withLocks: boolean, counter: Counter):
     const pageB = await context.newPage();
     await prepare(pageA);
     await prepare(pageB);
-    await Promise.all([pageA.goto('/app/perfil'), pageB.goto('/app/perfil')]);
-    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
-    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
+    const navigations = [pageA.goto('/app/perfil'), pageB.goto('/app/perfil')];
+    if (withLocks) {
+      await releaseWhenQueued([pageA, pageB], release);
+    } else {
+      release();
+    }
+    await Promise.all(navigations);
+    await expect(pageA.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 30_000 });
+    await expect(pageB.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 30_000 });
     if (withLocks) {
       expect(counter.posts).toBe(1);
     } else {
@@ -703,6 +755,10 @@ async function storageBlocked(
   try {
     await blockStorage(context);
     let seen = 0;
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
@@ -713,6 +769,9 @@ async function storageBlocked(
         await fulfillDenied(route);
         return;
       }
+      if (withLocks && seen === 1) {
+        await gate;
+      }
       await fulfillOk(route, 'jwt-degradado');
     });
     const pages: Page[] = [];
@@ -721,7 +780,13 @@ async function storageBlocked(
       await prepare(page);
       pages.push(page);
     }
-    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    const navigations = pages.map((page) => page.goto('/app/perfil'));
+    if (withLocks) {
+      await releaseWhenQueued(pages, release);
+    } else {
+      release();
+    }
+    await Promise.all(navigations);
     expect(
       await pages[0].evaluate(() => {
         try {
