@@ -529,10 +529,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           wakeAll();
           return;
         }
-        const current = readLease();
-        if (!current || current.leaseId !== data.leaseId) {
-          return;
-        }
+        // Guarda mesmo se o done ainda não apareceu nesta aba. No WebKit o
+        // canal pode chegar antes do localStorage, e descartar o grant faz
+        // o ping abrir um epoch novo.
         memoryGrants.set(data.leaseId, { token: data.token, expiresIn });
         wakeAll();
         return;
@@ -777,7 +776,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (!channel) {
       return null;
     }
-    const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
+    let pingLeft = pingMs == null ? null : Math.max(0, pingMs);
     const waitedAt = now();
     if (pingMs != null) {
       doneWaiters.set(`${lease.leaseId}:${tabId}`, { tabId, at: waitedAt });
@@ -802,7 +801,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (!current || current.leaseId !== lease.leaseId || current.phase === 'open') {
         return null;
       }
-      if (pingMs != null && now() >= nextAnnounce) {
+      if (current.until <= now()) {
+        if (pingLeft == null) {
+          return null;
+        }
+        await drainMessages();
+        return takeGrant(lease.leaseId);
+      }
+      if (pingLeft != null && pingLeft <= 0) {
+        await drainMessages();
+        return takeGrant(lease.leaseId);
+      }
+      if (pingLeft != null && now() >= nextAnnounce) {
         publish({ v: 1, type: 'done-wait', tabId, at: waitedAt, leaseId: lease.leaseId });
         publish({
           v: 1,
@@ -812,16 +822,18 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         });
         nextAnnounce = now() + 50;
       }
-      const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
-      const remaining = cap - now();
-      if (remaining <= 0) {
-        if (pingMs == null) {
-          return null;
-        }
-        await drainMessages();
-        return takeGrant(lease.leaseId);
+      const slice = pingLeft == null ? current.until - now() : Math.min(50, pingLeft);
+      if (slice <= 0) {
+        return null;
       }
-      await interruptible(pingMs == null ? remaining : Math.min(remaining, 50));
+      const started = now();
+      await interruptible(slice);
+      if (pingLeft != null) {
+        // Um stall maior que a fatia não conta: a aba não chegou a ouvir o dono.
+        // Um wake no mesmo milissegundo conta 1 ms para o laço terminar.
+        const elapsed = Math.max(0, now() - started);
+        pingLeft -= elapsed === 0 ? 1 : Math.min(elapsed, slice);
+      }
     }
     return null;
   }
