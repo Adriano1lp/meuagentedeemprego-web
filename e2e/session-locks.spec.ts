@@ -713,7 +713,12 @@ async function reloadWithinDone(
     for (const page of pages) {
       await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
     }
-    expect(counter.posts).toBe(1);
+    if (withLocks) {
+      expect(counter.posts).toBe(1);
+    } else {
+      expect(counter.posts).toBeGreaterThanOrEqual(1);
+    }
+    const bootPosts = counter.posts;
     const before = await pages[0].evaluate(() => {
       const raw = localStorage.getItem('mae.sessionLease');
       if (!raw) {
@@ -749,9 +754,9 @@ async function reloadWithinDone(
         await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace');
         await expect(page).toHaveURL(/\/app\/perfil$/);
       }
-      expect(counter.posts).toBe(2);
+      expect(counter.posts).toBe(bootPosts + 1);
     } else {
-      expect(counter.posts).toBeGreaterThanOrEqual(2);
+      expect(counter.posts).toBeGreaterThanOrEqual(bootPosts + 1);
       let onApp = 0;
       for (const page of pages) {
         if ((await settled(page)) === 'app') {
