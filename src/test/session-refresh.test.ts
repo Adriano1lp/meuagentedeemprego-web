@@ -884,9 +884,9 @@ describe('single-flight do refresh', () => {
     });
     leader.subscribe(() => {});
     follower.subscribe(() => {});
-    const leaderResult = leader.refresh().then(
+    void leader.refresh().then(
       () => null,
-      (error: unknown) => error,
+      () => null,
     );
     await vi.advanceTimersByTimeAsync(0);
     expect(posts).toBe(1);
