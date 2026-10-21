@@ -689,8 +689,12 @@ async function reloadWithinDone(
   tabCount: number,
 ): Promise<void> {
   const context = await openContext(browser, withLocks, counter);
+  let release = () => {};
   try {
     let seen = 0;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await context.route('**/auth/refresh', async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();
@@ -701,6 +705,11 @@ async function reloadWithinDone(
         await fulfillDenied(route);
         return;
       }
+      // O boot precisa das outras abas no lock. Sem isso o POST local
+      // termina antes do canal abrir e o ping trata o done como sem dono.
+      if (withLocks && seen === 1) {
+        await gate;
+      }
       await fulfillOk(route, seen === 1 ? 'jwt-boot' : `jwt-reload-${seen}`);
     });
     const pages: Page[] = [];
@@ -709,7 +718,13 @@ async function reloadWithinDone(
       await prepare(page);
       pages.push(page);
     }
-    await Promise.all(pages.map((page) => page.goto('/app/perfil')));
+    const navigations = pages.map((page) => page.goto('/app/perfil'));
+    if (withLocks) {
+      await releaseWhenQueued(pages, release);
+    } else {
+      release();
+    }
+    await Promise.all(navigations);
     for (const page of pages) {
       await expect(page.getByTestId('profile-name')).toHaveText('Ada Lovelace', { timeout: 15_000 });
     }
@@ -771,6 +786,7 @@ async function reloadWithinDone(
     const raw = await pages[0].evaluate(() => localStorage.getItem('mae.sessionLease') ?? '');
     expect(raw).not.toMatch(/jwt|eyJ|access_token/i);
   } finally {
+    release();
     await context.close();
   }
 }
