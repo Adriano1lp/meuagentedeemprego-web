@@ -21,7 +21,10 @@
  * - done sem resposta no ping: o cookie antigo já foi rotacionado. Só a
  *   primeira aba que esperou esse leaseId abre um epoch novo e faz um POST.
  *   As outras seguem o lease novo, sem POST.
- * - No pagehide o dono apaga só o próprio done. sending não é apagado.
+ * - No pagehide, sem canal, o dono apaga só o próprio done. Com canal o
+ *   done fica: apagá-lo no reload põe todas as abas no mint ao mesmo tempo
+ *   e a janela entre a releitura e o fetch faz um segundo POST. sending
+ *   não é apagado.
  * - Nada é gravado nem publicado com loggedOut ou com leaseId velho.
  * - O token não entra no storage.
  * - Sem canal, quem não é dona falha fechado, inclusive num done.
@@ -1079,6 +1082,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         }
         throw new SessionExpiredError(false);
       }
+      const replacingId = found.kind === 'lease' ? found.lease.leaseId : null;
+      const live = readLease();
+      if (live && live.until > now() && live.leaseId !== replacingId) {
+        continue;
+      }
       if (!writeLease(minted)) {
         if (inspect().kind === 'broken') {
           return runDegraded(myLife);
@@ -1142,6 +1150,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   }
 
   function releaseOwnDone(): void {
+    // Com canal o ping elege uma sucessora. Apagar o done no reload
+    // faz as abas mintarem juntas e a segunda pode passar do fetch.
+    if (channel) {
+      return;
+    }
     const current = readLease();
     if (!current || current.phase !== 'done' || current.owner !== tabId) {
       return;
