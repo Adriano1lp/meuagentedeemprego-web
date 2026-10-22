@@ -224,7 +224,7 @@ function sleep(ms: number): Promise<void> {
  * dono vivo parece morto e a aba abre um POST sequencial.
  * Com timers falsos (teste) basta um timeout de 0, senão o relógio para.
  */
-function drainMessages(): Promise<void> {
+function yieldMacrotask(): Promise<void> {
   if (setTimeout !== realSetTimeout || typeof MessageChannel === 'undefined') {
     return new Promise((resolve) => {
       setTimeout(resolve, 0);
@@ -235,6 +235,15 @@ function drainMessages(): Promise<void> {
     link.port1.onmessage = () => resolve();
     link.port2.postMessage(null);
   });
+}
+
+/**
+ * Duas voltas: a primeira deixa o dono responder o grant-please; a segunda
+ * entrega esse grant antes de abrir um epoch novo.
+ */
+async function drainMessages(): Promise<void> {
+  await yieldMacrotask();
+  await yieldMacrotask();
 }
 
 export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionCoordinator {
@@ -564,6 +573,9 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         Number.isFinite(data.at)
       ) {
         doneWaiters.set(`${data.leaseId}:${data.tabId}`, { tabId: data.tabId, at: data.at });
+        if (announced && announced.leaseId === data.leaseId) {
+          publishGrant(announced);
+        }
         wakeAll();
         return;
       }
@@ -776,7 +788,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (!channel) {
       return null;
     }
-    let pingLeft = pingMs == null ? null : Math.max(0, pingMs);
+    const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
     const waitedAt = now();
     if (pingMs != null) {
       doneWaiters.set(`${lease.leaseId}:${tabId}`, { tabId, at: waitedAt });
@@ -801,18 +813,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       if (!current || current.leaseId !== lease.leaseId || current.phase === 'open') {
         return null;
       }
-      if (current.until <= now()) {
-        if (pingLeft == null) {
-          return null;
-        }
-        await drainMessages();
-        return takeGrant(lease.leaseId);
-      }
-      if (pingLeft != null && pingLeft <= 0) {
-        await drainMessages();
-        return takeGrant(lease.leaseId);
-      }
-      if (pingLeft != null && now() >= nextAnnounce) {
+      if (pingMs != null && now() >= nextAnnounce) {
         publish({ v: 1, type: 'done-wait', tabId, at: waitedAt, leaseId: lease.leaseId });
         publish({
           v: 1,
@@ -822,18 +823,16 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         });
         nextAnnounce = now() + 50;
       }
-      const slice = pingLeft == null ? current.until - now() : Math.min(50, pingLeft);
-      if (slice <= 0) {
-        return null;
+      const cap = pingDeadline == null ? current.until : Math.min(current.until, pingDeadline);
+      const remaining = cap - now();
+      if (remaining <= 0) {
+        if (pingMs == null) {
+          return null;
+        }
+        await drainMessages();
+        return takeGrant(lease.leaseId);
       }
-      const started = now();
-      await interruptible(slice);
-      if (pingLeft != null) {
-        // Um stall maior que a fatia não conta: a aba não chegou a ouvir o dono.
-        // Um wake no mesmo milissegundo conta 1 ms para o laço terminar.
-        const elapsed = Math.max(0, now() - started);
-        pingLeft -= elapsed === 0 ? 1 : Math.min(elapsed, slice);
-      }
+      await interruptible(pingMs == null ? remaining : Math.min(remaining, 50));
     }
     return null;
   }
@@ -1176,6 +1175,17 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       const live = readLease();
       if (live && live.until > now() && live.leaseId !== replacingId) {
         continue;
+      }
+      if (replacingId && live && live.phase === 'done' && live.leaseId === replacingId) {
+        await drainMessages();
+        const late = takeGrant(replacingId);
+        if (late) {
+          return { kind: 'grant', grant: late };
+        }
+        const again = readLease();
+        if (again && again.until > now() && again.leaseId !== replacingId) {
+          continue;
+        }
       }
       if (!writeLease(minted)) {
         if (inspect().kind === 'broken') {
