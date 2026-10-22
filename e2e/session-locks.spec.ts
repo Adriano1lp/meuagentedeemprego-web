@@ -103,6 +103,16 @@ async function openContext(browser: Browser, withLocks: boolean, counter: Counte
     await hideLocks(context);
   }
   track(context, counter);
+  // Este contexto não herda o mock do fixture. O Sair só troca de página
+  // depois do POST /auth/logout, que tem teto de 5s. Sem o mock, o proxy
+  // para a API real estoura a asserção da landing no mesmo prazo.
+  await context.route('**/auth/logout', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({ status: 204, body: '' });
+  });
   await context.addCookies([
     {
       name: 'mae_refresh',
