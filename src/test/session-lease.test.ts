@@ -383,7 +383,7 @@ describe('lease único do refresh', () => {
     });
     await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(0);
-    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 30);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 30);
     const result = await pending;
     expect(result).toBe('jwt-nao');
     expect(posts).toBe(1);
@@ -393,7 +393,7 @@ describe('lease único do refresh', () => {
     follower.reset();
   });
 
-  it('pagehide apaga o done do dono e não apaga o de outra aba nem o sending', async () => {
+  it('pagehide sem canal apaga o done do dono; com canal preserva, e não apaga o de outra aba nem o sending', async () => {
     vi.useFakeTimers();
     const bus = createBus();
     const owner = tab(null, async () => ({ accessToken: 'jwt-dono', expiresIn: 10 }), bus);
@@ -402,8 +402,23 @@ describe('lease único do refresh', () => {
     expect((await ready).accessToken).toBe('jwt-dono');
     expect(readLease()?.phase).toBe('done');
     window.dispatchEvent(new Event('pagehide'));
-    expect(readLease()).toBeNull();
+    expect(readLease()?.phase).toBe('done');
+    expect(readLease()?.owner).not.toBe('');
     owner.reset();
+
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
+    const ownerWithoutChannel = tab(
+      null,
+      async () => ({ accessToken: 'jwt-sem-canal', expiresIn: 10 }),
+      null,
+    );
+    const withoutChannel = ownerWithoutChannel.refresh();
+    await flushJitter();
+    expect((await withoutChannel).accessToken).toBe('jwt-sem-canal');
+    expect(readLease()?.phase).toBe('done');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()).toBeNull();
+    ownerWithoutChannel.reset();
 
     seed({
       leaseId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
@@ -444,6 +459,36 @@ describe('lease único do refresh', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(await pending).toBe('fail');
     expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt/);
+  });
+
+  it('pagehide antes do fetch apaga o open do dono e a aba nova faz 1 POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    let posts = 0;
+    const owner = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-boot', expiresIn: 30 };
+    }, bus);
+    const dying = owner.refresh().then(
+      () => 'ok',
+      () => 'fail',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readLease()?.phase).toBe('open');
+    expect(posts).toBe(0);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()).toBeNull();
+    owner.reset();
+    const next = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-boot', expiresIn: 30 };
+    }, bus);
+    const grant = next.refresh();
+    await flushJitter();
+    expect((await grant).accessToken).toBe('jwt-boot');
+    expect(posts).toBe(1);
+    expect(await dying).toBe('fail');
+    next.reset();
   });
 
   it('done sem canal falha fechado e não faz POST', async () => {
@@ -504,7 +549,7 @@ describe('lease único do refresh', () => {
     const pending = Promise.all(tabs.map((item) => item.refresh()));
     await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(0);
-    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 40);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 40);
     const grants = await pending;
     expect(posts).toBe(1);
     expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-epoch-novo', 'jwt-epoch-novo']);
@@ -590,14 +635,103 @@ describe('lease único do refresh', () => {
         release();
         const results = await pending;
         expect(posts, `${count} abas`).toBe(1);
-        expect(results.filter((result) => result === 'jwt-degradado')).toHaveLength(1);
-        const closed = results.filter((result) => result instanceof SessionExpiredError);
-        expect(closed).toHaveLength(count - 1);
-        expect(closed.every((error) => (error as SessionExpiredError).confirmed === false)).toBe(true);
+        expect(results.every((result) => result === 'jwt-degradado')).toBe(true);
         for (const item of coordinators) {
           item.reset();
         }
       }
+    } finally {
+      restore();
+    }
+  });
+
+  it('sem locks e sem storage, a aba que chega depois do anúncio não faz POST', async () => {
+    const restore = blockStorage();
+    try {
+      const bus = createBus();
+      let posts = 0;
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = tab(
+        null,
+        async () => {
+          posts += 1;
+          await gate;
+          return { accessToken: 'jwt-degradado', expiresIn: 30 };
+        },
+        bus,
+      );
+      const pending = first.refresh();
+      await vi.waitFor(() => {
+        expect(posts).toBe(1);
+      });
+      const late = tab(
+        null,
+        async () => {
+          posts += 1;
+          return { accessToken: 'jwt-tarde', expiresIn: 30 };
+        },
+        bus,
+      );
+      const lateResult = late.refresh().then(
+        (grant) => grant.accessToken,
+        (error: unknown) => error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(posts).toBe(1);
+      release();
+      expect(await lateResult).toBe('jwt-degradado');
+      expect((await pending).accessToken).toBe('jwt-degradado');
+      expect(posts).toBe(1);
+      first.reset();
+      late.reset();
+    } finally {
+      restore();
+    }
+  });
+
+  it('sem locks e sem storage, a perdedora sem grant falha fechado depois de L e não faz POST', async () => {
+    vi.useFakeTimers();
+    const restore = blockStorage();
+    try {
+      const bus = createBus();
+      let posts = 0;
+      const gate = new Promise<{ accessToken: string; expiresIn: number | null }>(() => undefined);
+      const winner = tab(
+        null,
+        () => {
+          posts += 1;
+          return gate;
+        },
+        bus,
+      );
+      const pendingWinner = winner.refresh();
+      await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS + 20);
+      expect(posts).toBe(1);
+      const loser = tab(
+        null,
+        async () => {
+          posts += 1;
+          return { accessToken: 'jwt-nao', expiresIn: 30 };
+        },
+        bus,
+      );
+      const pendingLoser = loser.refresh().then(
+        () => 'grant',
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(LEASE_OPEN_MS - 1);
+      expect(posts).toBe(1);
+      await vi.advanceTimersByTimeAsync(2);
+      const result = await pendingLoser;
+      expect(result).toBeInstanceOf(SessionExpiredError);
+      expect((result as SessionExpiredError).confirmed).toBe(false);
+      expect(posts).toBe(1);
+      winner.reset();
+      loser.reset();
+      void pendingWinner;
     } finally {
       restore();
     }
@@ -720,6 +854,118 @@ describe('lease único do refresh', () => {
     expect(await pending).toBe('fail');
     expect(window.localStorage.getItem(SESSION_LEASE_KEY)).toBeNull();
     expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt-depois-do-logout/);
+  });
+
+  it('sem locks, pagehide com canal preserva o done e o reload faz 1 POST', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    let posts = 0;
+    const owner = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-dono', expiresIn: 30 };
+    }, bus);
+    const ready = owner.refresh();
+    await flushJitter();
+    expect((await ready).accessToken).toBe('jwt-dono');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(readLease()?.phase).toBe('done');
+    owner.reset();
+    const next = [0, 1, 2].map(() =>
+      tab(null, async () => {
+        posts += 1;
+        return { accessToken: 'jwt-reload', expiresIn: 30 };
+      }, bus),
+    );
+    const pending = Promise.all(next.map((item) => item.refresh()));
+    await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
+    expect(posts).toBe(1);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 40);
+    const grants = await pending;
+    expect(posts).toBe(2);
+    expect(grants.map((grant) => grant.accessToken)).toEqual([
+      'jwt-reload',
+      'jwt-reload',
+      'jwt-reload',
+    ]);
+    for (const item of next) {
+      item.reset();
+    }
+  });
+
+  it('sem locks, a aba que chega com o POST em voo não faz outro POST', async () => {
+    vi.useRealTimers();
+    let release: (grant: { accessToken: string; expiresIn: number | null }) => void = () => {};
+    const gate = new Promise<{ accessToken: string; expiresIn: number | null }>((resolve) => {
+      release = resolve;
+    });
+    let posts = 0;
+    const bus = createBus();
+    const post = () => {
+      posts += 1;
+      if (posts === 1) {
+        return gate;
+      }
+      return Promise.resolve({ accessToken: 'jwt-segundo', expiresIn: 30 });
+    };
+    const first = tab(null, post, bus);
+    const pending = first.refresh();
+    await vi.waitFor(() => expect(posts).toBe(1));
+    expect(readLease()?.phase).toBe('sending');
+    const second = tab(null, post, bus);
+    const secondResult = second.refresh().then(
+      (grant) => grant.accessToken,
+      () => 'expired',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(posts).toBe(1);
+    release({ accessToken: 'jwt-primeiro', expiresIn: 30 });
+    await expect(pending).resolves.toMatchObject({ accessToken: 'jwt-primeiro' });
+    await expect(secondResult).resolves.toBe('jwt-primeiro');
+    expect(posts).toBe(1);
+  });
+
+  it('sem locks, done apagado no meio do ping e duas abas fazem 1 POST', async () => {
+    vi.useRealTimers();
+    seed({
+      leaseId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      epoch: 4,
+      owner: 'aba-morta',
+      until: Date.now() + LEASE_DONE_MS,
+      phase: 'done',
+    });
+    let posts = 0;
+    const bus = createBus();
+    const post = async () => {
+      posts += 1;
+      return { accessToken: 'jwt-ping', expiresIn: 30 };
+    };
+    const first = tab(null, post, bus);
+    const second = tab(null, post, bus);
+    const pending = Promise.all([first.refresh(), second.refresh()]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.localStorage.removeItem(SESSION_LEASE_KEY);
+    window.dispatchEvent(new StorageEvent('storage', { key: SESSION_LEASE_KEY }));
+    const grants = await pending;
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-ping', 'jwt-ping']);
+  });
+
+  it('sem locks, a aba que entra 100ms depois no storage vazio faz 0 POST', async () => {
+    vi.useRealTimers();
+    let posts = 0;
+    const bus = createBus();
+    const post = async () => {
+      posts += 1;
+      return { accessToken: 'jwt-atraso', expiresIn: 30 };
+    };
+    const first = tab(null, post, bus);
+    const pendingFirst = first.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const second = tab(null, post, bus);
+    const pendingSecond = second.refresh();
+    const grants = await Promise.all([pendingFirst, pendingSecond]);
+    expect(posts).toBe(1);
+    expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-atraso', 'jwt-atraso']);
   });
 });
 
