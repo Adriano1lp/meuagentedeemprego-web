@@ -18,9 +18,9 @@
  * - No máximo um POST por lease.
  * - done com dono vivo: o ping devolve o grant e não há POST. Enquanto o
  *   done for nosso, o grant é republicado para a aba que abre o canal depois.
- * - done sem resposta no ping: o cookie antigo já foi rotacionado. Só a
- *   primeira aba que esperou esse leaseId abre um epoch novo e faz um POST.
- *   As outras seguem o lease novo, sem POST.
+ * - done sem grant: o ping pede o token. Se o dono responde, não há POST.
+ *   Se o grant não chega, só a primeira aba abre um epoch novo quando o
+ *   done vence, com um POST sequencial no cookie já rotacionado.
  * - No pagehide, sem canal, o dono apaga só o próprio done. Com canal o
  *   done fica: apagá-lo no reload põe todas as abas no mint ao mesmo tempo
  *   e a janela entre a releitura e o fetch faz um segundo POST.
@@ -757,19 +757,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     });
   }
 
-  async function waitLeaseMove(lease: SessionLease, myLife: number): Promise<void> {
-    while (myLife === life) {
-      const current = readLease();
-      if (!current || current.leaseId !== lease.leaseId || current.phase !== lease.phase) {
-        return;
-      }
-      if (current.until <= now()) {
-        return;
-      }
-      await interruptible(Math.min(50, current.until - now()));
-    }
-  }
-
   async function waitOpen(lease: SessionLease, myLife: number): Promise<void> {
     while (myLife === life) {
       const current = readLease();
@@ -1120,15 +1107,39 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         if (grant) {
           return { kind: 'grant', grant };
         }
+        // O ping não abre POST. O done ainda vale e o dono vivo pode entregar
+        // o grant depois dos 400 ms. O epoch novo espera o done vencer: um
+        // POST sequencial, no cookie que já foi rotacionado.
+        const deadline = found.lease.until;
+        while (myLife === life && now() < deadline) {
+          const during = takeGrant(found.lease.leaseId);
+          if (during) {
+            return { kind: 'grant', grant: during };
+          }
+          const current = readLease();
+          if (!current || current.leaseId !== found.lease.leaseId) {
+            break;
+          }
+          if (isLoggedOutFlag()) {
+            throw new SessionExpiredError(false);
+          }
+          await interruptible(Math.min(50, Math.max(0, deadline - now())));
+        }
+        if (myLife !== life || isLoggedOutFlag()) {
+          throw new SessionExpiredError(false);
+        }
+        const late = takeGrant(found.lease.leaseId);
+        if (late) {
+          return { kind: 'grant', grant: late };
+        }
+        const moved = readLease();
+        if (moved && moved.leaseId !== found.lease.leaseId) {
+          continue;
+        }
         const waited = doneWaiters.get(`${found.lease.leaseId}:${tabId}`);
         const waitedAt = waited?.at ?? now();
         if (!amFirstDoneWaiter(found.lease.leaseId, waitedAt)) {
-          consumed.add(found.lease.leaseId);
-          await waitLeaseMove(found.lease, myLife);
-          const moved = readLease();
-          if (!moved || moved.leaseId === found.lease.leaseId) {
-            throw new SessionExpiredError(false);
-          }
+          await interruptible(50);
           continue;
         }
         consumed.add(found.lease.leaseId);

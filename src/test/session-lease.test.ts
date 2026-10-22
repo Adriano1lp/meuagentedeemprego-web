@@ -383,7 +383,7 @@ describe('lease único do refresh', () => {
     });
     await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(0);
-    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 30);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 30);
     const result = await pending;
     expect(result).toBe('jwt-nao');
     expect(posts).toBe(1);
@@ -549,7 +549,7 @@ describe('lease único do refresh', () => {
     const pending = Promise.all(tabs.map((item) => item.refresh()));
     await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(0);
-    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 40);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 40);
     const grants = await pending;
     expect(posts).toBe(1);
     expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-epoch-novo', 'jwt-epoch-novo']);
@@ -879,7 +879,7 @@ describe('lease único do refresh', () => {
     const pending = Promise.all(next.map((item) => item.refresh()));
     await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS - 1);
     expect(posts).toBe(1);
-    await vi.advanceTimersByTimeAsync(1 + LEASE_JITTER_MAX_MS + 40);
+    await vi.advanceTimersByTimeAsync(LEASE_DONE_MS + LEASE_JITTER_MAX_MS + 40);
     const grants = await pending;
     expect(posts).toBe(2);
     expect(grants.map((grant) => grant.accessToken)).toEqual([
