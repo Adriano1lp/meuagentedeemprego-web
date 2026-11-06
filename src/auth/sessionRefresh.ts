@@ -192,7 +192,8 @@ type Inspect =
 
 type Outcome =
   | { kind: 'grant'; grant: AccessGrant }
-  | { kind: 'detached'; pending: Promise<AccessGrant> };
+  | { kind: 'detached'; pending: Promise<AccessGrant> }
+  | { kind: 'wait-degraded' };
 
 type Announced = {
   leaseId: string;
@@ -1191,7 +1192,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       throw new SessionExpiredError(false);
     }
     if (locks) {
-      const grace = now() + 50;
+      const grace = now() + GRANT_OWNER_PING_MS;
       while (now() < grace) {
         const reused = takeDegradedGrant();
         if (reused) {
@@ -1202,19 +1203,19 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           throw new SessionExpiredError(false);
         }
       }
-      const grant = await beginPost(null, myLife);
-      const deadline = now() + GRANT_OWNER_PING_MS;
-      while (now() < deadline) {
-        if (myLife !== life || isLoggedOutFlag()) {
-          break;
-        }
-        publishDegradedGrant(grant);
-        await interruptible(Math.min(50, Math.max(0, deadline - now())));
+      if (lostDegradedRace()) {
+        // O lock não fica preso até L. A espera do grant é fora dele.
+        return { kind: 'wait-degraded' };
       }
+      const grant = await beginPost(null, myLife);
       if (myLife !== life || isLoggedOutFlag()) {
         throw new SessionExpiredError(false);
       }
+      degradedCoordinator = true;
+      // Uma publicação. O token continua nessa mensagem. Quem abre o
+      // canal depois manda um anúncio e recebe uma resposta, até L.
       startDegradedPulse(grant, myLife);
+      await interruptible(0);
       return { kind: 'grant', grant };
     }
     const election = await electDegradedCoordinator(myLife);
@@ -1403,8 +1404,21 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     ensureStorageListener();
     ensureChannel();
     const myLife = life;
+    if (locks && inspect().kind === 'broken') {
+      if (degradedAt === 0) {
+        degradedAt = now();
+      }
+      publish({ v: 1, type: 'degraded-claim', tabId, at: degradedAt });
+    }
     const run = () => acquire(myLife);
     const outcome = locks ? await locks.request(REFRESH_LOCK_NAME, run) : await run();
+    if (outcome.kind === 'wait-degraded') {
+      const waited = await waitDegradedGrant(myLife);
+      if (waited.kind !== 'grant') {
+        throw new SessionExpiredError(false);
+      }
+      return waited.grant;
+    }
     if (outcome.kind === 'detached') {
       if (myLife !== life || isLoggedOutFlag()) {
         return outcome.pending.then(() => {

@@ -564,6 +564,36 @@ describe('lease único do refresh', () => {
     }
   });
 
+  it('com locks e storage bloqueado, a aba que abre o canal depois não faz outro POST', async () => {
+    vi.useFakeTimers();
+    const restore = blockStorage();
+    try {
+      const locks = sharedLocks() as unknown as LockManager;
+      const bus = createBus();
+      let posts = 0;
+      const first = tab(locks, async () => {
+        posts += 1;
+        return { accessToken: 'jwt-degradado', expiresIn: 30 };
+      }, bus);
+      const pending = first.refresh();
+      await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS + 80);
+      expect(posts).toBe(1);
+      expect((await pending).accessToken).toBe('jwt-degradado');
+      const late = tab(locks, async () => {
+        posts += 1;
+        return { accessToken: 'jwt-tarde', expiresIn: 30 };
+      }, bus);
+      const lateResult = late.refresh();
+      await vi.advanceTimersByTimeAsync(GRANT_OWNER_PING_MS + 80);
+      expect((await lateResult).accessToken).toBe('jwt-degradado');
+      expect(posts).toBe(1);
+      first.reset();
+      late.reset();
+    } finally {
+      restore();
+    }
+  });
+
   it('com locks e storage bloqueado, 2 e 3 abas fazem 1 POST e recebem o grant', async () => {
     const restore = blockStorage();
     try {
