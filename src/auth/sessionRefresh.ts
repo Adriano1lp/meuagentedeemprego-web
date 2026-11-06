@@ -16,8 +16,11 @@
  *
  * Invariantes:
  * - No máximo um POST por lease.
- * - done com dono vivo: o ping devolve o grant e não há POST. Enquanto o
- *   done for nosso, o grant é republicado para a aba que abre o canal depois.
+ * - done com dono vivo: o ping devolve o grant e não há POST. O token
+ *   ainda atravessa o BroadcastChannel nessa resposta; tirá-lo do canal
+ *   fica fora deste corte. O pulse só corre com done-wait ou grant-please
+ *   pendente e para assim que o grant é publicado para eles. Não fica
+ *   50 ms por todo o G.
  * - done sem grant: o ping pede o token. Se o dono responde, não há POST.
  *   Se o grant não chega, só a primeira aba abre um epoch novo quando o
  *   done vence, com um POST sequencial no cookie já rotacionado.
@@ -30,10 +33,13 @@
  * - sending nunca é retomado. No pagehide, se o fetch ainda não saiu, o
  *   dono apaga o próprio open ou sending (leaseId e owner seus). Se o
  *   fetch já saiu, o sending fica.
- * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal.
+ * - Storage bloqueado e Web Lock: o lock cobre o POST e o grant vai no canal
+ *   uma vez. Cada aba que anuncia até L recebe uma resposta. O token continua
+ *   nessa mensagem. Não há pulse de 50 ms por todo o L.
  * - Sem lock e sem storage: a primeira aba que anuncia no canal coordena e
  *   faz um POST. A perdedora espera o grant degradado até L e não faz POST.
  *   Se o grant não chega, falha fechado. O desempate é o anúncio mais cedo.
+ *   O grant degradado sai uma vez; um anúncio novo, até L, recebe uma resposta.
  */
 
 import {
@@ -125,7 +131,58 @@ export type SessionCoordinator = {
   notifySessionExpired: () => void;
   subscribe: (listener: Listener) => () => void;
   reset: () => void;
+  /** Quantos grants o mapa ainda guarda. Sem token. */
+  retainedGrantCount: () => number;
 };
+
+/** Teto de grants guardados antes de a aba saber qual lease espera. */
+export const GRANT_MEMORY_LIMIT = 4;
+
+export type GrantMemory = {
+  token: string;
+  expiresIn: number | null;
+  until: number;
+};
+
+/**
+ * Só fica o grant do lease que a aba espera ou que já leu.
+ * Sem lease conhecido, cabem no máximo GRANT_MEMORY_LIMIT entradas
+ * (o canal pode chegar antes do done) e cada uma vence com G.
+ * Não grava token em storage.
+ */
+export function rememberGrant(
+  map: Map<string, GrantMemory>,
+  entry: { leaseId: string; token: string; expiresIn: number | null },
+  expectedLeaseId: string | null,
+  at: number,
+): void {
+  for (const [id, stored] of map) {
+    if (stored.until <= at) {
+      map.delete(id);
+    }
+  }
+  const until = at + LEASE_DONE_MS;
+  if (expectedLeaseId) {
+    for (const id of [...map.keys()]) {
+      if (id !== expectedLeaseId) {
+        map.delete(id);
+      }
+    }
+    if (entry.leaseId !== expectedLeaseId) {
+      return;
+    }
+    map.set(entry.leaseId, { token: entry.token, expiresIn: entry.expiresIn, until });
+    return;
+  }
+  map.set(entry.leaseId, { token: entry.token, expiresIn: entry.expiresIn, until });
+  while (map.size > GRANT_MEMORY_LIMIT) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    map.delete(oldest);
+  }
+}
 
 type Inspect =
   | { kind: 'broken' }
@@ -261,13 +318,17 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
   let beatTimer: ReturnType<typeof setInterval> | null = null;
   let grantPulse: ReturnType<typeof setInterval> | null = null;
   let degradedReplyTimer: ReturnType<typeof setTimeout> | null = null;
-  let degradedPulse: ReturnType<typeof setInterval> | null = null;
   const dispatched = new Set<string>();
   let announced: Announced | null = null;
   let degradedAt = 0;
   let degradedCoordinator = false;
   let degradedCommitted = false;
-  const memoryGrants = new Map<string, { token: string; expiresIn: number | null }>();
+  let degradedGrant: AccessGrant | null = null;
+  let degradedGrantUntil = 0;
+  let degradedLife = -1;
+  const degradedGrantServed = new Set<string>();
+  const memoryGrants = new Map<string, GrantMemory>();
+  let awaitedLeaseId: string | null = null;
   const consumed = new Set<string>();
   const answeredPlease = new Set<string>();
   const queuedPlease = new Map<string, string>();
@@ -306,13 +367,6 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
-  function stopDegradedPulse(): void {
-    if (degradedPulse != null) {
-      clearInterval(degradedPulse);
-      degradedPulse = null;
-    }
-  }
-
   function scheduleDegradedReply(): void {
     if (degradedReplyTimer != null || !degradedCoordinator || degradedAt === 0) {
       return;
@@ -326,8 +380,46 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }, 0);
   }
 
+  function grantDemand(leaseId: string): boolean {
+    const prefix = `${leaseId}:`;
+    for (const key of doneWaiters.keys()) {
+      if (key.startsWith(prefix)) {
+        return true;
+      }
+    }
+    for (const [id, idLease] of queuedPlease) {
+      if (idLease === leaseId && !answeredPlease.has(id)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clearGrantDemand(leaseId: string): void {
+    const prefix = `${leaseId}:`;
+    for (const key of [...doneWaiters.keys()]) {
+      if (key.startsWith(prefix)) {
+        doneWaiters.delete(key);
+      }
+    }
+    for (const [id, idLease] of [...queuedPlease]) {
+      if (idLease === leaseId) {
+        queuedPlease.delete(id);
+        answeredPlease.add(id);
+      }
+    }
+  }
+
+  /**
+   * O token ainda sai no canal. O pulse só existe com done-wait ou
+   * grant-please pendente e para assim que o grant é publicado para eles.
+   * Não repete a cada 50 ms por todo o G.
+   */
   function startGrantPulse(leaseId: string, myLife: number): void {
     stopGrantPulse();
+    if (!grantDemand(leaseId)) {
+      return;
+    }
     const tick = () => {
       if (myLife !== life || isLoggedOutFlag() || !announced || announced.leaseId !== leaseId) {
         stopGrantPulse();
@@ -344,7 +436,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         stopGrantPulse();
         return;
       }
-      publishGrant(announced);
+      if (!grantDemand(leaseId)) {
+        stopGrantPulse();
+        return;
+      }
+      if (publishGrant(announced)) {
+        clearGrantDemand(leaseId);
+      }
+      stopGrantPulse();
     };
     grantPulse = setInterval(tick, 50);
   }
@@ -379,11 +478,14 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
 
   function resetDegraded(): void {
     stopDegradedReply();
-    stopDegradedPulse();
     degradedAt = 0;
     degradedCoordinator = false;
     degradedCommitted = false;
     degradedInbox = null;
+    degradedGrant = null;
+    degradedGrantUntil = 0;
+    degradedLife = -1;
+    degradedGrantServed.clear();
     degradedPeers.clear();
     doneWaiters.clear();
   }
@@ -393,6 +495,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     stopHeartbeat();
     stopGrantPulse();
     announced = null;
+    awaitedLeaseId = null;
     memoryGrants.clear();
     queuedPlease.clear();
     answeredPlease.clear();
@@ -538,10 +641,16 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           wakeAll();
           return;
         }
-        // Guarda mesmo se o done ainda não apareceu nesta aba. No WebKit o
-        // canal pode chegar antes do localStorage, e descartar o grant faz
-        // o ping abrir um epoch novo.
-        memoryGrants.set(data.leaseId, { token: data.token, expiresIn });
+        // Só o lease que esta aba espera ou que já leu. Sem lease conhecido,
+        // cabem GRANT_MEMORY_LIMIT entradas até G: o canal pode chegar antes
+        // do storage. Grant de lease alheio não acumula. O token não vai
+        // para o storage.
+        rememberGrant(
+          memoryGrants,
+          { leaseId: data.leaseId, token: data.token, expiresIn },
+          awaitedLeaseId ?? expectedLeaseFromStorage(),
+          now(),
+        );
         wakeAll();
         return;
       }
@@ -557,8 +666,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
           at: data.at,
           commit: data.type === 'degraded-commit' || previous?.commit === true,
         });
-        if (degradedCoordinator && data.tabId !== tabId) {
-          scheduleDegradedReply();
+        if (data.tabId !== tabId) {
+          if (degradedCoordinator) {
+            scheduleDegradedReply();
+          }
+          serveDegradedPeer(data.tabId);
         }
         wakeAll();
         return;
@@ -573,8 +685,8 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
         Number.isFinite(data.at)
       ) {
         doneWaiters.set(`${data.leaseId}:${data.tabId}`, { tabId: data.tabId, at: data.at });
-        if (announced && announced.leaseId === data.leaseId) {
-          publishGrant(announced);
+        if (announced && announced.leaseId === data.leaseId && publishGrant(announced)) {
+          doneWaiters.delete(`${data.leaseId}:${data.tabId}`);
         }
         wakeAll();
         return;
@@ -622,13 +734,13 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     }
   }
 
-  function publishGrant(grant: Announced): void {
+  function publishGrant(grant: Announced): boolean {
     if (isLoggedOutFlag()) {
-      return;
+      return false;
     }
     const current = readLease();
     if (!current || current.leaseId !== grant.leaseId || current.owner !== tabId || current.phase !== 'done') {
-      return;
+      return false;
     }
     publish({
       v: 1,
@@ -637,6 +749,7 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       token: grant.token,
       expiresIn: grant.expiresIn,
     });
+    return true;
   }
 
   function replyPlease(id: string): void {
@@ -721,7 +834,25 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     });
   }
 
+  function expectedLeaseFromStorage(): string | null {
+    const current = readLease();
+    if (!current || (current.phase !== 'sending' && current.phase !== 'done')) {
+      return null;
+    }
+    return current.leaseId;
+  }
+
+  function pruneGrantMemory(): void {
+    const at = now();
+    for (const [id, stored] of memoryGrants) {
+      if (stored.until <= at) {
+        memoryGrants.delete(id);
+      }
+    }
+  }
+
   function takeGrant(leaseId: string): AccessGrant | null {
+    pruneGrantMemory();
     const found = memoryGrants.get(leaseId);
     if (!found) {
       return null;
@@ -775,6 +906,26 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     if (!channel) {
       return null;
     }
+    awaitedLeaseId = lease.leaseId;
+    for (const id of [...memoryGrants.keys()]) {
+      if (id !== lease.leaseId) {
+        memoryGrants.delete(id);
+      }
+    }
+    try {
+      return await waitGrantBody(lease, myLife, pingMs);
+    } finally {
+      if (awaitedLeaseId === lease.leaseId) {
+        awaitedLeaseId = null;
+      }
+    }
+  }
+
+  async function waitGrantBody(
+    lease: SessionLease,
+    myLife: number,
+    pingMs?: number,
+  ): Promise<AccessGrant | null> {
     const pingDeadline = pingMs == null ? null : now() + Math.max(0, pingMs);
     const waitedAt = now();
     if (pingMs != null) {
@@ -865,8 +1016,11 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       token: grant.accessToken,
       expiresIn: grant.expiresIn,
     };
-    publishGrant(announced);
+    const published = publishGrant(announced);
     flushPlease();
+    if (published) {
+      clearGrantDemand(leaseId);
+    }
     startGrantPulse(leaseId, myLife);
     return grant;
   }
@@ -939,17 +1093,40 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
     return { pending: promote(lease, myLife) };
   }
 
+  /**
+   * O grant degradado sai uma vez no canal. O token continua nessa
+   * mensagem. Cada aba que anuncia depois recebe uma resposta, até L.
+   * Não há intervalo de 50 ms.
+   */
   function startDegradedPulse(grant: AccessGrant, myLife: number): void {
-    stopDegradedPulse();
-    const deadline = now() + LEASE_OPEN_MS;
-    publishDegradedGrant(grant);
-    degradedPulse = setInterval(() => {
-      if (myLife !== life || isLoggedOutFlag() || now() >= deadline) {
-        stopDegradedPulse();
-        return;
-      }
-      publishDegradedGrant(grant);
-    }, 50);
+    if (myLife !== life || isLoggedOutFlag()) {
+      return;
+    }
+    degradedGrant = { accessToken: grant.accessToken, expiresIn: grant.expiresIn };
+    degradedGrantUntil = now() + LEASE_OPEN_MS;
+    degradedLife = myLife;
+    degradedGrantServed.clear();
+    publishDegradedGrant(degradedGrant);
+    for (const peerId of degradedPeers.keys()) {
+      degradedGrantServed.add(peerId);
+    }
+  }
+
+  function serveDegradedPeer(peerId: string): void {
+    if (
+      !degradedGrant ||
+      degradedLife !== life ||
+      now() >= degradedGrantUntil ||
+      isLoggedOutFlag()
+    ) {
+      degradedGrant = null;
+      return;
+    }
+    if (degradedGrantServed.has(peerId)) {
+      return;
+    }
+    degradedGrantServed.add(peerId);
+    publishDegradedGrant(degradedGrant);
   }
 
   async function waitDegradedGrant(myLife: number): Promise<Outcome> {
@@ -1394,6 +1571,10 @@ export function createSessionCoordinator(deps: SessionCoordinatorDeps): SessionC
       return () => {
         listeners.delete(listener);
       };
+    },
+    retainedGrantCount() {
+      pruneGrantMemory();
+      return memoryGrants.size;
     },
     reset() {
       sessionCleaners.delete(cleaner);

@@ -5,10 +5,12 @@ import { clearLoggedOutFlag, markLoggedOut } from '../auth/loggedOut';
 import {
   clearSessionRefreshMark,
   createSessionCoordinator,
+  GRANT_MEMORY_LIMIT,
   GRANT_OWNER_PING_MS,
   LEASE_DONE_MS,
   LEASE_JITTER_MAX_MS,
   LEASE_OPEN_MS,
+  rememberGrant,
   SESSION_LEASE_KEY,
   type SessionCoordinator,
   type SessionLease,
@@ -966,6 +968,110 @@ describe('lease único do refresh', () => {
     const grants = await Promise.all([pendingFirst, pendingSecond]);
     expect(posts).toBe(1);
     expect(grants.map((grant) => grant.accessToken)).toEqual(['jwt-atraso', 'jwt-atraso']);
+  });
+
+  it('a aba tardia recebe o grant do dono vivo e o pulse para sem pedido', async () => {
+    vi.useFakeTimers();
+    const bus = createBus();
+    const seen: Wire[] = [];
+    const tap = bus.channel();
+    tap.addEventListener('message', (event) => {
+      seen.push(event.data as Wire);
+    });
+    let posts = 0;
+    const owner = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-dono-vivo', expiresIn: 30 };
+    }, bus);
+    const ready = owner.refresh();
+    await flushJitter();
+    expect((await ready).accessToken).toBe('jwt-dono-vivo');
+    const grantCount = () => seen.filter((message) => message.type === 'grant').length;
+    expect(grantCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(grantCount()).toBe(1);
+    const late = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-tarde', expiresIn: 30 };
+    }, bus);
+    const lateGrant = late.refresh();
+    await vi.advanceTimersByTimeAsync(80);
+    expect((await lateGrant).accessToken).toBe('jwt-dono-vivo');
+    expect(posts).toBe(1);
+    const afterLate = grantCount();
+    expect(afterLate).toBeGreaterThan(1);
+    expect(afterLate).toBeLessThan(8);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(grantCount()).toBe(afterLate);
+    owner.reset();
+    late.reset();
+  });
+
+  it('grant de leaseId alheio não acumula e o mapa tem teto', () => {
+    const expected = new Map<string, { token: string; expiresIn: number | null; until: number }>();
+    rememberGrant(expected, { leaseId: 'esperado', token: 't-ok', expiresIn: 1 }, 'esperado', 0);
+    for (let index = 0; index < 50; index += 1) {
+      rememberGrant(
+        expected,
+        { leaseId: `alheio-${index}`, token: `t-${index}`, expiresIn: 1 },
+        'esperado',
+        0,
+      );
+    }
+    expect([...expected.keys()]).toEqual(['esperado']);
+
+    const capped = new Map<string, { token: string; expiresIn: number | null; until: number }>();
+    for (let index = 0; index < 100; index += 1) {
+      rememberGrant(capped, { leaseId: `id-${index}`, token: `t-${index}`, expiresIn: 1 }, null, 0);
+    }
+    expect(capped.size).toBe(GRANT_MEMORY_LIMIT);
+    expect(capped.size).toBeLessThan(100);
+    rememberGrant(capped, { leaseId: 'novo', token: 't-novo', expiresIn: 1 }, null, LEASE_DONE_MS);
+    expect([...capped.keys()]).toEqual(['novo']);
+  });
+
+  it('o handler não acumula grant de lease alheio e o takeGrant segue o lease esperado', async () => {
+    vi.useFakeTimers();
+    const leaseId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    seed({
+      leaseId,
+      epoch: 2,
+      owner: 'dona',
+      until: Date.now() + LEASE_DONE_MS,
+      phase: 'done',
+    });
+    const bus = createBus();
+    let posts = 0;
+    const follower = tab(null, async () => {
+      posts += 1;
+      return { accessToken: 'jwt-nao', expiresIn: 30 };
+    }, bus);
+    const pending = follower.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 40; index += 1) {
+      bus.channel().postMessage({
+        v: 1,
+        type: 'grant',
+        leaseId: `alheio-${index}`,
+        token: `jwt-alheio-${index}`,
+        expiresIn: 30,
+      });
+    }
+    expect(follower.retainedGrantCount()).toBe(0);
+    bus.channel().postMessage({
+      v: 1,
+      type: 'grant',
+      leaseId,
+      token: 'jwt-certo',
+      expiresIn: 30,
+    });
+    expect(follower.retainedGrantCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await pending).accessToken).toBe('jwt-certo');
+    expect(posts).toBe(0);
+    expect(follower.retainedGrantCount()).toBe(0);
+    expect(JSON.stringify(window.localStorage)).not.toMatch(/jwt/);
+    follower.reset();
   });
 });
 
