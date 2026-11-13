@@ -7,6 +7,7 @@ import type { UserStatus } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { AppShell } from '../components/AppShell';
 import { BillingConfirmation } from '../components/BillingConfirmation';
+import { CvFormWizard } from '../components/CvFormWizard';
 import { CvUploadPanel } from '../components/CvUploadPanel';
 import { GenericError } from '../components/GenericError';
 import { HomeShortcuts } from '../components/HomeShortcuts';
@@ -35,9 +36,11 @@ export function HomePage() {
   const [billing, setBilling] = useState<BillingMe | null>(null);
   const [billingLoading, setBillingLoading] = useState(canUseProduct);
   const [billingError, setBillingError] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [analysisUnlocked, setAnalysisUnlocked] = useState(false);
 
   const hasCv = status?.has_cv === true;
-  const canAnalyze = canUseProduct && canAnalyzeVaga(status);
+  const canAnalyze = canUseProduct && (canAnalyzeVaga(status) || analysisUnlocked);
   const processarGate = analyzeBlockReason(status);
 
   const loadStatus = useCallback(
@@ -163,24 +166,36 @@ export function HomePage() {
         </Card>
       ) : null}
 
-      {!statusError && status && !hasCv ? (
+      {formOpen ? (
+        <CvFormWizard
+          mode="create"
+          email={user?.email ?? ''}
+          replaceOnSave={false}
+          onCancel={() => setFormOpen(false)}
+          onAnalysisReady={() => setAnalysisUnlocked(true)}
+          onStatusRefresh={loadStatus}
+        />
+      ) : null}
+
+      {!formOpen && !statusError && status && !hasCv ? (
         <Card data-testid="cv-onboarding" className="mt-6">
           <CardHeader>
-            <CardTitle>Enviar arquivo</CardTitle>
+            <CardTitle>Currículo</CardTitle>
             <CardDescription>
-              Envie um PDF ou TXT. A análise fica bloqueada até o currículo estar pronto.
+              Envie um PDF ou TXT, ou crie pelo formulário. A análise fica bloqueada até o currículo estar pronto.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 pt-2">
             <CvUploadPanel enabled={canUseProduct} onStatusRefresh={loadStatus} />
-            <div>
-              <Button type="button" data-testid="cv-create-form" disabled className="w-full">
-                Criar pelo formulário
-              </Button>
-              <p data-testid="cv-create-form-soon" className="mt-2 text-sm text-muted-foreground">
-                em breve
-              </p>
-            </div>
+            <Button
+              type="button"
+              data-testid="cv-create-form"
+              variant="outline"
+              className="w-full"
+              onClick={() => setFormOpen(true)}
+            >
+              Criar pelo formulário
+            </Button>
           </CardContent>
         </Card>
       ) : null}

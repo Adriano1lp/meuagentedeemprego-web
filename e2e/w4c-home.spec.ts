@@ -92,8 +92,8 @@ test('Free, Essencial, esgotado, CV e overflow', async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 800 });
     await revisitHome(page);
     await expect(page.getByTestId('cv-onboarding')).toBeVisible();
-    await expect(page.getByTestId('cv-create-form')).toBeDisabled();
-    await expect(page.getByTestId('cv-create-form-soon')).toHaveText('em breve');
+    await expect(page.getByTestId('cv-create-form')).toBeEnabled();
+    await expect(page.getByTestId('cv-create-form-soon')).toHaveCount(0);
     await expect(page.getByTestId('processar-gate')).toBeVisible();
     await expectNoHorizontalScroll(page);
     await page.screenshot({

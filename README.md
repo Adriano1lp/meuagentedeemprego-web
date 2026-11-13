@@ -79,7 +79,7 @@ npm test          # unitarios (Vitest)
 npm run test:e2e  # Playwright (Chromium / Chrome do sistema)
 ```
 
-O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/gap-history`, `/users/me/cover-letter`, `/processar`, `/users/me/files/*`, `/billing/checkout` e `/billing/me` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao.
+O e2e sobe o Vite em `http://127.0.0.1:5173` e **nao chama a API live**: as rotas `/auth/*`, `/legal/*`, `/consent`, `/users/me`, `/users/me/export`, `/users/me/status`, `/users/me/upload-cv`, `/users/me/rebuild-embeddings`, `/users/me/cv/structured`, `/users/me/gap-history`, `/users/me/cover-letter`, `/processar`, `/users/me/files/*`, `/billing/checkout` e `/billing/me` sao mockadas. `DELETE /users/me` tambem e mockado nos testes de exclusao. O spec do formulário de CV roda em Chromium e WebKit.
 
 ## Variaveis de ambiente
 
@@ -144,6 +144,30 @@ Cenarios (testes unitarios + e2e):
 5. Sem CV / `has_embeddings` false: mesmo com texto da vaga preenchido → Analisar disabled
 
 - `403` TERMS/PRIVACY_OUTDATED continua no ConsentGate
+
+## Escopo W5b (currículo pelo formulário)
+
+Quem ainda não tem CV em `/app` escolhe **Enviar arquivo** (o fluxo da Fatia 1) ou **Criar pelo formulário**. O botão deixa de ser "em breve". Em `/app/curriculo`, **Editar pelo formulário** lê `GET /users/me/cv/structured`.
+
+O wizard tem um passo por seção: Básico, Resumo, Experiências, Formação, Cursos, Habilidades, Idiomas, Links e Revisão. Os rótulos são em pt-BR. O valor técnico do enum não aparece na tela. O e-mail é o da conta, só leitura, e não entra no JSON (`Identificacao` não tem esse campo).
+
+Contrato lido de `services/structured_cv.py` (API master `9cc4938`):
+
+- `POST /users/me/cv/structured` cria (201). Consentimento obrigatório `{ aceito: true, versao_termo: "cv-estruturado-v1" }`.
+- `PUT` atualiza. O passo de consentimento continua no wizard e o aceite vai no corpo.
+- Quem já tem CV estruturado usa PUT, depois de confirmar **Isso substitui seu currículo atual**.
+- `POST` 409 (já existe) repete o mesmo corpo em PUT.
+- `GET` 200 preenche o formulário com `data`. `is_current: false` avisa que o currículo vigente veio de um arquivo.
+- `GET` 404 abre vazio.
+- `GET` 409 (documento ainda sendo gravado) mostra **Estamos preparando seu currículo…**, tenta de novo com espera de 1s, 2s e 4s e, se continuar, oferece criar pelo formulário.
+- `429` respeita `Retry-After`, com texto neutro e retry sem perder o rascunho.
+- `422` usa o `loc` para focar o campo e voltar ao passo.
+- Corpo acima de 64 KB não é enviado; a mensagem é neutra.
+- A resposta de escrita pode trazer `version`, `document_id` e `reason`. A UI descarta os três. Com `has_embeddings` ou `ready_for_analysis`, a análise libera. Se o CV ficou salvo sem embeddings, a tela segue em **Estamos preparando seu currículo…** e consulta `GET /users/me/status` até `has_embeddings`. Aí mostra **Pronto! Já pode analisar vagas.**
+
+O rascunho fica só em memória. Recarregar ou sair com rascunho pede confirmação (`beforeunload` e guarda nos links internos). Nada de CV vai para `localStorage` ou `sessionStorage`. A tela do currículo criado pelo formulário diz **Currículo criado pelo formulário** e não mostra `cv_file`, `original_file`, `object_key`, `chroma_dir`, `vector_store` nem `extracted_text_object_key`.
+
+Não chama `POST /users/me/manual-profile` e não mexe em Stripe.
 
 ## Escopo W-Historico (paridade mobile app #8)
 
@@ -334,7 +358,7 @@ Base: `https://meu-agente-de-emprego.onrender.com` — Bearer JWT only. Sem `X-U
 
 ## Fora desta fatia
 
-Checkout do Essencial entrou na fatia W3a. Continuam fora: perfil manual, edicao de perfil, portal do cliente, cancelamento de assinatura, cupons, mudancas no backend, cookies e header `X-User-Id`.
+Checkout do Essencial entrou na fatia W3a. O currículo pelo formulário entrou na W5b (`/users/me/cv/structured`); o endpoint antigo `POST /users/me/manual-profile` não é chamado. Continuam fora: edição de perfil, portal do cliente, cancelamento de assinatura, cupons, mudanças no backend, cookies e header `X-User-Id`.
 
 ## HTTPS em producao
 
