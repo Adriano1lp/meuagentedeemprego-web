@@ -67,6 +67,17 @@ import {
 import { parseQuotaResponse } from './quota';
 import { parseUserStatus } from './status';
 import {
+  CV_FORM_INVALID,
+  CV_FORM_OFFLINE,
+  CV_FORM_SESSION,
+  CV_FORM_TOO_LARGE,
+  CV_FORM_UNAVAILABLE,
+  CV_STRUCTURED_PATH,
+  parseStructuredCvRead,
+  parseStructuredCvWrite,
+  payloadExceedsLimit,
+} from './structuredCv';
+import {
   COOKIE_SESSION,
   CSRF_HEADER,
   cookieSessionInit,
@@ -82,6 +93,10 @@ import type {
   ProcessarRequest,
   ProcessarResponse,
   QuotaDetail,
+  CvEstruturadoCreate,
+  CvEstruturadoFormSource,
+  CvEstruturadoUpdate,
+  CvEstruturadoWritePublic,
   RebuildEmbeddingsResponse,
   RegisterPayload,
   UploadCvResponse,
@@ -95,14 +110,21 @@ export class ApiError extends Error {
   readonly body: unknown;
   readonly outdated: OutdatedDetail | null;
   readonly quota: QuotaDetail | null;
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number, body: unknown, message: string) {
+  constructor(
+    status: number,
+    body: unknown,
+    message: string,
+    retryAfterSeconds: number | null = null,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
     this.outdated = parseOutdatedResponse(status, body);
     this.quota = parseQuotaResponse(status, body);
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -195,6 +217,40 @@ function internalErrorDetail(body: unknown): string | null {
     }
   }
   return null;
+}
+
+/** Acima disso, ou se o valor não for um prazo válido, o retry fica liberado. */
+export const RETRY_AFTER_MAX_SECONDS = 3600;
+
+export function clampRetryAfterSeconds(seconds: number | null): number | null {
+  if (
+    seconds === null ||
+    !Number.isFinite(seconds) ||
+    seconds < 0 ||
+    seconds > RETRY_AFTER_MAX_SECONDS
+  ) {
+    return null;
+  }
+  return Math.ceil(seconds);
+}
+
+function retryAfterSeconds(response: Response): number | null {
+  if (response.status !== 429) {
+    return null;
+  }
+  const raw = response.headers.get('Retry-After')?.trim();
+  if (!raw) {
+    return null;
+  }
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    return clampRetryAfterSeconds(asNumber);
+  }
+  const when = Date.parse(raw);
+  if (Number.isNaN(when)) {
+    return null;
+  }
+  return clampRetryAfterSeconds(Math.ceil((when - Date.now()) / 1000));
 }
 
 function rethrowCvFailure(operation: CvOperation, error: unknown): never {
@@ -327,7 +383,12 @@ export function createApiClient(options: ApiClientOptions) {
     if (parse === 'text') {
       if (!response.ok) {
         const body = await readBody(response);
-        const error = new ApiError(response.status, body, errorMessage(response.status, body));
+        const error = new ApiError(
+          response.status,
+          body,
+          errorMessage(response.status, body),
+          retryAfterSeconds(response),
+        );
         if (error.outdated) {
           options.onOutdated?.(error.outdated);
         }
@@ -347,6 +408,7 @@ export function createApiClient(options: ApiClientOptions) {
           response.status,
           body,
           errorMessage(response.status, body),
+          retryAfterSeconds(response),
         );
         if (error.outdated) {
           options.onOutdated?.(error.outdated);
@@ -362,6 +424,7 @@ export function createApiClient(options: ApiClientOptions) {
         response.status,
         body,
         errorMessage(response.status, body),
+        retryAfterSeconds(response),
       );
       if (error.outdated) {
         options.onOutdated?.(error.outdated);
@@ -369,6 +432,68 @@ export function createApiClient(options: ApiClientOptions) {
       throw error;
     }
     return body;
+  }
+
+  function structuredCvStatusMessage(status: number): string {
+    if (status === 413) {
+      return CV_FORM_TOO_LARGE;
+    }
+    if (status === 401 || status === 403) {
+      return CV_FORM_SESSION;
+    }
+    if (status === 429) {
+      return CV_FORM_UNAVAILABLE;
+    }
+    if (status === 0) {
+      return CV_FORM_OFFLINE;
+    }
+    return CV_FORM_UNAVAILABLE;
+  }
+
+  function rethrowStructuredCv(error: unknown): never {
+    if (error instanceof ApiError && error.outdated) {
+      throw error;
+    }
+    if (error instanceof ApiError && error.status === 422) {
+      throw new ApiError(422, error.body, CV_FORM_INVALID, null);
+    }
+    if (error instanceof ApiError) {
+      throw new ApiError(
+        error.status,
+        null,
+        structuredCvStatusMessage(error.status),
+        error.retryAfterSeconds,
+      );
+    }
+    throw new ApiError(0, null, CV_FORM_OFFLINE);
+  }
+
+  async function writeStructuredCv(
+    method: 'POST' | 'PUT',
+    payload: CvEstruturadoCreate | CvEstruturadoUpdate,
+  ): Promise<CvEstruturadoWritePublic> {
+    const token = options.getToken();
+    if (!token || !token.trim()) {
+      throw new ApiError(401, null, CV_FORM_SESSION);
+    }
+    if (payloadExceedsLimit(payload)) {
+      throw new ApiError(413, null, CV_FORM_TOO_LARGE);
+    }
+    let body: unknown;
+    try {
+      body = await request(CV_STRUCTURED_PATH, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      rethrowStructuredCv(error);
+    }
+    try {
+      return parseStructuredCvWrite(body);
+    } catch {
+      throw new ApiError(200, null, CV_FORM_UNAVAILABLE);
+    }
   }
 
   return {
@@ -541,6 +666,36 @@ export function createApiClient(options: ApiClientOptions) {
         throw new ApiError(200, null, CV_UNAVAILABLE);
       }
       return parsed;
+    },
+
+    async getStructuredCv(): Promise<CvEstruturadoFormSource> {
+      const token = options.getToken();
+      if (!token || !token.trim()) {
+        throw new ApiError(401, null, CV_FORM_SESSION);
+      }
+      let body: unknown;
+      try {
+        body = await request(CV_STRUCTURED_PATH, { method: 'GET' });
+      } catch (error) {
+        rethrowStructuredCv(error);
+      }
+      try {
+        return parseStructuredCvRead(body);
+      } catch {
+        throw new ApiError(200, null, CV_FORM_UNAVAILABLE);
+      }
+    },
+
+    async createStructuredCv(
+      payload: CvEstruturadoCreate,
+    ): Promise<CvEstruturadoWritePublic> {
+      return writeStructuredCv('POST', payload);
+    },
+
+    async updateStructuredCv(
+      payload: CvEstruturadoUpdate,
+    ): Promise<CvEstruturadoWritePublic> {
+      return writeStructuredCv('PUT', payload);
     },
 
     async processar(texto: string): Promise<ProcessarResponse> {

@@ -189,3 +189,177 @@ export type DeleteAccountResult = {
   user_id?: string;
   deleted_at?: string;
 };
+
+/**
+ * POST/PUT/GET /users/me/cv/structured.
+ * Espelho de `services/structured_cv.py` (API master 9cc4938).
+ * `extra=forbid`: o payload só leva estes campos. E-mail da conta não entra.
+ * A UI não mostra version, document_id, reason nem nomes de armazenamento.
+ */
+export const CV_STRUCTURED_CONSENT_VERSION = 'cv-estruturado-v1' as const;
+
+export const UF_CODES = [
+  'AC',
+  'AL',
+  'AP',
+  'AM',
+  'BA',
+  'CE',
+  'DF',
+  'ES',
+  'GO',
+  'MA',
+  'MT',
+  'MS',
+  'MG',
+  'PA',
+  'PB',
+  'PR',
+  'PE',
+  'PI',
+  'RJ',
+  'RN',
+  'RS',
+  'RO',
+  'RR',
+  'SC',
+  'SP',
+  'SE',
+  'TO',
+] as const;
+
+export type UfCode = (typeof UF_CODES)[number];
+
+export type CvModalidade = 'presencial' | 'hibrido' | 'remoto' | 'indiferente';
+
+export type CvSenioridade =
+  | 'estagio'
+  | 'junior'
+  | 'pleno'
+  | 'senior'
+  | 'especialista'
+  | 'lideranca';
+
+export type CvNivelFormacao =
+  | 'medio'
+  | 'tecnico'
+  | 'tecnologo'
+  | 'graduacao'
+  | 'pos_graduacao'
+  | 'mba'
+  | 'mestrado'
+  | 'doutorado';
+
+export type CvNivelIdioma = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2' | 'nativo';
+
+export type CvIdentificacao = {
+  nome: string;
+  cidade: string;
+  uf: UfCode;
+  modalidade: CvModalidade;
+  telefone?: string;
+  cargos_alvo: string[];
+  senioridade: CvSenioridade;
+};
+
+export type CvExperiencia = {
+  cargo: string;
+  empresa: string;
+  inicio: string;
+  fim?: string | null;
+  atual: boolean;
+  realizacoes: string[];
+  tecnologias: string[];
+};
+
+export type CvFormacao = {
+  curso: string;
+  instituicao: string;
+  nivel: CvNivelFormacao;
+  conclusao?: string | null;
+  em_andamento: boolean;
+};
+
+export type CvCurso = {
+  nome: string;
+  instituicao?: string;
+  ano_mes?: string;
+  carga_horaria_h?: number;
+};
+
+export type CvIdioma = {
+  idioma: string;
+  nivel: CvNivelIdioma;
+};
+
+export type CvLink = {
+  rotulo?: string;
+  url: string;
+};
+
+export type CvConsentimento = {
+  aceito: true;
+  versao_termo: typeof CV_STRUCTURED_CONSENT_VERSION;
+};
+
+/** Corpo sem consentimento. É o `data` do GET. */
+export type CvEstruturadoData = {
+  identificacao: CvIdentificacao;
+  resumo: string;
+  primeiro_emprego: boolean;
+  experiencias: CvExperiencia[];
+  formacoes: CvFormacao[];
+  cursos: CvCurso[];
+  habilidades_tecnicas: string[];
+  habilidades_comportamentais: string[];
+  idiomas: CvIdioma[];
+  links: CvLink[];
+};
+
+export type CvEstruturadoCreate = CvEstruturadoData & {
+  consentimento: CvConsentimento;
+};
+
+export type CvEstruturadoUpdate = CvEstruturadoData & {
+  consentimento?: CvConsentimento;
+};
+
+/**
+ * Resposta de POST (201) e PUT (200).
+ * O cliente público descarta version, document_id e reason antes da UI.
+ */
+export type CvEstruturadoWriteResponse = {
+  version?: number;
+  document_id?: string | number | null;
+  has_cv?: boolean;
+  has_embeddings?: boolean;
+  ready_for_analysis?: boolean;
+  reason?: string;
+};
+
+export type CvEstruturadoWritePublic = {
+  has_cv: boolean;
+  has_embeddings: boolean;
+  ready_for_analysis: boolean;
+};
+
+export type CvEstruturadoConsentRead = {
+  versao_termo?: string;
+  accepted_at?: string;
+};
+
+/** GET 200. version e updated_at existem no fio e não vão para a tela. */
+export type CvEstruturadoReadResponse = {
+  version?: number;
+  email?: string;
+  data?: CvEstruturadoData;
+  consent?: CvEstruturadoConsentRead | null;
+  is_current?: boolean;
+  updated_at?: string;
+};
+
+export type CvEstruturadoFormSource = {
+  email: string;
+  data: CvEstruturadoData;
+  isCurrent: boolean | null;
+};

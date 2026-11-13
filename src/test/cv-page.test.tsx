@@ -203,8 +203,8 @@ describe('BDD W-CV', () => {
     await loginHome(user);
 
     expect(screen.getByTestId('cv-panel')).toHaveAttribute('data-cv-state', 'idle');
-    expect(screen.getByTestId('cv-create-form')).toBeDisabled();
-    expect(screen.getByTestId('cv-create-form-soon')).toHaveTextContent('em breve');
+    expect(screen.getByTestId('cv-create-form')).toBeEnabled();
+    expect(screen.queryByTestId('cv-create-form-soon')).not.toBeInTheDocument();
     chooseFile(pdfFile());
     await user.click(screen.getByTestId('cv-submit'));
 
