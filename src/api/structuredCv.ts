@@ -83,6 +83,9 @@ export const CV_LIMITS = {
   monthMin: '1950-01',
 } as const;
 
+export const CV_FORM_CONSENT_TEXT =
+  'Autorizo o Meu Agente de Emprego a usar os dados deste currículo para criar uma representação do meu perfil (embeddings) e para analisar vagas e gerar cartas de apresentação com inteligência artificial, conforme o Termo do currículo estruturado.';
+
 export const CV_FORM_MESSAGES = {
   nomeRequired: 'Informe o nome.',
   nomeDigits: 'O nome não pode ter números.',
@@ -130,7 +133,7 @@ export const CV_FORM_MESSAGES = {
   linkUrl: 'Use um link https válido.',
   linkRotulo: 'O rótulo do link pode ter no máximo 40 caracteres.',
   linksMax: 'Informe no máximo 5 links.',
-  consent: 'Confirme que podemos usar estes dados para montar seu currículo.',
+  consent: 'Confirme o uso dos dados para continuar.',
   apiField: 'Revise este campo.',
 } as const;
 
@@ -737,8 +740,17 @@ export function isHttpsCvLink(value: string): boolean {
   if (url.username || url.password) {
     return false;
   }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host === 'localhost.localdomain') {
+  let host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  while (host.endsWith('.')) {
+    host = host.slice(0, -1);
+  }
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === 'localhost.localdomain' ||
+    host.endsWith('.local')
+  ) {
     return false;
   }
   if (host.includes(':')) {

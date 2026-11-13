@@ -160,12 +160,18 @@ Contrato lido de `services/structured_cv.py` (API master `9cc4938`):
 - `GET` 200 preenche o formulário com `data`. `is_current: false` avisa que o currículo vigente veio de um arquivo.
 - `GET` 404 abre vazio.
 - `GET` 409 (documento ainda sendo gravado) mostra **Estamos preparando seu currículo…**, tenta de novo com espera de 1s, 2s e 4s e, se continuar, oferece criar pelo formulário.
-- `429` respeita `Retry-After`, com texto neutro e retry sem perder o rascunho.
+- `429` respeita `Retry-After` até 3600 segundos. Valor maior ou inválido mostra a mensagem neutra e deixa **Tentar de novo** liberado na hora, sem perder o rascunho.
 - `422` usa o `loc` para focar o campo e voltar ao passo.
 - Corpo acima de 64 KB não é enviado; a mensagem é neutra.
 - A resposta de escrita pode trazer `version`, `document_id` e `reason`. A UI descarta os três. Com `has_embeddings` ou `ready_for_analysis`, a análise libera. Se o CV ficou salvo sem embeddings, a tela segue em **Estamos preparando seu currículo…** e consulta `GET /users/me/status` até `has_embeddings`. Aí mostra **Pronto! Já pode analisar vagas.**
 
 O rascunho fica só em memória. Recarregar ou sair com rascunho pede confirmação (`beforeunload` e guarda nos links internos). Nada de CV vai para `localStorage` ou `sessionStorage`. A tela do currículo criado pelo formulário diz **Currículo criado pelo formulário** e não mostra `cv_file`, `original_file`, `object_key`, `chroma_dir`, `vector_store` nem `extracted_text_object_key`.
+
+Um `POST` 409 não vira `PUT` sozinho: o diálogo **Isso substitui seu currículo atual** (`role=alertdialog`) aparece antes. Cancelar (ou Esc) não grava e o rascunho continua. A mesma confirmação aparece quando o GET veio com `is_current: false`.
+
+Links recusam, com erro no campo, `localhost`, `localhost.`, `*.localhost`, `*.local`, IP e usuário/senha. O ponto final do host é ignorado na checagem. O endereço do usuário não vira link.
+
+O aceite começa desmarcado e é obrigatório. O texto cita **Termo do currículo estruturado** como frase, sem link: a API só serve `GET /legal/terms` e `GET /legal/privacy` na versão `1.0`. `cv-estruturado-v1` é constante do schema, não um documento. O link fica para uma fatia futura da API.
 
 Não chama `POST /users/me/manual-profile` e não mexe em Stripe.
 

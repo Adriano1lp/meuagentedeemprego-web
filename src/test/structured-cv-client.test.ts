@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ApiError, createApiClient } from '../api/client';
+import { ApiError, RETRY_AFTER_MAX_SECONDS, createApiClient } from '../api/client';
 import { CV_FORM_TOO_LARGE } from '../api/structuredCv';
 import { CV_STRUCTURED_CONSENT_VERSION } from '../api/types';
 
@@ -105,6 +105,38 @@ describe('cliente /users/me/cv/structured', () => {
       expect((error as ApiError).retryAfterSeconds).toBe(12);
       expect((error as ApiError).body).toBeNull();
       expect((error as ApiError).message).not.toMatch(/Retry-After|Muitas alteracoes/i);
+    }
+  });
+
+  it('Retry-After acima de 3600 ou inválido não trava o retry', async () => {
+    const far = new Date(Date.now() + (RETRY_AFTER_MAX_SECONDS + 60) * 1000).toUTCString();
+    const cases: Array<[string | undefined, number | null]> = [
+      ['12', 12],
+      ['3600', 3600],
+      ['3601', null],
+      ['99999', null],
+      ['nao', null],
+      ['-5', null],
+      [far, null],
+    ];
+    for (const [header, expected] of cases) {
+      const fetchImpl = vi.fn(async () =>
+        new Response(JSON.stringify({ detail: 'limite' }), {
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            ...(header ? { 'Retry-After': header } : {}),
+          },
+        }),
+      );
+      try {
+        await client(fetchImpl).createStructuredCv(payload);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApiError);
+        expect((error as ApiError).retryAfterSeconds).toBe(expected);
+        expect((error as ApiError).message).not.toMatch(/99999|Retry-After/i);
+      }
     }
   });
 

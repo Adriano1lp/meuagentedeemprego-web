@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
 import {
+  CV_FORM_CONSENT_TEXT,
   CV_FORM_LEAVE,
   CV_FORM_OFFLINE,
   CV_FORM_PREPARING,
+  CV_FORM_RATE_LIMIT,
   CV_FORM_READY,
   CV_FORM_REPLACE,
   CV_FORM_SAVED_LABEL,
@@ -267,11 +269,66 @@ describe('formulário de currículo', () => {
     await login(user);
     await goToReview(user);
     await user.click(screen.getByTestId('cv-form-submit'));
+    const dialog = await screen.findByTestId('cv-replace-dialog');
+    expect(dialog).toHaveAttribute('role', 'alertdialog');
+    expect(dialog).toHaveTextContent(CV_FORM_REPLACE);
+    expect(calls.map((call) => call.method)).toEqual(['POST']);
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute('data-testid', 'cv-replace-cancel');
+    });
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute('data-testid', 'cv-replace-confirm');
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute('data-testid', 'cv-replace-cancel');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('cv-replace-dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('cv-review')).toHaveTextContent('Ana Silva');
+    expect(calls.map((call) => call.method)).toEqual(['POST']);
+    await user.click(screen.getByTestId('cv-form-submit'));
+    expect(await screen.findByTestId('cv-replace-dialog')).toBeInTheDocument();
+    await user.click(screen.getByTestId('cv-replace-confirm'));
     expect(await screen.findByTestId('cv-form-ready')).toBeInTheDocument();
-    expect(calls.map((call) => call.method)).toEqual(['POST', 'PUT']);
-    expect(calls[0]?.body).toEqual(calls[1]?.body);
+    expect(calls.map((call) => call.method)).toEqual(['POST', 'POST', 'PUT']);
+    expect(calls[0]?.body).toEqual(calls[2]?.body);
     expect(calls[0]?.body.consentimento?.versao_termo).toBe(CV_STRUCTURED_CONSENT_VERSION);
     expect(JSON.stringify(calls[0]?.body)).not.toContain('ana@example.com');
+  });
+
+  it('Retry-After enorme ou inválido deixa o retry liberado', async () => {
+    const user = userEvent.setup();
+    renderWizard(
+      authFetch(() =>
+        json({ detail: 'limite' }, 429, { 'Retry-After': '99999' }),
+      ),
+    );
+    await login(user);
+    await goToReview(user);
+    await user.click(screen.getByTestId('cv-form-submit'));
+    expect(await screen.findByTestId('cv-form-error')).toHaveTextContent(CV_FORM_RATE_LIMIT);
+    expect(screen.getByTestId('cv-form-error')).not.toHaveTextContent('99999');
+    expect(screen.getByTestId('cv-form-retry')).toBeEnabled();
+    expect(screen.getByTestId('cv-form-submit')).toBeEnabled();
+    expect(screen.getByTestId('cv-review')).toHaveTextContent('Ana Silva');
+  });
+
+  it('consentimento começa desmarcado, sem link, e bloqueia o envio', async () => {
+    const calls: string[] = [];
+    const user = userEvent.setup();
+    renderWizard(
+      authFetch((method) => {
+        calls.push(method);
+        return json(savedBody, 201);
+      }),
+      { initialDraft: { ...validDraft(), consentimento: false } },
+    );
+    await login(user);
+    await goToReview(user);
+    expect(screen.getByTestId('cv-consent')).not.toBeChecked();
+    expect(screen.getByText(CV_FORM_CONSENT_TEXT)).toBeInTheDocument();
+    expect(screen.getByTestId('cv-consent').closest('label')?.querySelector('a')).toBeNull();
+    await user.click(screen.getByTestId('cv-form-submit'));
+    expect(screen.getByTestId('cv-consent')).toHaveAttribute('aria-invalid', 'true');
+    expect(calls).toEqual([]);
   });
 
   it('erro de rede mantém os dados', async () => {

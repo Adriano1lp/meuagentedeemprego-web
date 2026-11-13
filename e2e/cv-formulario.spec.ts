@@ -10,6 +10,9 @@ import {
 const RESUMO =
   'Atuação com entrega contínua de resultados reais para a operação. '.repeat(6);
 
+const CONSENT_TEXT =
+  'Autorizo o Meu Agente de Emprego a usar os dados deste currículo para criar uma representação do meu perfil (embeddings) e para analisar vagas e gerar cartas de apresentação com inteligência artificial, conforme o Termo do currículo estruturado.';
+
 const SEGREDO = 'motivo-interno-de-embedding';
 
 async function expectNoHorizontalScroll(page: Page) {
@@ -82,7 +85,11 @@ async function throughOptional(page: Page) {
   await page.getByTestId('cv-form-next').click();
 }
 
-async function reachReview(page: Page, experience: 'completa' | 'primeiro') {
+async function reachReview(
+  page: Page,
+  experience: 'completa' | 'primeiro',
+  options: { consent?: boolean } = {},
+) {
   await page.getByTestId('cv-create-form').click();
   await expect(page.getByTestId('cv-form-step')).toHaveAttribute('data-step', 'basico');
   await fillBasico(page);
@@ -94,7 +101,12 @@ async function reachReview(page: Page, experience: 'completa' | 'primeiro') {
   }
   await throughOptional(page);
   await expect(page.getByTestId('cv-form-step')).toHaveAttribute('data-step', 'revisao');
-  await page.getByTestId('cv-consent').check();
+  await expect(page.getByTestId('cv-consent')).not.toBeChecked();
+  await expect(page.getByText(CONSENT_TEXT)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Termo do currículo estruturado' })).toHaveCount(0);
+  if (options.consent !== false) {
+    await page.getByTestId('cv-consent').check();
+  }
 }
 
 function savedResponse(ready: boolean) {
@@ -283,8 +295,104 @@ test('POST 409 faz fallback para PUT', async ({ page }) => {
   await login(page);
   await reachReview(page, 'primeiro');
   await page.getByTestId('cv-form-submit').click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toContainText('Isso substitui seu currículo atual');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('cv-review')).toContainText('Ana Silva');
+  expect(methods).toEqual(['POST']);
+  await page.getByTestId('cv-form-submit').click();
+  await expect(dialog).toBeVisible();
+  await page.getByTestId('cv-replace-confirm').click();
   await expect(page.getByTestId('cv-form-ready')).toBeVisible();
-  expect(methods).toEqual(['POST', 'PUT']);
+  expect(methods).toEqual(['POST', 'POST', 'PUT']);
+});
+
+test('sem consentimento o envio não sai', async ({ page }) => {
+  const methods: string[] = [];
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockUserStatus(page, { ...mockedStatus, has_cv: false, has_embeddings: false });
+  await page.route('**/users/me/cv/structured', async (route) => {
+    methods.push(route.request().method());
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify(savedResponse(true)),
+    });
+  });
+  await login(page);
+  await reachReview(page, 'primeiro', { consent: false });
+  await page.getByTestId('cv-form-submit').click();
+  await expect(page.getByTestId('cv-consent')).toHaveAttribute('aria-invalid', 'true');
+  expect(methods).toEqual([]);
+});
+
+test('is_current false pede confirmação antes de gravar', async ({ page }) => {
+  const methods: string[] = [];
+  await mockLegalRoutes(page);
+  await mockAuthSuccess(page);
+  await mockUserStatus(page, { ...mockedStatus, has_cv: true, has_embeddings: true });
+  await page.route('**/users/me/cv/structured', async (route) => {
+    methods.push(route.request().method());
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          email: 'ada@example.com',
+          is_current: false,
+          data: {
+            identificacao: {
+              nome: 'Ana Silva',
+              cidade: 'Campinas',
+              uf: 'SP',
+              modalidade: 'hibrido',
+              cargos_alvo: ['Analista de dados'],
+              senioridade: 'pleno',
+            },
+            resumo: RESUMO,
+            primeiro_emprego: true,
+            experiencias: [],
+            formacoes: [],
+            cursos: [],
+            habilidades_tecnicas: ['Python', 'SQL', 'ETL'],
+            habilidades_comportamentais: [],
+            idiomas: [],
+            links: [],
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(savedResponse(true)),
+    });
+  });
+  await login(page);
+  await page.getByTestId('nav-curriculo').click();
+  await page.getByTestId('cv-edit-form').click();
+  await expect(page.getByTestId('cv-not-current')).toBeVisible();
+  await expect(page.getByTestId('cv-nome')).toHaveValue('Ana Silva');
+  for (let step = 0; step < 8; step += 1) {
+    await page.getByTestId('cv-form-next').click();
+  }
+  await expect(page.getByTestId('cv-consent')).not.toBeChecked();
+  await expect(page.getByText(CONSENT_TEXT)).toBeVisible();
+  await page.getByTestId('cv-consent').check();
+  await page.getByTestId('cv-form-submit').click();
+  await expect(page.getByRole('alertdialog')).toContainText('Isso substitui seu currículo atual');
+  expect(methods).toEqual(['GET']);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(page.getByTestId('cv-review')).toContainText('Ana Silva');
+  expect(methods).toEqual(['GET']);
+  await page.getByTestId('cv-form-submit').click();
+  await page.getByTestId('cv-replace-confirm').click();
+  await expect(page.getByTestId('cv-form-ready')).toBeVisible();
+  expect(methods).toEqual(['GET', 'PUT']);
 });
 
 test('edição: GET 200, 404 e 409', async ({ page }) => {

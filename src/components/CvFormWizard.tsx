@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { ApiError } from '../api/client';
+import { ApiError, clampRetryAfterSeconds } from '../api/client';
 import {
+  CV_FORM_CONSENT_TEXT,
   CV_FORM_EMBEDDINGS_FAILED,
   CV_FORM_LEAVE,
   CV_FORM_NOT_CURRENT,
@@ -152,6 +153,7 @@ function ChoiceDialog({
   cancelTestId,
   onConfirm,
   onCancel,
+  role = 'dialog',
 }: {
   testId: string;
   title: string;
@@ -162,30 +164,78 @@ function ChoiceDialog({
   cancelTestId: string;
   onConfirm: () => void;
   onCancel: () => void;
+  role?: 'dialog' | 'alertdialog';
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+
   useEffect(() => {
-    cancelRef.current?.focus();
+    const node = dialogRef.current;
+    if (!node) {
+      return;
+    }
+    const previouslyFocused = document.activeElement;
+    const focusable = () =>
+      Array.from(
+        node.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+        ),
+      );
+    (cancelRef.current ?? focusable()[0])?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancelRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const items = focusable();
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !node.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !node.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      if (previouslyFocused instanceof HTMLElement) {
+        previouslyFocused.focus();
+      }
+    };
   }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/40 p-4 sm:items-center">
       <div
-        role="dialog"
+        ref={dialogRef}
+        role={role}
         aria-modal="true"
         aria-labelledby={`${testId}-title`}
+        aria-describedby={`${testId}-message`}
         data-testid={testId}
         className="w-full min-w-0 max-w-md rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            onCancel();
-          }
-        }}
       >
         <h3 id={`${testId}-title`} className="font-display text-lg font-semibold">
           {title}
         </h3>
-        <p className="mt-2 text-sm leading-relaxed">{message}</p>
+        <p id={`${testId}-message`} className="mt-2 text-sm leading-relaxed">
+          {message}
+        </p>
         <div className="mt-4 flex flex-col gap-2 sm:flex-row">
           <Button
             ref={cancelRef}
@@ -233,6 +283,7 @@ export function CvFormWizard({
   const [dirty, setDirty] = useState(false);
   const [focusField, setFocusField] = useState<string | null>(null);
   const [closeAsked, setCloseAsked] = useState(false);
+  const [confirmKind, setConfirmKind] = useState<'replace' | 'conflict' | null>(null);
   const [cargoInput, setCargoInput] = useState('');
   const [skillInput, setSkillInput] = useState('');
   const [softInput, setSoftInput] = useState('');
@@ -335,7 +386,13 @@ export function CvFormWizard({
     }
   }
 
-  async function persist() {
+  function cancelReplace() {
+    setConfirmKind(null);
+    setPhase('edit');
+    setDirty(true);
+  }
+
+  async function persist(afterConflict = false) {
     if (locked || waiting) {
       return;
     }
@@ -351,17 +408,23 @@ export function CvFormWizard({
     abortRef.current?.abort();
     abortRef.current = controller;
     try {
-      let result =
-        mode === 'update' ? await api.updateStructuredCv(payload) : null;
-      if (mode === 'create') {
+      let result = null;
+      if (mode === 'update' || afterConflict) {
+        result = await api.updateStructuredCv(payload);
+      } else {
         try {
           result = await api.createStructuredCv(payload);
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) {
-            result = await api.updateStructuredCv(payload);
-          } else {
-            throw error;
+            if (controller.signal.aborted) {
+              return;
+            }
+            setDirty(true);
+            setConfirmKind('conflict');
+            setPhase('confirm');
+            return;
           }
+          throw error;
         }
       }
       if (controller.signal.aborted || !result) {
@@ -432,7 +495,7 @@ export function CvFormWizard({
         return;
       }
       if (error instanceof ApiError && error.status === 429) {
-        const wait = error.retryAfterSeconds ?? 0;
+        const wait = clampRetryAfterSeconds(error.retryAfterSeconds) ?? 0;
         setRetryIn(wait);
         setBanner(rateLimitMessage(wait));
         setPhase('error');
@@ -489,7 +552,8 @@ export function CvFormWizard({
       showErrors(nextErrors);
       return;
     }
-    if (replaceOnSave) {
+    if (replaceOnSave || replacedByFile) {
+      setConfirmKind('replace');
       setPhase('confirm');
       return;
     }
@@ -742,14 +806,19 @@ export function CvFormWizard({
       {phase === 'confirm' ? (
         <ChoiceDialog
           testId="cv-replace-dialog"
+          role="alertdialog"
           title="Substituir currículo"
           message={CV_FORM_REPLACE}
           confirmLabel="Substituir"
           confirmTestId="cv-replace-confirm"
           cancelLabel="Voltar"
           cancelTestId="cv-replace-cancel"
-          onCancel={() => setPhase('edit')}
-          onConfirm={() => void persist()}
+          onCancel={cancelReplace}
+          onConfirm={() => {
+            const conflict = confirmKind === 'conflict';
+            setConfirmKind(null);
+            void persist(conflict);
+          }}
         />
       ) : null}
 
@@ -2083,7 +2152,7 @@ function ReviewStep({
             onEdit((current) => ({ ...current, consentimento: event.target.checked }))
           }
         />
-        <span>Confirmo que estes dados podem ser usados para montar meu currículo.</span>
+        <span>{CV_FORM_CONSENT_TEXT}</span>
       </label>
       <FieldErrorText id="cv-consentimento" message={consentError} />
     </div>

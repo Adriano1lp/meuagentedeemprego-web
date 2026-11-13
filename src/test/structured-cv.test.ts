@@ -262,19 +262,33 @@ describe('CV estruturado — validação e payload', () => {
     expect(payload.formacoes[0]?.conclusao).toBeUndefined();
   });
 
-  it('links só https, sem IP, localhost ou usuário e senha', () => {
+  it('links só https, sem IP, localhost, ponto final ou usuário e senha', () => {
+    const now = new Date('2026-11-13T15:00:00-03:00');
     expect(isHttpsCvLink('https://exemplo.com/ana')).toBe(true);
+    expect(isHttpsCvLink('https://exemplo.com./ana')).toBe(true);
+    expect(isHttpsCvLink('https://notlocalhost.com/cv')).toBe(true);
     expect(isHttpsCvLink('http://exemplo.com')).toBe(false);
     expect(isHttpsCvLink('https://localhost/cv')).toBe(false);
+    expect(isHttpsCvLink('https://localhost.')).toBe(false);
+    expect(isHttpsCvLink('https://app.localhost/cv')).toBe(false);
+    expect(isHttpsCvLink('https://app.localhost./cv')).toBe(false);
+    expect(isHttpsCvLink('https://impressora.local/cv')).toBe(false);
     expect(isHttpsCvLink('https://127.0.0.1/cv')).toBe(false);
     expect(isHttpsCvLink('https://user:pass@exemplo.com/cv')).toBe(false);
-    const errors = validateCvDraft(
-      validDraft({
-        links: [{ key: 'l1', rotulo: '', url: 'http://exemplo.com' }],
-      }),
-      new Date('2026-11-13T15:00:00-03:00'),
-    );
-    expect(errors.find((error) => error.field === 'links.0.url')?.step).toBe('links');
+    for (const url of [
+      'http://exemplo.com',
+      'https://localhost.',
+      'https://app.localhost/cv',
+      'https://impressora.local/cv',
+    ]) {
+      const errors = validateCvDraft(
+        validDraft({ links: [{ key: 'l1', rotulo: '', url }] }),
+        now,
+      );
+      const error = errors.find((item) => item.field === 'links.0.url');
+      expect(error?.step).toBe('links');
+      expect(error?.message).toBe(CV_FORM_MESSAGES.linkUrl);
+    }
   });
 
   it('mapeia o 422 para o campo e o passo', () => {

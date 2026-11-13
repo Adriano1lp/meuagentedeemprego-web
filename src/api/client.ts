@@ -219,6 +219,21 @@ function internalErrorDetail(body: unknown): string | null {
   return null;
 }
 
+/** Acima disso, ou se o valor não for um prazo válido, o retry fica liberado. */
+export const RETRY_AFTER_MAX_SECONDS = 3600;
+
+export function clampRetryAfterSeconds(seconds: number | null): number | null {
+  if (
+    seconds === null ||
+    !Number.isFinite(seconds) ||
+    seconds < 0 ||
+    seconds > RETRY_AFTER_MAX_SECONDS
+  ) {
+    return null;
+  }
+  return Math.ceil(seconds);
+}
+
 function retryAfterSeconds(response: Response): number | null {
   if (response.status !== 429) {
     return null;
@@ -227,15 +242,15 @@ function retryAfterSeconds(response: Response): number | null {
   if (!raw) {
     return null;
   }
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.ceil(seconds);
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    return clampRetryAfterSeconds(asNumber);
   }
   const when = Date.parse(raw);
   if (Number.isNaN(when)) {
     return null;
   }
-  return Math.max(0, Math.ceil((when - Date.now()) / 1000));
+  return clampRetryAfterSeconds(Math.ceil((when - Date.now()) / 1000));
 }
 
 function rethrowCvFailure(operation: CvOperation, error: unknown): never {
