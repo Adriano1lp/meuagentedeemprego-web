@@ -284,8 +284,8 @@ describe('painel de cota na home', () => {
     const user = userEvent.setup();
     await login(user);
     expect(await screen.findByTestId('cv-onboarding')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Criar pelo formulário' })).toBeDisabled();
-    expect(screen.getByTestId('cv-create-form-soon')).toHaveTextContent('em breve');
+    expect(screen.getByRole('button', { name: 'Criar pelo formulário' })).toBeEnabled();
+    expect(screen.queryByTestId('cv-create-form-soon')).not.toBeInTheDocument();
     expect(screen.getByTestId('processar-gate')).toHaveTextContent(
       'Envie um currículo para liberar a análise de vaga.',
     );

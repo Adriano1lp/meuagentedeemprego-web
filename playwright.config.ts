@@ -24,7 +24,7 @@ export default defineConfig({
     },
     {
       name: 'webkit',
-      testMatch: /session.*\.spec\.ts/,
+      testMatch: /session.*\.spec\.ts|cv-formulario\.spec\.ts/,
       use: {
         ...devices['Desktop Safari'],
       },

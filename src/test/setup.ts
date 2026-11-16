@@ -4,6 +4,7 @@ import { afterEach } from 'vitest';
 import { resetLoggedOutForTests } from '../auth/loggedOut';
 import { resetReturnToMemory } from '../auth/returnTo';
 import { resetSessionRuntimeForTests } from '../auth/sessionRefresh';
+import { setStructuredCvTimingForTests } from '../api/structuredCv';
 import { resetBillingReturnMemory } from '../billing/BillingReturn';
 
 afterEach(() => {
@@ -11,4 +12,5 @@ afterEach(() => {
   resetBillingReturnMemory();
   resetSessionRuntimeForTests();
   resetLoggedOutForTests();
+  setStructuredCvTimingForTests(null);
 });

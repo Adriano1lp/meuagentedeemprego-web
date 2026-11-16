@@ -207,7 +207,7 @@ test('5. Sem CV a analise fica bloqueada', async ({ page }) => {
   await login(page);
 
   await expect(page.getByTestId('cv-onboarding')).toBeVisible();
-  await expect(page.getByTestId('cv-create-form')).toBeDisabled();
+  await expect(page.getByTestId('cv-create-form')).toBeEnabled();
   await expect(page.getByTestId('processar-gate')).toContainText(
     'Envie um currículo para liberar a análise de vaga.',
   );
