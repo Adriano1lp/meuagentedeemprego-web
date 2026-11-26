@@ -23,6 +23,11 @@ export const COVER_LETTER_QUOTA =
   'Limite de uso atingido. Não é possível gerar a carta agora.';
 export const COVER_LETTER_DOWNLOAD_FAILED =
   'Não foi possível baixar o PDF da carta.';
+export const COVER_LETTER_RATE_LIMIT = 'Muitas tentativas, tente mais tarde.';
+export const COVER_LETTER_CV_GUIDANCE =
+  'Envie ou complete o currículo para gerar a carta.';
+export const COVER_LETTER_STATUS_CHECK_FAILED =
+  'Não foi possível verificar o currículo. Tente de novo.';
 export const COVER_LETTER_PDF_INVALID =
   'O arquivo recebido não é um PDF válido.';
 export const COVER_LETTER_COPY_SUCCESS = 'Carta copiada.';
@@ -115,6 +120,80 @@ export function safeCoverLetterErrorMessage(error: unknown): string {
     }
   }
   return COVER_LETTER_FAILED;
+}
+
+function detailFromBody(body: unknown): string {
+  if (typeof body === 'string') {
+    return body;
+  }
+  if (!body || typeof body !== 'object') {
+    return '';
+  }
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === 'string') {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+        if (
+          item &&
+          typeof item === 'object' &&
+          'msg' in item &&
+          typeof (item as { msg?: unknown }).msg === 'string'
+        ) {
+          return (item as { msg: string }).msg;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (detail && typeof detail === 'object') {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+  return '';
+}
+
+/** Texto cru do corpo, só para classificar. A tela não exibe este retorno. */
+export function coverLetterErrorDetail(error: unknown): string {
+  if (!error || typeof error !== 'object' || !('body' in error)) {
+    return '';
+  }
+  return detailFromBody((error as { body?: unknown }).body);
+}
+
+export function isCoverLetterEmptyCompanyError(error: unknown): boolean {
+  const detail = coverLetterErrorDetail(error).toLowerCase();
+  return detail.includes('nome da empresa') && detail.includes('vazio');
+}
+
+/**
+ * 400 de currículo/embeddings/contexto. Não usa a mensagem já sanitizada,
+ * porque o cliente troca todo 400 por um texto genérico.
+ */
+export function isCoverLetterCvContextError(error: unknown): boolean {
+  if (isCoverLetterEmptyCompanyError(error)) {
+    return false;
+  }
+  const detail = coverLetterErrorDetail(error).toLowerCase();
+  if (!detail) {
+    return false;
+  }
+  return (
+    detail.includes('embedding') ||
+    detail.includes('curriculo') ||
+    detail.includes('currículo') ||
+    detail.includes('contexto do candidato') ||
+    detail.includes('contexto do cv') ||
+    detail.includes('contexto do currículo')
+  );
 }
 
 export function safeCoverLetterDownloadMessage(error: unknown): string {

@@ -4,6 +4,8 @@ import { searchWithoutBillingReturn } from '../api/billing';
 export const APP_HOME = '/app';
 export const APP_HISTORY = '/app/historico';
 export const APP_CURRICULUM = '/app/curriculo';
+/** Carta avulsa: só a empresa, sem análise prévia. Não entra na barra de navegação. */
+export const APP_COVER_LETTER = '/app/carta';
 export const APP_PROFILE = '/app/perfil';
 export const ENTER_PATH = '/entrar';
 

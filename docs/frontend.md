@@ -28,7 +28,8 @@ Definido em `src/App.tsx`. A autenticação é “existe JWT em memória”, nã
 | `/?billing=…` | encaminha | — | `replace` para `/app` com a mesma query, para o retorno antigo do Stripe. |
 | `/entrar` | **Entrar / Criar conta** (`AuthPage`) | Não | Login e cadastro. `?tab=signup` abre Criar conta. Logado, vai para `/app`. |
 | `/app` | **Início** (`HomePage`) | Sim | Saudação, cota/status, upload de CV + embeddings e análise de vaga. |
-| `/app/historico` | **Histórico** (`HistoryPage`) | Sim | Lista as análises da conta e, em cada item, a carta de apresentação. |
+| `/app/historico` | **Histórico** (`HistoryPage`) | Sim | Lista as análises da conta e, em cada item, a carta de apresentação. O link **Gerar carta só com a empresa** abre `/app/carta`. |
+| `/app/carta` | **Carta avulsa** (`CartaPage`) | Sim | Gera a carta só com o nome da empresa, sem análise prévia e sem cota. O atalho **Carta** do Início aponta para cá. Não é um item da barra. |
 | `/app/perfil` | **Perfil** (`ProfilePage`) | Sim | Conta leve, política de privacidade, exportar, excluir e o CTA de checkout. |
 | `/historico` | redirect | — | `replace` para `/app/historico`. |
 | `/perfil` | redirect | — | `replace` para `/app/perfil`. |
@@ -208,6 +209,19 @@ Na lista do histórico, cada análise tem **Gerar carta**. O texto da carta vive
 
 Ver a nota no final sobre empresa gravada como `Nao informado`.
 
+### d2) Carta avulsa (`/app/carta`)
+
+Não exige análise prévia e não mostra consumo de cota. A entrada é o atalho **Carta** no Início e o link no Histórico. A barra continua com quatro destinos.
+
+1. A tela lê `GET /users/me/status`. Sem `has_embeddings === true`, **Gerar carta** fica desabilitado, a orientação pede para enviar ou completar o currículo e o atalho vai para `/app/curriculo`. Nenhuma chamada a `POST /users/me/cover-letter`.
+2. O formulário pede só **Empresa**. Vazio ou só espaços não envia. Não há campo de cargo.
+3. Com empresa e embeddings, o POST é `{ "empresa": "<trim>" }`. Sucesso mostra `texto_resposta` e **Baixar PDF**, no mesmo fluxo autenticado do histórico.
+4. Se a API ainda responder 400 de currículo ou de contexto, a mesma orientação de CV aparece, sem o detalhe técnico.
+5. Rede, 5xx e 429 mantêm o texto digitado. 429 diz "Muitas tentativas, tente mais tarde." 403 de termos ou privacidade abre o ConsentGate.
+6. Empresa, carta e arquivos internos não entram em `localStorage` nem `sessionStorage`. O JWT continua só em memória.
+
+Cargo como entrada fica para uma fatia de API futura (backlog 🟡).
+
 ### e) Perfil leve
 
 1. Abrir `/app/perfil` com JWT e sem gate chama `GET /users/me`. `/perfil` só redireciona para essa rota.
@@ -282,7 +296,7 @@ Não há tela nem fluxo para:
 
 - Portal do cliente Stripe, cancelamento de assinatura, cupons ou troca de cartão. O W3a só inicia o checkout do Essencial e espera a API confirmar.
 - UI de PDI (plano de desenvolvimento). O export pode trazer `development_plans` no JSON; o app não tem tela para isso.
-- Edição de currículo, edição da carta, perfil manual ou biometria. O CV só entra pelo upload `.pdf`/`.txt` do Início; a carta só é gerada, copiada e baixada na sessão.
+- Edição de currículo, edição da carta, perfil manual ou biometria. O CV entra pelo upload ou pelo formulário; a carta é gerada no histórico ou em `/app/carta`, copiada e baixada na sessão.
 - App mobile. A paridade visual com o Flutter é referência de UX; este repositório é o cliente web.
 
 ## Nota conhecida: empresa `Nao informado`
