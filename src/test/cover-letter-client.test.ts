@@ -11,6 +11,8 @@ import {
   COVER_LETTER_SESSION_EXPIRED,
   coverLetterErrorLeaksInternals,
   coverLetterFileName,
+  isCoverLetterCvContextError,
+  isCoverLetterEmptyCompanyError,
   parseCoverLetterResponse,
 } from '../api/coverLetter';
 
@@ -38,6 +40,37 @@ describe('parseCoverLetterResponse', () => {
     expect(
       coverLetterFileName('users/me/files/carta-acme.pdf'),
     ).toBe('carta-acme.pdf');
+  });
+});
+
+describe('classificacao do 400 da carta', () => {
+  it('separa empresa vazia de curriculo sem embeddings ou contexto', () => {
+    const emptyCompany = {
+      status: 400,
+      body: { detail: 'Nome da empresa nao pode ser vazio' },
+    };
+    const missingEmbeddings = {
+      status: 400,
+      body: {
+        detail:
+          'Curriculo nao esta pronto para analise. Embeddings do usuario nao encontrados.',
+      },
+    };
+    const missingContext = {
+      status: 400,
+      body: {
+        detail:
+          'Nao foi possivel carregar o contexto do candidato para este usuario.',
+      },
+    };
+
+    expect(isCoverLetterEmptyCompanyError(emptyCompany)).toBe(true);
+    expect(isCoverLetterCvContextError(emptyCompany)).toBe(false);
+    expect(isCoverLetterCvContextError(missingEmbeddings)).toBe(true);
+    expect(isCoverLetterCvContextError(missingContext)).toBe(true);
+    expect(isCoverLetterCvContextError({ status: 400, body: { detail: 'outro' } })).toBe(
+      false,
+    );
   });
 });
 

@@ -13,7 +13,8 @@ O site público e o app autenticado não dividem mais a mesma URL.
 | `/` | todo mundo | Landing pública, sem shell e sem JWT. Logado, a landing continua e mostra **Ir para o app** (não redireciona sozinha). |
 | `/entrar` | sem sessão | Login e cadastro (a tela que era `/`). `?tab=signup` abre Criar conta. Logado, vai para `/app`. |
 | `/app` | com JWT | Início (cota, CV, análise). |
-| `/app/historico` | com JWT | Histórico e carta. |
+| `/app/historico` | com JWT | Histórico e carta a partir de cada análise. |
+| `/app/carta` | com JWT | Carta avulsa: só a empresa, sem análise prévia. |
 | `/app/perfil` | com JWT | Perfil, LGPD e o CTA de checkout. |
 | `/historico`, `/perfil` | qualquer um | `replace` para `/app/historico` e `/app/perfil`. |
 
@@ -263,6 +264,18 @@ Na tela autenticada **Historico** (`/app/historico`), cada analise ja salva pode
 7. Sem JWT, `/app/historico` redireciona a `/entrar`. 401 na carta tambem volta ao login. 403 `TERMS_OUTDATED` ou `PRIVACY_OUTDATED` abre o ConsentGate.
 
 A rota nao consome cota hoje; 402/429 sao tratados so por defesa.
+
+## Escopo W4d (carta avulsa)
+
+Em `/app/carta`, a pessoa logada informa só a empresa e gera a carta sem rodar a análise. O atalho **Carta** do Início e o link **Gerar carta só com a empresa** no Histórico abrem essa rota. Ela não entra na barra (os quatro destinos do shell continuam Início, Histórico, Currículo e Perfil).
+
+O cliente é o mesmo `POST /users/me/cover-letter` com `{ "empresa" }` já usado no histórico. Não há campo de cargo. O PDF baixa por `GET /users/me/files/{nome}` com Bearer, sem token na URL.
+
+O botão só gera se `GET /users/me/status` trouxer `has_embeddings === true` (o mesmo sinal do app). Sem embeddings, a tela pede para enviar ou completar o currículo e leva a `/app/curriculo`, sem chamar o POST. Um 400 de currículo ou de contexto mostra essa mesma orientação, sem o texto técnico da API.
+
+Rede, 5xx e 429 (defensivo) avisam em pt-BR e mantêm o que foi digitado. 429 diz "Muitas tentativas, tente mais tarde." A tela não mostra cota. 403 de termos abre o ConsentGate. Nada do formulário, do CV ou da carta vai para `localStorage` ou `sessionStorage`.
+
+Cargo como entrada fica para uma fatia de API futura (backlog 🟡).
 
 ## Escopo W3a (checkout Essencial)
 

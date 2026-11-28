@@ -291,7 +291,7 @@ describe('painel de cota na home', () => {
     );
     expect(screen.getByTestId('processar-submit')).toBeDisabled();
     expect(screen.getByTestId('shortcut-analisar')).toHaveAttribute('href', '/app#analise');
-    expect(screen.getByTestId('shortcut-carta')).toHaveAttribute('href', '/app/historico');
+    expect(screen.getByTestId('shortcut-carta')).toHaveAttribute('href', '/app/carta');
     expect(screen.getByTestId('shortcut-historico')).toHaveAttribute('href', '/app/historico');
     expect(screen.getByTestId('shortcut-perfil')).toHaveAttribute('href', '/app/perfil');
   });

@@ -1,21 +1,31 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 
 import { ApiError } from '../api/client';
 import {
+  COVER_LETTER_COMPANY_REQUIRED,
   COVER_LETTER_COPY_FAILED,
   COVER_LETTER_COPY_SUCCESS,
+  COVER_LETTER_CV_GUIDANCE,
   COVER_LETTER_DOWNLOAD_FAILED,
   COVER_LETTER_FAILED,
   COVER_LETTER_MISSING_COMPANY,
   COVER_LETTER_PDF_INVALID,
   COVER_LETTER_QUOTA,
+  COVER_LETTER_RATE_LIMIT,
+  COVER_LETTER_STATUS_CHECK_FAILED,
   coverLetterFileName,
+  isCoverLetterCvContextError,
+  isCoverLetterEmptyCompanyError,
   safeCoverLetterDownloadMessage,
 } from '../api/coverLetter';
 import { isPdfMagic, triggerBrowserDownload } from '../api/processar';
 import { useAuth } from '../auth/AuthContext';
+import { APP_CURRICULUM } from '../auth/returnTo';
 import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
 
 type CoverLetterPhase =
   | { kind: 'idle' }
@@ -28,27 +38,50 @@ type CopyFeedback = 'success' | 'error' | null;
 
 type CoverLetterSectionProps = {
   companyName?: string;
+  /** `analysis` vem do histórico. `standalone` pede só a empresa, sem cargo. */
+  variant?: 'analysis' | 'standalone';
+  /** No modo avulso, só true libera o POST. O histórico ignora este valor. */
+  canGenerate?: boolean;
+  /** Orientação de CV quando o status já disse que não há embeddings. */
+  showCvGate?: boolean;
 };
 
-export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
+export function CoverLetterSection({
+  companyName,
+  variant = 'analysis',
+  canGenerate = true,
+  showCvGate = false,
+}: CoverLetterSectionProps) {
+  const standalone = variant === 'standalone';
   const { api, expireSession } = useAuth();
-  const company = companyName?.trim() ?? '';
+  const [empresaInput, setEmpresaInput] = useState('');
+  const company = standalone ? empresaInput.trim() : (companyName?.trim() ?? '');
   const [phase, setPhase] = useState<CoverLetterPhase>({ kind: 'idle' });
   const [focusTick, setFocusTick] = useState(0);
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [companyInvalid, setCompanyInvalid] = useState(false);
+  const [cvBlocked, setCvBlocked] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
   const generateLock = useRef(false);
   const downloadLock = useRef(false);
   const loadingRef = useRef<HTMLParagraphElement>(null);
   const resultRef = useRef<HTMLElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const gateRef = useRef<HTMLDivElement>(null);
+  const companyErrorRef = useRef<HTMLParagraphElement>(null);
   const hintId = useId();
+  const companyErrorId = useId();
+  const gateId = useId();
+  const inputId = useId();
   const titleId = useId();
 
   const generating = phase.kind === 'loading';
-  const busy = generating || downloading;
+  const showGate = standalone && (showCvGate || cvBlocked);
+  const allowed = !standalone || (canGenerate && !cvBlocked);
+  const busy = generating || downloading || rechecking;
 
   // O loading sai do DOM com o foco e o botão volta a ser habilitado.
   // O navegador devolve o foco num task seguinte. O próximo task ganha essa corrida.
@@ -65,22 +98,76 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
     return () => window.clearTimeout(timer);
   }, [phase.kind, focusTick]);
 
+  useEffect(() => {
+    if (!standalone || phase.kind !== 'idle') {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (cvBlocked) {
+        gateRef.current?.focus();
+      } else if (companyInvalid && !company) {
+        companyErrorRef.current?.focus();
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [standalone, phase.kind, cvBlocked, companyInvalid, company, focusTick]);
+
   function showQuota() {
     setPhase({ kind: 'quota', message: COVER_LETTER_QUOTA });
     setFocusTick((tick) => tick + 1);
   }
 
+  function showError(message: string) {
+    setPhase({ kind: 'error', message });
+    setFocusTick((tick) => tick + 1);
+  }
+
   async function generate() {
-    if (!company || generateLock.current || downloading) {
+    if (generateLock.current || downloading || rechecking) {
+      return;
+    }
+    if (!company) {
+      if (standalone) {
+        setCompanyInvalid(true);
+        setFocusTick((tick) => tick + 1);
+      }
+      return;
+    }
+    if (!allowed) {
       return;
     }
     generateLock.current = true;
     setCopyFeedback(null);
     setDownloadError(null);
     setDownloadSuccess(false);
-    setPhase({ kind: 'loading' });
-    setFocusTick((tick) => tick + 1);
     try {
+      if (standalone) {
+        setRechecking(true);
+        try {
+          const status = await api.getStatus();
+          if (status.has_embeddings !== true) {
+            setCvBlocked(true);
+            setPhase({ kind: 'idle' });
+            setFocusTick((tick) => tick + 1);
+            return;
+          }
+        } catch (cause) {
+          if (cause instanceof ApiError && cause.outdated) {
+            return;
+          }
+          if (cause instanceof ApiError && cause.status === 401) {
+            expireSession();
+            return;
+          }
+          showError(COVER_LETTER_STATUS_CHECK_FAILED);
+          return;
+        } finally {
+          setRechecking(false);
+        }
+      }
+
+      setPhase({ kind: 'loading' });
+      setFocusTick((tick) => tick + 1);
       const result = await api.createCoverLetter(company);
       setPhase({
         kind: 'ready',
@@ -97,22 +184,43 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
         expireSession();
         return;
       }
+      if (standalone && cause instanceof ApiError && cause.status === 429) {
+        showError(COVER_LETTER_RATE_LIMIT);
+        return;
+      }
+      if (standalone && cause instanceof ApiError && isCoverLetterCvContextError(cause)) {
+        setCvBlocked(true);
+        setPhase({ kind: 'idle' });
+        setFocusTick((tick) => tick + 1);
+        return;
+      }
+      if (standalone && cause instanceof ApiError && isCoverLetterEmptyCompanyError(cause)) {
+        setCompanyInvalid(true);
+        setPhase({ kind: 'idle' });
+        setFocusTick((tick) => tick + 1);
+        return;
+      }
+      if (standalone && cause instanceof ApiError && (cause.status === 402 || cause.quota)) {
+        showError(COVER_LETTER_FAILED);
+        return;
+      }
       if (
+        !standalone &&
         cause instanceof ApiError &&
         (cause.status === 402 || cause.status === 429 || cause.quota)
       ) {
         showQuota();
         return;
       }
-      setPhase({
-        kind: 'error',
-        message:
-          cause instanceof ApiError ? cause.message : COVER_LETTER_FAILED,
-      });
-      setFocusTick((tick) => tick + 1);
+      showError(cause instanceof ApiError ? cause.message : COVER_LETTER_FAILED);
     } finally {
       generateLock.current = false;
     }
+  }
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void generate();
   }
 
   async function copyLetter() {
@@ -160,7 +268,16 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
         expireSession();
         return;
       }
+      if (standalone && cause instanceof ApiError && cause.status === 429) {
+        setDownloadError(COVER_LETTER_RATE_LIMIT);
+        return;
+      }
+      if (standalone && cause instanceof ApiError && (cause.status === 402 || cause.quota)) {
+        setDownloadError(COVER_LETTER_DOWNLOAD_FAILED);
+        return;
+      }
       if (
+        !standalone &&
         cause instanceof ApiError &&
         (cause.status === 402 || cause.status === 429 || cause.quota)
       ) {
@@ -178,27 +295,122 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
     }
   }
 
-  return (
-    <div data-testid="cover-letter-section" className="mt-4 border-t border-border pt-4">
-      <Button
-        type="button"
-        data-testid="cover-letter-generate"
-        onClick={() => void generate()}
-        disabled={!company || busy}
-        aria-busy={generating}
-        aria-describedby={company ? undefined : hintId}
-        className="w-full"
-      >
-        {generating ? 'Gerando carta...' : 'Gerar carta'}
-      </Button>
+  const companyErrorVisible = standalone && companyInvalid && !company;
+  const describedBy = standalone
+    ? [hintId, companyErrorVisible ? companyErrorId : null, showGate ? gateId : null]
+        .filter(Boolean)
+        .join(' ')
+    : company
+      ? undefined
+      : hintId;
 
-      {!company ? (
+  const generateButton = (
+    <Button
+      type={standalone ? 'submit' : 'button'}
+      data-testid="cover-letter-generate"
+      onClick={standalone ? undefined : () => void generate()}
+      disabled={!company || busy || !allowed}
+      aria-busy={generating || rechecking}
+      aria-describedby={describedBy}
+      className={standalone ? 'w-full sm:w-auto' : 'w-full'}
+    >
+      {generating ? 'Gerando carta...' : 'Gerar carta'}
+    </Button>
+  );
+
+  return (
+    <div
+      data-testid="cover-letter-section"
+      className={standalone ? 'grid gap-4' : 'mt-4 border-t border-border pt-4'}
+    >
+      {standalone ? (
+        <form className="grid gap-4" onSubmit={onSubmit} noValidate>
+          <div className="grid gap-2">
+            <Label htmlFor={inputId}>Empresa</Label>
+            <Input
+              id={inputId}
+              name="empresa"
+              data-testid="cover-letter-company"
+              value={empresaInput}
+              autoComplete="organization"
+              aria-required="true"
+              aria-invalid={companyErrorVisible}
+              aria-describedby={describedBy}
+              className="w-full"
+              onChange={(event) => {
+                const next = event.target.value;
+                setEmpresaInput(next);
+                if (next.trim()) {
+                  setCompanyInvalid(false);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') {
+                  return;
+                }
+                event.preventDefault();
+                void generate();
+              }}
+            />
+            <p id={hintId} className="text-sm leading-relaxed text-muted-foreground">
+              Informe o nome da empresa para gerar a carta.
+            </p>
+            {companyErrorVisible ? (
+              <p
+                ref={companyErrorRef}
+                tabIndex={-1}
+                id={companyErrorId}
+                data-testid="cover-letter-company-error"
+                role="alert"
+                aria-live="polite"
+                className="text-sm text-destructive outline-none"
+              >
+                {COVER_LETTER_COMPANY_REQUIRED}
+              </p>
+            ) : null}
+          </div>
+          {showGate ? (
+            <div
+              ref={gateRef}
+              tabIndex={-1}
+              id={gateId}
+              data-testid="cover-letter-cv-gate"
+              role="status"
+              aria-live="polite"
+              className="rounded-lg border border-border bg-muted p-4 outline-none"
+            >
+              <p className="text-sm leading-relaxed">{COVER_LETTER_CV_GUIDANCE}</p>
+              <Button asChild variant="outline" className="mt-3 w-full sm:w-auto">
+                <Link to={APP_CURRICULUM} data-testid="cover-letter-cv-link">
+                  Ir para o currículo
+                </Link>
+              </Button>
+            </div>
+          ) : null}
+          {generateButton}
+        </form>
+      ) : (
+        generateButton
+      )}
+
+      {!standalone && !company ? (
         <p
           id={hintId}
           data-testid="cover-letter-missing-company"
           className="mt-2 text-sm leading-relaxed text-muted-foreground"
         >
           {COVER_LETTER_MISSING_COMPANY}
+        </p>
+      ) : null}
+
+      {rechecking ? (
+        <p
+          data-testid="cover-letter-recheck"
+          role="status"
+          aria-live="polite"
+          className="text-sm"
+        >
+          Verificando o currículo...
         </p>
       ) : null}
 
@@ -209,7 +421,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           data-testid="cover-letter-loading"
           role="status"
           aria-live="polite"
-          className="mt-3 text-sm outline-none"
+          className={standalone ? 'text-sm outline-none' : 'mt-3 text-sm outline-none'}
         >
           Gerando a carta de apresentação...
         </p>
@@ -220,8 +432,13 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           ref={resultRef}
           tabIndex={-1}
           aria-labelledby={titleId}
+          aria-live="polite"
           data-testid="cover-letter-result"
-          className="mt-4 rounded-lg border border-border bg-muted p-4 outline-none"
+          className={
+            standalone
+              ? 'rounded-lg border border-border bg-muted p-4 outline-none'
+              : 'mt-4 rounded-lg border border-border bg-muted p-4 outline-none'
+          }
         >
           <h4 id={titleId} className="font-display text-lg font-semibold break-words">
             Carta de apresentação
@@ -278,7 +495,7 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
             </p>
           ) : null}
           {downloadError ? (
-            <p data-testid="cover-letter-download-error" role="alert" className="text-sm">
+            <p data-testid="cover-letter-download-error" role="alert" aria-live="polite" className="text-sm">
               {downloadError}
             </p>
           ) : null}
@@ -291,7 +508,8 @@ export function CoverLetterSection({ companyName }: CoverLetterSectionProps) {
           tabIndex={-1}
           data-testid="cover-letter-error"
           variant="destructive"
-          className="mt-4 outline-none"
+          aria-live="polite"
+          className={standalone ? 'outline-none' : 'mt-4 outline-none'}
         >
           <AlertTitle>Não foi possível gerar a carta</AlertTitle>
           <AlertDescription className="mt-2">{phase.message}</AlertDescription>

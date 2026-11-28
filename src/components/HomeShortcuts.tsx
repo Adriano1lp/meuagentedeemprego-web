@@ -1,7 +1,7 @@
 import { FileText, House, ScrollText, UserRound } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
-import { APP_HISTORY, APP_HOME, APP_PROFILE } from '../auth/returnTo';
+import { APP_COVER_LETTER, APP_HISTORY, APP_HOME, APP_PROFILE } from '../auth/returnTo';
 import { cn } from '@/lib/utils';
 
 const shortcuts = [
@@ -12,7 +12,7 @@ const shortcuts = [
     icon: House,
   },
   {
-    to: APP_HISTORY,
+    to: APP_COVER_LETTER,
     label: 'Carta',
     testId: 'shortcut-carta',
     icon: ScrollText,

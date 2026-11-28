@@ -35,7 +35,7 @@ const steps = [
   },
   {
     title: 'Histórico, CV e carta',
-    text: 'O histórico lista as análises da conta. Em cada uma dá para baixar o CV, quando o arquivo existe, e gerar a carta de apresentação.',
+    text: 'O histórico lista as análises da conta. Em cada uma dá para baixar o CV, quando o arquivo existe, e gerar a carta de apresentação. Também dá para gerar uma carta só com a empresa, sem analisar a vaga antes.',
   },
 ] as const;
 
@@ -53,7 +53,7 @@ const features = [
   {
     icon: Mail,
     title: 'Carta de apresentação',
-    text: 'Gera a carta para a empresa da vaga, para copiar ou baixar em PDF.',
+    text: 'Gera a carta para a empresa, para copiar ou baixar em PDF, com ou sem uma análise anterior.',
   },
   {
     icon: Download,

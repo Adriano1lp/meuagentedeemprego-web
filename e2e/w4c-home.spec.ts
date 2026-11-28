@@ -169,7 +169,8 @@ test('Free, Essencial, esgotado, CV e overflow', async ({ page }, testInfo) => {
   await expect(page).toHaveURL(/\/app\/historico$/);
   await navLink(page, 'Início').click();
   await page.getByTestId('shortcut-carta').click();
-  await expect(page).toHaveURL(/\/app\/historico$/);
+  await expect(page).toHaveURL(/\/app\/carta$/);
+  await expect(page.getByTestId('carta-page')).toBeVisible();
   await navLink(page, 'Início').click();
   await page.getByTestId('shortcut-perfil').click();
   await expect(page).toHaveURL(/\/app\/perfil$/);
